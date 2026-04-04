@@ -19,6 +19,17 @@ def software():
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
     robot_description_config = xacro.process_file(default_model_path)
     robot_description_raw = robot_description_config.toxml()
+    robot_state_publisher_node = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        parameters=[{"robot_description": robot_description_raw}],
+    )
+    joint_state_publisher_node = Node(
+        package="joint_state_publisher",
+        executable="joint_state_publisher",
+        name="joint_state_publisher",
+        parameters=[{"robot_description": robot_description_raw}],
+    )
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -48,17 +59,6 @@ def software():
         executable="parameter_bridge",
         arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
         output="screen",
-    )
-    joint_state_publisher_node = Node(
-        package="joint_state_publisher",
-        executable="joint_state_publisher",
-        name="joint_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
-    )
-    robot_state_publisher_node = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
     )
     return LaunchDescription(
         [
