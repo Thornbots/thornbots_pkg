@@ -51,7 +51,9 @@ def software():
             "0",
             "-z",
             "0.1",
+            "-d", default_rviz_config_path
         ],
+        parameters=[{'use_sim_time': True}],
         output="screen",
     )
     ros_gz_bridge = Node(
