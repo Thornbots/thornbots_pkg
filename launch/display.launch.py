@@ -2,13 +2,14 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Node
+from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    return software
+    return software()
 
 
 def software():
@@ -70,6 +71,11 @@ def software():
                 name="use_sim_time",
                 default_value="True",
                 description="Flag to enable use_sim_time",
+            ),
+            DeclareLaunchArgument(
+                name="model",
+                default_value=default_model_path,
+                description="Absolute path to robot urdf file",
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
