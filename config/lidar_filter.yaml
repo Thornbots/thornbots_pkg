@@ -1,0 +1,62 @@
+scan_to_scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: box_filter
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: lidar_link
+        max_x: 0.29
+        max_y: 0.29
+        max_z: 0.5
+        min_x: 0.0
+        min_y: 0.0
+        min_z: -0.1
+        
+        invert: false # activate to remove all points outside of the box
+
+
+
+
+# scan_to_scan_filter_chain:
+#   ros__parameters:
+#     filter1:
+#       name: box_filter
+#       type: laser_filters/LaserScanRangeFilter
+#       params:
+#         use_message_range_limits: false   # if not specified defaults to false
+#         lower_threshold: 0.3              # if not specified defaults to 0.0
+#         upper_threshold: .inf              # if not specified defaults to 100000.0
+#         # lower_replacement_value: -.inf    # if not specified defaults to NaN
+#         # upper_replacement_value: .inf     # if not specified defaults to NaN
+
+
+# ====
+
+# scan_to_scan_filter_chain:
+#   ros__parameters:
+#     filter1:
+#       name: angle
+#       type: laser_filters/LaserScanAngularBoundsFilter
+#       params:
+#         # lower_angle: 1.52
+#         # upper_angle: 6.28
+
+#         # lower_angle: -4.71
+#         # upper_angle: 0.0
+
+
+#         lower_angle: -1.52
+#         upper_angle: 1.52
+#         # invert_filter: true          # keep everything outside this sector
+
+#         # removed IV
+#         # lower_angle: -1.57
+#         # upper_angle: 3.14
+
+#         # removed III
+#         # lower_angle: -3.14
+#         # upper_angle: 1.57
+
+#         # removed III
+#         # lower_angle: 3.14
+#         # upper_angle: 4.71
