@@ -81,10 +81,9 @@
     <xacro:box_inertia m="0.5" w="${head_width}" h="${head_height}" d="${head_length}" />
   </link>
 
-  <!-- 4. Sensors (Fixed to Head) -->
   <joint name="lidar_joint" type="fixed">
     <parent link="head_link" />
-    <child link="lidar_link" />
+    <child link="lidar" />
     <!-- Placed on the front edge of the head -->
     <origin xyz="0.12218 -0.17882 0" rpy="0 0 ${pi/2}" />
   </joint>
