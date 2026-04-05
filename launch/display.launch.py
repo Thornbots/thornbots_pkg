@@ -14,21 +14,28 @@ def generate_launch_description():
 
 def software():
     pkg_share = get_package_share_directory("sentry_pkg")
-    world_path = os.path.join(pkg_share, "world", "my_world.sdf")
+    world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "cnfig.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
     robot_description_config = xacro.process_file(default_model_path)
     robot_description_raw = robot_description_config.toxml()
+    if "IGN_GAZEBO_RESOURCE_PATH" in os.environ:
+        os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + os.path.join(
+            pkg_share, ".."
+        )
+    else:
+        os.environ["IGN_GAZEBO_RESOURCE_PATH"] = os.path.join(pkg_share, "..")
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
+        parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
     )
+
     joint_state_publisher_node = Node(
         package="joint_state_publisher",
         executable="joint_state_publisher",
         name="joint_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
+        parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
     )
     rviz_node = Node(
         package="rviz2",
@@ -36,6 +43,7 @@ def software():
         name="rviz2",
         output="screen",
         arguments=["-d", LaunchConfiguration("rvizconfig")],
+        parameters=[{"use_sim_time": True}],
     )
     ros_gz_sim = Node(
         package="ros_gz_sim",
@@ -51,15 +59,18 @@ def software():
             "0",
             "-z",
             "0.1",
-            "-d", default_rviz_config_path
+            default_rviz_config_path,
         ],
-        parameters=[{'use_sim_time': True}],
+        parameters=[{"use_sim_time": True}],
         output="screen",
     )
     ros_gz_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
-        arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+        arguments=[
+            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
+            "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+        ],
         output="screen",
     )
     return LaunchDescription(
