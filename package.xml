@@ -3,8 +3,8 @@
 <package format="3">
   <name>sentry_pkg</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="anthonynmui@gmail.com">ubuntu</maintainer>
+  <description>Sentry SLAM with LIDAR for ARC 2026</description>
+  <maintainer email="baptisbc@rose-hulman.edu">ubuntu</maintainer>
   <license>Apache-2.0</license>
 
   <test_depend>ament_copyright</test_depend>
