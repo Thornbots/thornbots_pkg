@@ -112,19 +112,18 @@
     <parent link="body"/>
     <child link="head"/>
   </joint>
-  <joint name="lidarlink" type="continuous">
+  <joint name="lidarlink" type="fixed">
     <origin xyz="-0.170562 -0.139254 0.0718" rpy="0 0 -1.95964"/>
-    <axis xyz="0 0 -1"/>
     <parent link="head"/>
     <child link="lidar"/>
   </joint>
-  <joint name="odowheel_x" type="fixed">
+  <joint name="odowheel_x" type="continuous">
     <origin xyz="-0.089012 -0.009 0.0286405" rpy="3.14159 -0 3.14159"/>
     <axis xyz="0 -1 0"/>
     <parent link="body"/>
     <child link="odowheel"/>
   </joint>
-  <joint name="odowheel_y" type="fixed">
+  <joint name="odowheel_y" type="continuous">
     <origin xyz="0.014 -0.089012 0.0286405" rpy="0 0 -1.5708"/>
     <axis xyz="0 -1 0"/>
     <parent link="body"/>
@@ -158,5 +157,20 @@
         </noise>
       </lidar>
     </sensor>
+  </gazebo>
+  <gazebo>
+    <plugin filename="ignition-gazebo-odometry-publisher-system" name="ignition::gazebo::systems::OdometryPublisher">
+      <odom_frame>odom</odom_frame>
+      <robot_base_frame>root</robot_base_frame>
+      <publish_odom_tf>true</publish_odom_tf>
+      <dimensions>3</dimensions>
+    </plugin>
+    <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
+      <joint_name>headlink</joint_name>
+    </plugin>
   </gazebo>
 </robot>
