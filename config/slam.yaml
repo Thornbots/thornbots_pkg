@@ -11,6 +11,7 @@ async_slam_toolbox_node:
     base_frame: root
     map_frame: map
 
+    transform_timeout: 0.3
     use_odometry: true
     pub_map_to_odom: true
     pub_map_odom_transform: true
@@ -19,7 +20,7 @@ async_slam_toolbox_node:
     max_laser_range: 20.0
     minimum_travel_distance: 0.02
     minimum_travel_heading: 0.02
-    
+
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_similarity_score: 0.3

@@ -17,7 +17,6 @@ def software():
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
     robot_description_config = xacro.process_file(
         default_model_path,
         mappings={"package://sentry_pkg": pkg_share}
@@ -27,17 +26,23 @@ def software():
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
-        parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
+        parameters=[{
+            "robot_description": robot_description_raw,
+            "use_sim_time": True,
+         }],
         output="screen"
     )
 
-    joint_state_publisher_node = Node(
-        package="joint_state_publisher",
-        executable="joint_state_publisher",
-        name="joint_state_publisher",
-        parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
-        output="screen"
-    )
+    # joint_state_publisher_node = Node(
+    #     package="joint_state_publisher",
+    #     executable="joint_state_publisher",
+    #     name="joint_state_publisher",
+    #     parameters=[{
+    #         "robot_description": robot_description_raw,
+    #         "use_sim_time": True,
+    #      }],
+    #     output="screen"
+    # )
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -51,7 +56,7 @@ def software():
         package="ros_gz_sim",
         executable="create",
         arguments=[
-            "-name", "sentry",
+            "-name", "sentry_pkg",
             "-topic", "robot_description",
             "-x", "0.0",
             "-y", "0.0",
@@ -60,28 +65,35 @@ def software():
         parameters=[{"use_sim_time": True}],
         output="screen",
     )
-
+    bridge_config = os.path.join(pkg_share, 'config', 'bridge_config.yaml')
     ros_gz_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
-        arguments=[
-            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
-            "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
-            "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
-            "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
-        ],
-        parameters=[{"use_sim_time": True}],
+        parameters=[{
+            "config_file": bridge_config,
+            "use_sim_time": True,
+        }],
         output="screen",
     )
+    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
     slam_toolbox_node = Node(
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
         name="slam_toolbox",
         output="screen",
         parameters=[
+            slam_params_file,
             {"use_sim_time": True},
-            slam_params_file
         ]
+    )
+    ekf_config_path = os.path.join(pkg_share, "config", "ekf.yaml")
+
+    ekf_localization_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_node", 
+        parameters=[ekf_config_path, {"use_sim_time": True}],
+        output="screen",
     )
 
     return LaunchDescription(
@@ -100,11 +112,6 @@ def software():
                 description="Absolute path to rviz config file",
             ),
             DeclareLaunchArgument(
-                name="use_sim_time",
-                default_value="True",
-                description="Flag to enable use_sim_time",
-            ),
-            DeclareLaunchArgument(
                 name="model",
                 default_value=default_model_path,
                 description="Absolute path to robot urdf file",
@@ -121,8 +128,8 @@ def software():
                 ),
                 launch_arguments={"gz_args": f"-r {world_path}", "use_sim_time": "true"}.items(),
             ),
-            joint_state_publisher_node,
             robot_state_publisher_node,
+            ekf_localization_node,
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
