@@ -17,7 +17,7 @@ def software():
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "cnfig.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    
+    slam_params_file = os.path.join(pkg_share, "config", "mapper_params_online_async.yaml")    
     robot_description_config = xacro.process_file(
         default_model_path,
         mappings={"package://sentry_pkg": pkg_share}
@@ -38,14 +38,13 @@ def software():
         parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
         output="screen"
     )
-
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         output="screen",
         arguments=["-d", LaunchConfiguration("rvizconfig")],
-        parameters=[{"use_sim_time": False}],
+        parameters=[{"use_sim_time": True}],
     )
 
     ros_gz_sim = Node(
@@ -70,6 +69,16 @@ def software():
             "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
         ],
         output="screen",
+    )
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        output="screen",
+        parameters=[
+            {"use_sim_time": True},
+            slam_params_file
+        ]
     )
 
     return LaunchDescription(
@@ -114,6 +123,7 @@ def software():
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
+            # slam_toolbox_node
         ]
     )
 
