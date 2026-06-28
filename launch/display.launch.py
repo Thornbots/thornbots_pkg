@@ -86,16 +86,6 @@ def software():
             {"use_sim_time": True},
         ]
     )
-    ekf_config_path = os.path.join(pkg_share, "config", "ekf.yaml")
-
-    ekf_localization_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_node", 
-        parameters=[ekf_config_path, {"use_sim_time": True}],
-        output="screen",
-    )
-
     return LaunchDescription(
         [
             AppendEnvironmentVariable(
@@ -129,7 +119,6 @@ def software():
                 launch_arguments={"gz_args": f"-r {world_path}", "use_sim_time": "true"}.items(),
             ),
             robot_state_publisher_node,
-            ekf_localization_node,
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
