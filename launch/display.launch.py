@@ -166,6 +166,16 @@ def hardware():
         executable="robot_state_publisher",
         parameters=[{"robot_description": robot_description_raw}],
     )
+    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        output="screen",
+        parameters=[
+            slam_params_file,
+        ]
+    )
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -183,5 +193,6 @@ def hardware():
             joint_state_publisher_node,
             sllidar_node,
             rviz_node,
+            slam_toolbox_node,
         ]
     )
