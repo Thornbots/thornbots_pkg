@@ -17,7 +17,7 @@ def software():
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    slam_params_file = os.path.join(pkg_share, "config", "mapper_params_online_async.yaml")    
+    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
     robot_description_config = xacro.process_file(
         default_model_path,
         mappings={"package://sentry_pkg": pkg_share}
@@ -67,7 +67,10 @@ def software():
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+            "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+            "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
         ],
+        parameters=[{"use_sim_time": True}],
         output="screen",
     )
     slam_toolbox_node = Node(
@@ -116,14 +119,14 @@ def software():
                         )
                     ]
                 ),
-                launch_arguments={"gz_args": f"-r {world_path}"}.items(),
+                launch_arguments={"gz_args": f"-r {world_path}", "use_sim_time": "true"}.items(),
             ),
             joint_state_publisher_node,
             robot_state_publisher_node,
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
-            # slam_toolbox_node
+            slam_toolbox_node
         ]
     )
 

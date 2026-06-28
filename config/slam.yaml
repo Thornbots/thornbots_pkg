@@ -1,6 +1,5 @@
 async_slam_toolbox_node:
   ros__parameters:
-    # Solver settings
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSED_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI
@@ -8,23 +7,19 @@ async_slam_toolbox_node:
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
 
-    # ROS Frames (Matching your URDF exactly)
     odom_frame: odom
     base_frame: base_footprint
     map_frame: map
 
-    # Pure Lidar Matcher Tuning (Bypass missing wheel sensors)
-    use_odometry: false              # CRITICAL: Tells SLAM to ignore missing wheel data
-    pub_map_to_odom: true            # Compiles the map transformation loop
-    pub_map_odom_transform: true     # Automatically builds the odom frame for you
+    use_odometry: true
+    pub_map_to_odom: true
+    pub_map_odom_transform: true
 
-    # Core match thresholds
     minimum_time_interval: 0.05
     max_laser_range: 20.0
     minimum_travel_distance: 0.02
     minimum_travel_heading: 0.02
     
-    # Scan Matcher parameters
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_similarity_score: 0.3
