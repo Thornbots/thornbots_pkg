@@ -3,7 +3,7 @@ import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, AppendEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, AppendEnvironmentVariable, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -22,8 +22,12 @@ def software():
         mappings={"package://sentry_pkg": pkg_share}
     )
     robot_description_raw = robot_description_config.toxml()
+    robot_state_publisher_node = TimerAction(
+        period=5.0,
+        actions=[robot_state_publisher_fast]
+    )
 
-    robot_state_publisher_node = Node(
+    robot_state_publisher_fast = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
         parameters=[{
@@ -33,16 +37,6 @@ def software():
         output="screen"
     )
 
-    # joint_state_publisher_node = Node(
-    #     package="joint_state_publisher",
-    #     executable="joint_state_publisher",
-    #     name="joint_state_publisher",
-    #     parameters=[{
-    #         "robot_description": robot_description_raw,
-    #         "use_sim_time": True,
-    #      }],
-    #     output="screen"
-    # )
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
