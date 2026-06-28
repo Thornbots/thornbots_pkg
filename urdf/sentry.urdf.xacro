@@ -166,11 +166,9 @@
       <dimensions>3</dimensions>
     </plugin>
     <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
-    </plugin>
-  </gazebo>
-  <gazebo>
-    <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
       <joint_name>headlink</joint_name>
+      <joint_name>odowheel_x</joint_name>
+      <joint_name>odowheel_y</joint_name>
     </plugin>
   </gazebo>
 </robot>
