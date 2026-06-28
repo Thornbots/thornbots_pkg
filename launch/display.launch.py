@@ -17,7 +17,12 @@ def software():
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "cnfig.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    robot_description_config = xacro.process_file(default_model_path)
+    robot_description_config = xacro.process_file(
+          default_model_path,
+          mappings={
+            "package://sentry_pkg": pkg_share
+        }
+    )
     robot_description_raw = robot_description_config.toxml()
     if "IGN_GAZEBO_RESOURCE_PATH" in os.environ:
         os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + os.path.join(
@@ -59,7 +64,6 @@ def software():
             "0",
             "-z",
             "0.1",
-            default_rviz_config_path,
         ],
         parameters=[{"use_sim_time": True}],
         output="screen",
