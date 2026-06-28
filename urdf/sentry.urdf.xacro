@@ -16,6 +16,12 @@
         <color rgba="0.615686 0.811765 0.929412 1"/>
       </material>
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.03" length="0.01"/>
+      </geometry>
+    </collision>
   </link>
   <link name="head">
     <inertial>
