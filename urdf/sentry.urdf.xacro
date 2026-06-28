@@ -3,25 +3,19 @@
   <link name="base_footprint"/>
   <link name="body">
     <inertial>
-      <mass value="0.0701287"/>
-      <origin xyz="1.20374e-17 2.46519e-32 0.126108" rpy="0 -0 0"/>
-      <inertia ixx="0.00192346" ixy="0" ixz="0" iyy="0.00192346" iyz="0" izz="0.00310341"/>
+      <mass value="0.0507536"/>
+      <origin xyz="-2.33205e-05 -3.02404e-05 0.160359" rpy="0 -0 0"/>
+      <inertia ixx="0.00127958" ixy="3.57925e-11" ixz="-1.40827e-07" iyy="0.00127958" iyz="-1.82614e-07" izz="0.00226416"/>
     </inertial>
     <visual>
       <origin xyz="0 -1.82166e-17 0.0734155" rpy="0 -0 0"/>
       <geometry>
-        <mesh filename="package://sentry_pkg/meshes/Body.stl" scale="1 1 1"/>
+        <mesh filename="package://sentry_pkg/meshes/Body.gltf" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
         <color rgba="0.615686 0.811765 0.929412 1"/>
       </material>
     </visual>
-    <collision>
-      <origin xyz="0 0 0.01" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.3 0.3 0.02"/>
-      </geometry>
-    </collision>
   </link>
   <link name="head">
     <inertial>
@@ -32,7 +26,7 @@
     <visual>
       <origin xyz="-2.54975e-18 1.04465e-18 0" rpy="0 -0 1.18195"/>
       <geometry>
-        <mesh filename="package://sentry_pkg/meshes/Head.stl" scale="1 1 1"/>
+        <mesh filename="package://sentry_pkg/meshes/Head.gltf" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
         <color rgba="0.615686 0.811765 0.929412 1"/>
@@ -48,7 +42,39 @@
     <visual>
       <origin xyz="2.18721e-18 7.6654e-19 0" rpy="0 -0 1.90788"/>
       <geometry>
-        <mesh filename="package://sentry_pkg/meshes/Lidar.stl" scale="1 1 1"/>
+        <mesh filename="package://sentry_pkg/meshes/Lidar.gltf" scale="1 1 1"/>
+      </geometry>
+      <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
+        <color rgba="0.615686 0.811765 0.929412 1"/>
+      </material>
+    </visual>
+  </link>
+  <link name="odowheel">
+    <inertial>
+      <mass value="3.2572e-05"/>
+      <origin xyz="0 0.009 4.67781e-19" rpy="0 -0 0"/>
+      <inertia ixx="5.56982e-09" ixy="0" ixz="0" iyy="9.38075e-09" iyz="0" izz="5.56982e-09"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0.009 -1.46958e-18" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://sentry_pkg/meshes/OdoWheel.gltf" scale="1 1 1"/>
+      </geometry>
+      <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
+        <color rgba="0.615686 0.811765 0.929412 1"/>
+      </material>
+    </visual>
+  </link>
+  <link name="odowheel_1">
+    <inertial>
+      <mass value="3.2572e-05"/>
+      <origin xyz="0 0.009 4.67781e-19" rpy="0 -0 0"/>
+      <inertia ixx="5.56982e-09" ixy="0" ixz="0" iyy="9.38075e-09" iyz="0" izz="5.56982e-09"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0.009 -1.46958e-18" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://sentry_pkg/meshes/OdoWheel.gltf" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
         <color rgba="0.615686 0.811765 0.929412 1"/>
@@ -56,9 +82,10 @@
     </visual>
   </link>
   <joint name="base_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 -0 3.14159"/>
+    <axis xyz="-0 -0 -1"/>
     <parent link="base_footprint"/>
     <child link="body"/>
-    <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
   </joint>
   <joint name="headlink" type="continuous">
     <origin xyz="-2.54975e-18 5.65558e-17 0.252215" rpy="0 -0 3.14159"/>
@@ -66,10 +93,23 @@
     <parent link="body"/>
     <child link="head"/>
   </joint>
-  <joint name="lidarlink" type="fixed">
+  <joint name="lidarlink" type="continuous">
     <origin xyz="-0.170562 -0.139254 0.0718" rpy="0 0 -1.95964"/>
+    <axis xyz="0 0 -1"/>
     <parent link="head"/>
     <child link="lidar"/>
+  </joint>
+  <joint name="odowheel_x" type="fixed">
+    <origin xyz="-0.089012 -0.009 0.0286405" rpy="3.14159 -0 3.14159"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="body"/>
+    <child link="odowheel"/>
+  </joint>
+  <joint name="odowheel_y" type="fixed">
+    <origin xyz="0.014 -0.089012 0.0286405" rpy="0 0 -1.5708"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="body"/>
+    <child link="odowheel_1"/>
   </joint>
   <gazebo reference="lidar">
     <sensor name="lidar" type="gpu_lidar">
@@ -99,13 +139,5 @@
         </noise>
       </lidar>
     </sensor>
-  </gazebo>
-  <gazebo>
-    <plugin filename="ignition-gazebo-odometry-publisher-system" name="ignition::gazebo::systems::OdometryPublisher">
-      <odom_frame>odom</odom_frame>
-      <robot_base_frame>base_footprint</robot_base_frame>
-      <odom_publish_frequency>50</odom_publish_frequency>
-      <dimensions>2</dimensions>
-    </plugin>
   </gazebo>
 </robot>
