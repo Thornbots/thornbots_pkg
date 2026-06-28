@@ -15,7 +15,7 @@ def generate_launch_description():
 def software():
     pkg_share = get_package_share_directory("sentry_pkg")
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
-    default_rviz_config_path = os.path.join(pkg_share, "rviz", "cnfig.rviz")
+    default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
     slam_params_file = os.path.join(pkg_share, "config", "mapper_params_online_async.yaml")    
     robot_description_config = xacro.process_file(
