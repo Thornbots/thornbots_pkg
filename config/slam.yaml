@@ -8,7 +8,7 @@ async_slam_toolbox_node:
     ceres_loss_function: None
 
     odom_frame: odom
-    base_frame: base_footprint
+    base_frame: root
     map_frame: map
 
     use_odometry: true
