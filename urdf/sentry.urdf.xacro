@@ -67,9 +67,8 @@
     <parent link="body"/>
     <child link="head"/>
   </joint>
-  <joint name="lidarlink" type="continuous">
+  <joint name="lidarlink" type="fixed">
     <origin xyz="-0.170562 -0.139254 0.0718" rpy="0 0 -1.95964"/>
-    <axis xyz="0 0 -1"/>
     <parent link="head"/>
     <child link="lidar"/>
   </joint>
@@ -77,7 +76,7 @@
     <sensor name="lidar" type="gpu_lidar">
       <always_on>true</always_on>
       <visualize>true</visualize>
-      <update_rate>5</update_rate>
+      <update_rate>10</update_rate>
       <topic>scan</topic>
       <gz_frame_id>lidar</gz_frame_id>
       <lidar>
