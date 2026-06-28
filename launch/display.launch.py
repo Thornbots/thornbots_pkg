@@ -18,25 +18,25 @@ def software():
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "cnfig.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
     
-    # Process the robot description file
     robot_description_config = xacro.process_file(
         default_model_path,
         mappings={"package://sentry_pkg": pkg_share}
     )
     robot_description_raw = robot_description_config.toxml()
 
-    # Define nodes
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
         parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
+        output="screen"
     )
 
     joint_state_publisher_node = Node(
         package="joint_state_publisher",
         executable="joint_state_publisher",
         name="joint_state_publisher",
-        parameters=[{"use_sim_time": True}],
+        parameters=[{"use_sim_time": True, "robot_description": robot_description_raw}],
+        output="screen"
     )
 
     rviz_node = Node(
@@ -45,10 +45,9 @@ def software():
         name="rviz2",
         output="screen",
         arguments=["-d", LaunchConfiguration("rvizconfig")],
-        parameters=[{"use_sim_time": True}],
+        parameters=[{"use_sim_time": False}],
     )
 
-    # Entity spawner node to put the robot into Gazebo
     ros_gz_sim = Node(
         package="ros_gz_sim",
         executable="create",
@@ -63,7 +62,6 @@ def software():
         output="screen",
     )
 
-    # Standardized parameter bridge for modern Gazebo versions
     ros_gz_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
@@ -76,7 +74,6 @@ def software():
 
     return LaunchDescription(
         [
-            # Correctly export Gazebo asset paths so they affect child processes
             AppendEnvironmentVariable(
                 name="GZ_SIM_RESOURCE_PATH",
                 value=os.path.dirname(pkg_share)
