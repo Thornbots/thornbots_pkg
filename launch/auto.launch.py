@@ -20,8 +20,8 @@ def generate_launch_description():
         parameters=[
             {
                 "channel_type": "serial",
-                "serial_port": "/dev/ttyUSB1",
-                "frame_id": "laser",
+                "serial_port": "/dev/ttyUSB0",
+                "frame_id": "lidar",
                 "inverted": False,
                 "angle_compensate": True,
             }
@@ -32,7 +32,19 @@ def generate_launch_description():
         package="joint_state_publisher",
         executable="joint_state_publisher",
         name="joint_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
+        parameters=[{
+            "robot_description": robot_description_raw,
+            "source_list": ["/pose_translator/joint_states"] # Blends external joint streams safely
+        }],
+    )
+    pose_translator_node = Node(
+        package="sentry_pkg",
+        executable="pose_translator",
+        name="pose_translator",
+        output="screen",
+        remappings=[
+            ('/joint_states', '/pose_translator/joint_states')
+        ]
     )
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
@@ -61,5 +73,6 @@ def generate_launch_description():
             joint_state_publisher_node,
             sllidar_node,
             slam_toolbox_node,
+            pose_translator_node,
         ]
     )

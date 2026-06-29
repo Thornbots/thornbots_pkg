@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'sentry_node = sentry_pkg.sentry_node:main',
+            'pose_translator = sentry_pkg.pose_translator:main',
         ],
     },
 )
