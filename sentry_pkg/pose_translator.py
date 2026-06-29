@@ -37,7 +37,6 @@ class PoseTranslator(Node):
         odom_frame = self.get_parameter('odom_frame').value
         base_frame = self.get_parameter('base_frame').value
         
-        # 1. Broadcast spatial transforms to the /tf tree for SLAM
         t = TransformStamped()
         t.header.stamp = msg.header.stamp
         t.header.frame_id = odom_frame
@@ -47,11 +46,10 @@ class PoseTranslator(Node):
         t.transform.translation.y = float(msg.y)
         t.transform.translation.z = 0.0
         
-        q = self.euler_to_quaternion(0.0, 0.0, msg.head_yaw)
-        t.transform.rotation = q
+        q_chassis = self.euler_to_quaternion(0.0, 0.0, 0.0)
+        t.transform.rotation = q_chassis
         self.tf_broadcaster.sendTransform(t)
         
-        # 2. Build standard Odometry information for your local planner
         odom = Odometry()
         odom.header.stamp = msg.header.stamp
         odom.header.frame_id = odom_frame
@@ -59,18 +57,18 @@ class PoseTranslator(Node):
         
         odom.pose.pose.position.x = float(msg.x)
         odom.pose.pose.position.y = float(msg.y)
-        odom.pose.pose.orientation = q
+        odom.pose.pose.orientation = q_chassis
         
         odom.twist.twist.linear.x = float(msg.vel_x)
         odom.twist.twist.linear.y = float(msg.vel_y)
         self.odom_pub.publish(odom)
 
-        # 3. Stream ONLY the yaw encoder joint state to your visual URDF layout
         js = JointState()
         js.header.stamp = msg.header.stamp
         js.name = ['headlink']
         js.position = [float(msg.head_yaw)]
         self.joint_pub.publish(js)
+
 
     def euler_to_quaternion(self, roll, pitch, yaw):
         cy, sy = cos(yaw * 0.5), sin(yaw * 0.5)
