@@ -6,18 +6,16 @@
   <description>Sentry SLAM with LIDAR for ARC 2026</description>
   <maintainer email="baptisbc@rose-hulman.edu">ubuntu</maintainer>
   <license>Apache-2.0</license>
-
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
-
-
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>rviz</exec_depend>
   <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
@@ -25,10 +23,7 @@
   <depend>ros_gz_image</depend>
   <depend>ros_gz_sim</depend>
   <depend>sensor_msgs</depend>
-  <exec_depend>robot_localization</exec_depend>
-
   <export>
     <build_type>ament_python</build_type>
-    <gazebo_ros gazebo_model_path="${prefix}/share" />
   </export>
 </package>
