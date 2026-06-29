@@ -25,7 +25,7 @@ class PoseTranslator(Node):
             RobotPose,
             '/dji_serial_bridge/pose',
             self.pose_callback,
-            10
+            qos_profile
         )
 
         # Setup standard publishers and TF broadcasters for mapping
