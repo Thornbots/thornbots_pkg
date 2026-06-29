@@ -39,8 +39,9 @@
       </material>
     </visual>
     <collision>
+      <origin xyz="-0.00211769 -0.00164536 0.0741316" rpy="0 -0 1.18195"/>
       <geometry>
-        <mesh filename="package://sentry_pkg/meshes/Head.stl" scale="1 1 1"/>
+        <box size="0.2 0.14 0.16075"/>
       </geometry>
     </collision>
   </link>
