@@ -2,13 +2,14 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, AppendEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    global_sim_time = SetParameter(name='use_sim_time', value=True)
     pkg_share = get_package_share_directory("sentry_pkg")
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
@@ -47,6 +48,7 @@ def generate_launch_description():
             "-x", "0.0",
             "-y", "0.0",
             "-z", "0.1",
+            "-Y", "1.57", 
         ],
         parameters=[{"use_sim_time": True}],
         output="screen",
@@ -72,8 +74,21 @@ def generate_launch_description():
             {"use_sim_time": True},
         ]
     )
+    lidar_filter_file = os.path.join(pkg_share, "config", "lidar_filter.yaml")
+
+    lidar_filter_node = Node(
+        package="laser_filters",
+        executable="scan_to_scan_filter_chain",
+        name="laser_filter_node",
+        parameters=[lidar_filter_file, {"use_sim_time": True}],
+        remappings=[
+            ('/scan', '/scan_raw'),
+            ('/scan_filtered', '/scan')
+        ]
+    )
     return LaunchDescription(
         [
+            global_sim_time,
             AppendEnvironmentVariable(
                 name="GZ_SIM_RESOURCE_PATH",
                 value=os.path.dirname(pkg_share)
@@ -108,6 +123,7 @@ def generate_launch_description():
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
-            slam_toolbox_node
+            # slam_toolbox_node,
+            lidar_filter_node,
         ]
     )
