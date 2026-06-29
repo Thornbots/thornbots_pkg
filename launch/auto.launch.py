@@ -17,11 +17,14 @@ def generate_launch_description():
         package="sllidar_ros2",
         executable="sllidar_node",
         name="sllidar_node",
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             {
                 "channel_type": "serial",
                 "serial_port": "/dev/ttyUSB0",
                 "frame_id": "lidar",
+                "serial_baudrate": 115200, 
                 "inverted": False,
                 "angle_compensate": True,
             }
