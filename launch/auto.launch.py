@@ -10,7 +10,6 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
-    default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
     robot_description_config = xacro.process_file(default_model_path)
     robot_description_raw = robot_description_config.toxml()
@@ -28,13 +27,6 @@ def generate_launch_description():
             }
         ],
         output="screen",
-    )
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", LaunchConfiguration("rvizconfig")],
     )
     joint_state_publisher_node = Node(
         package="joint_state_publisher",
@@ -60,11 +52,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                name="rvizconfig",
-                default_value=default_rviz_config_path,
-                description="Absolute path to rviz config file",
-            ),
-            DeclareLaunchArgument(
                 name="model",
                 default_value=default_model_path,
                 description="Absolute path to robot urdf file",
@@ -74,6 +61,5 @@ def generate_launch_description():
             joint_state_publisher_node,
             sllidar_node,
             slam_toolbox_node,
-            rviz_node,
         ]
     )
