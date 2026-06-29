@@ -5,25 +5,29 @@ from geometry_msgs.msg import TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import JointState
-
-# Change this line in sentry_pkg/pose_translator.py
-from ros2_dji_serial_bridge.msg import RobotPose
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from dji_serial_bridge.msg import RobotPose
 
 class PoseTranslator(Node):
     def __init__(self):
         super().__init__('pose_translator')
-        
+
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'root')
-        
+
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
         # Subscribe to your Type-C board custom interface topic
         self.sub = self.create_subscription(
-            ChassisPoseGimbal,
+            RobotPose,
             '/dji_serial_bridge/pose',
             self.pose_callback,
             10
         )
-        
+
         # Setup standard publishers and TF broadcasters for mapping
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
