@@ -10,7 +10,8 @@ async_slam_toolbox_node:
     odom_frame: odom
     base_frame: root
     map_frame: map
-
+    laser_frame: lidar
+    scan_topic: /scan
     transform_timeout: 0.3
     use_odometry: true
     pub_map_to_odom: true
