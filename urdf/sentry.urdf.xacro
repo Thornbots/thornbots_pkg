@@ -38,6 +38,11 @@
         <color rgba="0.615686 0.811765 0.929412 1"/>
       </material>
     </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://sentry_pkg/meshes/Head.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
   </link>
   <link name="lidar">
     <inertial>
@@ -164,11 +169,17 @@
       <robot_base_frame>root</robot_base_frame>
       <publish_odom_tf>true</publish_odom_tf>
       <dimensions>3</dimensions>
+      <ros>
+        <argument>-p use_sim_time:=true</argument>
+      </ros>
     </plugin>
     <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
       <joint_name>headlink</joint_name>
       <joint_name>odowheel_x</joint_name>
       <joint_name>odowheel_y</joint_name>
+      <ros>
+        <argument>-p use_sim_time:=true</argument>
+      </ros>
     </plugin>
   </gazebo>
 </robot>
