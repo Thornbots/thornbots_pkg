@@ -77,15 +77,17 @@ def generate_launch_description():
     lidar_filter_file = os.path.join(pkg_share, "config", "lidar_filter.yaml")
 
     lidar_filter_node = Node(
-        package="laser_filters",
-        executable="scan_to_scan_filter_chain",
-        name="laser_filter_node",
-        parameters=[lidar_filter_file, {"use_sim_time": True}],
-        remappings=[
-            ('/scan', '/scan_raw'),
-            ('/scan_filtered', '/scan')
-        ]
-    )
+            package='laser_filters',
+            executable='scan_to_scan_filter_chain',
+            name='laser_filter_node',
+            output='screen',
+            parameters=[lidar_filter_file ],
+            remappings=[
+                ('/scan', '/scan_raw'),
+                ('/scan_filtered', '/scan')
+            ]
+        )
+
     return LaunchDescription(
         [
             global_sim_time,

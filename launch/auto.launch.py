@@ -11,6 +11,7 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
+    default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     robot_description_config = xacro.process_file(default_model_path)
     robot_description_raw = robot_description_config.toxml()
     sllidar_node = Node(
@@ -29,6 +30,9 @@ def generate_launch_description():
                 "angle_compensate": True,
             }
         ],
+        remappings=[
+            ('/scan', '/scan_raw')
+        ]
         output="screen",
     )
     joint_state_publisher_node = Node(
@@ -40,6 +44,19 @@ def generate_launch_description():
             "source_list": ["/pose_translator/joint_states"] # Blends external joint streams safely
         }],
     )
+    lidar_filter_file = os.path.join(pkg_share, "config", "lidar_filter.yaml")
+
+    lidar_filter_node = Node(
+            package='laser_filters',
+            executable='scan_to_scan_filter_chain',
+            name='laser_filter_node',
+            output='screen',
+            parameters=[lidar_filter_file ],
+            remappings=[
+                ('/scan', '/scan_raw'),
+                ('/scan_filtered', '/scan')
+            ]
+        )
     pose_translator_node = Node(
         package="sentry_pkg",
         executable="pose_translator",
@@ -64,6 +81,15 @@ def generate_launch_description():
             slam_params_file,
         ]
     )
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", LaunchConfiguration("rvizconfig")],
+        parameters=[{"use_sim_time": True}],
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -71,11 +97,18 @@ def generate_launch_description():
                 default_value=default_model_path,
                 description="Absolute path to robot urdf file",
             ),
+            DeclareLaunchArgument(
+                name="rvizconfig",
+                default_value=default_rviz_config_path,
+                description="Absolute path to rviz config file",
+            ),
             DeclareLaunchArgument("use_sim_time", default_value="False"),
             robot_state_publisher_node,
             joint_state_publisher_node,
             sllidar_node,
             slam_toolbox_node,
             pose_translator_node,
+            rviz_node,
+            lidar_filter_node,
         ]
     )
