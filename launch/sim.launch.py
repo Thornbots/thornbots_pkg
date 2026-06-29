@@ -9,10 +9,7 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    return software()
 
-
-def software():
     pkg_share = get_package_share_directory("sentry_pkg")
     world_path = os.path.join(pkg_share, "world", "ARCC_Field_2026.sdf")
     default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
@@ -22,10 +19,6 @@ def software():
         mappings={"package://sentry_pkg": pkg_share}
     )
     robot_description_raw = robot_description_config.toxml()
-    robot_state_publisher_node = TimerAction(
-        period=5.0,
-        actions=[robot_state_publisher_fast]
-    )
 
     robot_state_publisher_fast = Node(
         package="robot_state_publisher",
@@ -35,6 +28,10 @@ def software():
             "use_sim_time": True,
          }],
         output="screen"
+    )
+    robot_state_publisher_node = TimerAction(
+        period=5.0,
+        actions=[robot_state_publisher_fast]
     )
 
     rviz_node = Node(
@@ -117,76 +114,5 @@ def software():
             ros_gz_bridge,
             ros_gz_sim,
             slam_toolbox_node
-        ]
-    )
-
-
-def hardware():
-    pkg_share = get_package_share_directory("sentry_pkg")
-    default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
-    default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    robot_description_config = xacro.process_file(default_model_path)
-    robot_description_raw = robot_description_config.toxml()
-    sllidar_node = Node(
-        package="sllidar_ros2",
-        executable="sllidar_node",
-        name="sllidar_node",
-        parameters=[
-            {
-                "channel_type": "serial",
-                "serial_port": "/dev/ttyUSB1",
-                "frame_id": "laser",
-                "inverted": False,
-                "angle_compensate": True,
-            }
-        ],
-        output="screen",
-    )
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", LaunchConfiguration("rvizconfig")],
-    )
-    joint_state_publisher_node = Node(
-        package="joint_state_publisher",
-        executable="joint_state_publisher",
-        name="joint_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
-    )
-    robot_state_publisher_node = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        parameters=[{"robot_description": robot_description_raw}],
-    )
-    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
-    slam_toolbox_node = Node(
-        package="slam_toolbox",
-        executable="async_slam_toolbox_node",
-        name="slam_toolbox",
-        output="screen",
-        parameters=[
-            slam_params_file,
-        ]
-    )
-    return LaunchDescription(
-        [
-            DeclareLaunchArgument(
-                name="rvizconfig",
-                default_value=default_rviz_config_path,
-                description="Absolute path to rviz config file",
-            ),
-            DeclareLaunchArgument(
-                name="model",
-                default_value=default_model_path,
-                description="Absolute path to robot urdf file",
-            ),
-            DeclareLaunchArgument("use_sim_time", default_value="False"),
-            robot_state_publisher_node,
-            joint_state_publisher_node,
-            sllidar_node,
-            rviz_node,
-            slam_toolbox_node,
         ]
     )
