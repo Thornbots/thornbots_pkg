@@ -91,7 +91,18 @@ def generate_launch_description():
         parameters=[{"use_sim_time": True}],
         condition=IfCondition(LaunchConfiguration("enable_rviz")),
     )
-
+    relocalize_node = Node(
+        package="sentry_pkg",
+        executable="slam_relocalize_publisher",
+        name="slam_relocalize_publisher",
+        output="screen",
+        parameters=[{
+            "map_frame": "map",
+            "base_frame": "root",
+            "publish_rate_hz": 1.0,
+            "relocalize_topic": "/dji_serial_bridge/relocalize",
+        }],
+    )
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -126,5 +137,6 @@ def generate_launch_description():
             pose_translator_node,
             rviz_node,
             lidar_filter_node,
+            relocalize_node,
         ]
     )

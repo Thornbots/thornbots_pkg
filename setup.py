@@ -29,7 +29,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'sentry_node = sentry_pkg.sentry_node:main',
+            'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
             'pose_translator = sentry_pkg.pose_translator:main',
         ],
     },
