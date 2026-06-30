@@ -4,6 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, AppendEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -88,6 +89,7 @@ def generate_launch_description():
         output="screen",
         arguments=["-d", LaunchConfiguration("rvizconfig")],
         parameters=[{"use_sim_time": True}],
+        condition=IfCondition(LaunchConfiguration("enable_rviz")),
     )
 
     return LaunchDescription(
@@ -110,6 +112,12 @@ def generate_launch_description():
                             "when running standalone; inside the Isaac ROS container "
                             "the hotplug USB lidar is read via the /host-dev bind, "
                             "e.g. /host-dev/ttyUSB0.",
+            ),
+            DeclareLaunchArgument(
+                name="enable_rviz",
+                default_value="False",
+                description="Launch rviz2. Off by default since the robot runs "
+                            "headless; enable for bench debugging with a display.",
             ),
             robot_state_publisher_node,
             joint_state_publisher_node,
