@@ -1,11 +1,17 @@
 async_slam_toolbox_node:
   ros__parameters:
+    mode: mapping
+
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSED_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI
     ceres_trust_strategy: LEVENBERG_MARQUARDT
     ceres_dogleg_type: TRADITIONAL_DOGLEG
-    ceres_loss_function: None
+    # Empty string disables the robust loss function (was the literal
+    # string "None", which some versions of slam_toolbox/Ceres will
+    # reject or silently mis-parse). Use "HuberLoss" or "CauchyLoss"
+    # here instead if you want robust outlier rejection on scan matches.
+    ceres_loss_function: ""
 
     odom_frame: odom
     base_frame: root
@@ -13,6 +19,7 @@ async_slam_toolbox_node:
     laser_frame: lidar
     scan_topic: /scan
     transform_timeout: 0.3
+    transform_publish_period: 0.02 # 50 Hz -- keeps map->odom fresh for downstream consumers (e.g. relocalize publisher)
     use_odometry: true
     pub_map_to_odom: true
     pub_map_odom_transform: true
@@ -24,4 +31,10 @@ async_slam_toolbox_node:
 
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_similarity_score: 0.3
+    # Raised from 0.3 -- a low threshold accepts weaker loop-closure
+    # matches, which can produce a large, wrong correction to map->odom.
+    # Since that transform now gets forwarded straight to the MCB via
+    # the relocalize publisher, a bad loop closure would propagate
+    # directly to the robot's believed position. 0.45 trades a bit of
+    # loop-closure sensitivity for fewer false positives.
+    minimum_similarity_score: 0.45
