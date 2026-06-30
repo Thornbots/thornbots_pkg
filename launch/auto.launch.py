@@ -103,6 +103,23 @@ def generate_launch_description():
             "relocalize_topic": "/dji_serial_bridge/relocalize",
         }],
     )
+    save_map_on_shutdown = RegisterEventHandler(
+        OnShutdown(
+            on_shutdown=[
+                ExecuteProcess(
+                    cmd=[
+                        "ros2", "service", "call",
+                        "/slam_toolbox/save_map",
+                        "slam_toolbox/srv/SaveMap",
+                        ["{name: {data: '", LaunchConfiguration("map_save_path"), "'}}"],
+                    ],
+                    output="screen",
+                    condition=IfCondition(LaunchConfiguration("save_map_on_exit")),
+                )
+            ]
+        )
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -130,6 +147,12 @@ def generate_launch_description():
                 description="Launch rviz2. Off by default since the robot runs "
                             "headless; enable for bench debugging with a display.",
             ),
+            DeclareLaunchArgument(
+                name="map_save_path",
+                default_value=os.path.join(pkg_share, "map", "sentry_map"),
+                description="Path (without extension) to save the .pgm/.yaml "
+                            "map pair to when save_map_on_exit is True.",
+            ),
             robot_state_publisher_node,
             joint_state_publisher_node,
             sllidar_node,
@@ -138,5 +161,6 @@ def generate_launch_description():
             rviz_node,
             lidar_filter_node,
             relocalize_node,
+            save_map_on_shutdown,
         ]
     )
