@@ -16,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*.urdf.xacro')),
         (os.path.join('share', package_name, 'meshes'), glob('meshes/*')),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz*')),
-        (os.path.join('share', package_name), glob('launch/*launch.[pxy][yma]*')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*launch.[pxy][yma]*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'world'), glob('world/*')),
     ],
