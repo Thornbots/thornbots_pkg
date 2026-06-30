@@ -23,16 +23,16 @@ def generate_launch_description():
         parameters=[
             {
                 "channel_type": "serial",
-                "serial_port": "/dev/ttyUSB0",
+                "serial_port": LaunchConfiguration("lidar_serial_port"),
                 "frame_id": "lidar",
-                "serial_baudrate": 115200, 
+                "serial_baudrate": 115200,
                 "inverted": False,
                 "angle_compensate": True,
             }
         ],
         remappings=[
             ('/scan', '/scan_raw')
-        ]
+        ],
         output="screen",
     )
     joint_state_publisher_node = Node(
@@ -103,6 +103,14 @@ def generate_launch_description():
                 description="Absolute path to rviz config file",
             ),
             DeclareLaunchArgument("use_sim_time", default_value="False"),
+            DeclareLaunchArgument(
+                name="lidar_serial_port",
+                default_value="/dev/ttyUSB0",
+                description="Serial device path for the SLLIDAR. Use /dev/ttyUSB0 "
+                            "when running standalone; inside the Isaac ROS container "
+                            "the hotplug USB lidar is read via the /host-dev bind, "
+                            "e.g. /host-dev/ttyUSB0.",
+            ),
             robot_state_publisher_node,
             joint_state_publisher_node,
             sllidar_node,
