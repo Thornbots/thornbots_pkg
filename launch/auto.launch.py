@@ -10,16 +10,14 @@ from launch.actions import (
     ExecuteProcess,
     RegisterEventHandler,
 )
-from launch.event_handlers import OnShutdown
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
     default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    default_rviz_config_path = os.path.join(pkg_share, "rviz", "config.rviz")
     robot_description_config = xacro.process_file(default_model_path)
     robot_description_raw = robot_description_config.toxml()
     sllidar_node = Node(
@@ -49,22 +47,9 @@ def generate_launch_description():
         name="joint_state_publisher",
         parameters=[{
             "robot_description": robot_description_raw,
-            "source_list": ["/pose_translator/joint_states"] # Blends external joint streams safely
+            "source_list": ["/pose_translator/joint_states"]  # Blends external joint streams safely
         }],
     )
-    lidar_filter_file = os.path.join(pkg_share, "config", "lidar_filter.yaml")
-
-    lidar_filter_node = Node(
-            package='laser_filters',
-            executable='scan_to_scan_filter_chain',
-            name='laser_filter_node',
-            output='screen',
-            parameters=[lidar_filter_file ],
-            remappings=[
-                ('/scan', '/scan_raw'),
-                ('/scan_filtered', '/scan')
-            ]
-        )
     pose_translator_node = Node(
         package="sentry_pkg",
         executable="pose_translator",
@@ -79,7 +64,7 @@ def generate_launch_description():
         executable="robot_state_publisher",
         parameters=[{"robot_description": robot_description_raw}],
     )
-    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")    
+    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
     slam_toolbox_node = Node(
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
@@ -88,15 +73,6 @@ def generate_launch_description():
         parameters=[
             slam_params_file,
         ]
-    )
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", LaunchConfiguration("rvizconfig")],
-        parameters=[{"use_sim_time": True}],
-        condition=IfCondition(LaunchConfiguration("enable_rviz")),
     )
     relocalize_node = Node(
         package="sentry_pkg",
@@ -110,21 +86,27 @@ def generate_launch_description():
             "relocalize_topic": "/dji_serial_bridge/relocalize",
         }],
     )
-    save_map_on_shutdown = RegisterEventHandler(
-        OnShutdown(
-            on_shutdown=[
-                ExecuteProcess(
-                    cmd=[
-                        "ros2", "service", "call",
-                        "/slam_toolbox/save_map",
-                        "slam_toolbox/srv/SaveMap",
-                        ["{name: {data: '", LaunchConfiguration("map_save_path"), "'}}"],
-                    ],
-                    output="screen",
-                    condition=IfCondition(LaunchConfiguration("save_map_on_exit")),
-                )
+
+    # Periodically serialize the pose graph (map + full SLAM state) every 60s.
+    # Runs as a background shell loop so a crash/kill doesn't lose more than
+    # ~1 minute of mapping progress. Uses serialize_map (not save_map) so the
+    # result can be reloaded to continue mapping OR run localization later.
+    map_autosave_process = ExecuteProcess(
+        cmd=[
+            "bash", "-c",
+            [
+                "while true; do "
+                "sleep 60; "
+                "ros2 service call /slam_toolbox/serialize_map "
+                "slam_toolbox_msgs/srv/SerializePoseGraph "
+                "\"{filename: '",
+                LaunchConfiguration("map_save_path"),
+                "'}\"; "
+                "done"
             ]
-        )
+        ],
+        output="screen",
+        name="map_autosave",
     )
 
     return LaunchDescription(
@@ -133,11 +115,6 @@ def generate_launch_description():
                 name="model",
                 default_value=default_model_path,
                 description="Absolute path to robot urdf file",
-            ),
-            DeclareLaunchArgument(
-                name="rvizconfig",
-                default_value=default_rviz_config_path,
-                description="Absolute path to rviz config file",
             ),
             DeclareLaunchArgument("use_sim_time", default_value="False"),
             DeclareLaunchArgument(
@@ -157,17 +134,15 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 name="map_save_path",
                 default_value=os.path.join(pkg_share, "map", "sentry_map"),
-                description="Path (without extension) to save the .pgm/.yaml "
-                            "map pair to when save_map_on_exit is True.",
+                description="Path (without extension) that the map pose graph "
+                            "is periodically serialized to, every 60 seconds.",
             ),
             robot_state_publisher_node,
             joint_state_publisher_node,
             sllidar_node,
             slam_toolbox_node,
             pose_translator_node,
-            rviz_node,
-            lidar_filter_node,
             relocalize_node,
-            save_map_on_shutdown,
+            map_autosave_process,
         ]
     )
