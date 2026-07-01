@@ -126,12 +126,6 @@ def generate_launch_description():
                             "e.g. /host-dev/ttyUSB0.",
             ),
             DeclareLaunchArgument(
-                name="enable_rviz",
-                default_value="False",
-                description="Launch rviz2. Off by default since the robot runs "
-                            "headless; enable for bench debugging with a display.",
-            ),
-            DeclareLaunchArgument(
                 name="map_save_path",
                 default_value=os.path.join(pkg_share, "map", "sentry_map"),
                 description="Path (without extension) that the map pose graph "
