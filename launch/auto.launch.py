@@ -36,9 +36,6 @@ def generate_launch_description():
                 "angle_compensate": True,
             }
         ],
-        remappings=[
-            ('/scan', '/scan_raw')
-        ],
         output="screen",
     )
     joint_state_publisher_node = Node(
