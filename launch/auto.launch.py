@@ -52,9 +52,6 @@ def generate_launch_description():
         executable="pose_translator",
         name="pose_translator",
         output="screen",
-        remappings=[
-            ('/joint_states', '/pose_translator/joint_states')
-        ]
     )
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
