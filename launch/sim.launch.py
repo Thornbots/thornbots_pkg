@@ -74,19 +74,6 @@ def generate_launch_description():
             {"use_sim_time": True},
         ]
     )
-    lidar_filter_file = os.path.join(pkg_share, "config", "lidar_filter.yaml")
-
-    lidar_filter_node = Node(
-            package='laser_filters',
-            executable='scan_to_scan_filter_chain',
-            name='laser_filter_node',
-            output='screen',
-            parameters=[lidar_filter_file ],
-            remappings=[
-                ('/scan', '/scan_raw'),
-                ('/scan_filtered', '/scan')
-            ]
-        )
 
     return LaunchDescription(
         [
@@ -125,7 +112,6 @@ def generate_launch_description():
             rviz_node,
             ros_gz_bridge,
             ros_gz_sim,
-            # slam_toolbox_node,
-            lidar_filter_node,
+            slam_toolbox_node,
         ]
     )
