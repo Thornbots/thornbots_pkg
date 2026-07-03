@@ -36,9 +36,9 @@ class PoseTranslator(Node):
     def pose_callback(self, msg):
         odom_frame = self.get_parameter('odom_frame').value
         base_frame = self.get_parameter('base_frame').value
-        
+        current_time = self.get_clock().now().to_msg()        
         t = TransformStamped()
-        t.header.stamp = msg.header.stamp
+        t.header.stamp = current_time
         t.header.frame_id = odom_frame
         t.child_frame_id = base_frame
         
@@ -51,7 +51,7 @@ class PoseTranslator(Node):
         self.tf_broadcaster.sendTransform(t)
         
         odom = Odometry()
-        odom.header.stamp = msg.header.stamp
+        odom.header.stamp = current_time
         odom.header.frame_id = odom_frame
         odom.child_frame_id = base_frame
         
@@ -64,7 +64,7 @@ class PoseTranslator(Node):
         self.odom_pub.publish(odom)
 
         js = JointState()
-        js.header.stamp = msg.header.stamp
+        js.header.stamp = current_time
         js.name = ['headlink']
         js.position = [float(msg.head_yaw)]
         self.joint_pub.publish(js)
