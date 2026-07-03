@@ -5,9 +5,7 @@ from rclpy.node import Node
 from rclpy.time import Time
 from geometry_msgs.msg import Point
 from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
-
-# TODO: Replace with your actual package and message name
-from YOUR_PACKAGE_NAME.msg import YOUR_CUSTOM_MSG_TYPE 
+from dji_serial_bridge.msg import RobotPose
 
 class SlamRelocalizePublisher(Node):
     def __init__(self):
@@ -43,7 +41,7 @@ class SlamRelocalizePublisher(Node):
         
         # Subscribers and Publishers
         self.chassis_sub = self.create_subscription(
-            YOUR_CUSTOM_MSG_TYPE, chassis_topic, self.chassis_callback, 10
+            RobotPose, chassis_topic, self.chassis_callback, 10
         )
         self.pub = self.create_publisher(Point, topic, 10)
         
