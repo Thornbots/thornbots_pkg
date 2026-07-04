@@ -22,7 +22,10 @@ class SimpleRelocalizationPublisher(Node):
         # --- KNOWN ROOM DIMENSIONS FROM BEFORE (in meters) ---
         self.ROOM_WIDTH = 8.0   # Total East-to-West distance
         self.ROOM_LENGTH = 2.5  # Total North-to-South distance
-        self.TOLERANCE = 0.20   # Max allowable deviation (15cm) due to noise/obstacles
+        self.TOLERANCE = 0.20   # Max allowable deviation (20cm) due to noise/obstacles
+        
+        # Window configuration to fallback on close points
+        self.SEARCH_WINDOW_DEG = 5.0  # Look +/- 5 degrees around target direction
 
         self.get_logger().info('Lidar Localization Node has started.')
 
@@ -35,18 +38,40 @@ class SimpleRelocalizationPublisher(Node):
         index = int((target_angle - msg.angle_min) / msg.angle_increment)
         return max(0, min(index, len(msg.ranges) - 1))
 
-    def scan_callback(self, msg):
-        # 1. Find indices for the 4 cardinal directions
-        idx_north = self.get_index_for_angle(0.0, msg)          # Front
-        idx_west  = self.get_index_for_angle(math.pi / 2.0, msg) # Left
-        idx_south = self.get_index_for_angle(math.pi, msg)       # Back
-        idx_east  = self.get_index_for_angle(-math.pi / 2.0, msg)# Right
+    def get_furthest_valid_in_window(self, center_angle, msg):
+        """Searches a window around center_angle and returns the maximum valid distance."""
+        window_rad = math.radians(self.SEARCH_WINDOW_DEG)
+        
+        # Find index boundaries for the window
+        idx_start = self.get_index_for_angle(center_angle - window_rad, msg)
+        idx_end = self.get_index_for_angle(center_angle + window_rad, msg)
+        
+        # Safely sort the bounds to handle positive/negative index ordering
+        start = min(idx_start, idx_end)
+        end = max(idx_start, idx_end)
 
-        # 2. Extract raw distances
-        d_north = msg.ranges[idx_north]
-        d_west  = msg.ranges[idx_west]
-        d_south = msg.ranges[idx_south]
-        d_east  = msg.ranges[idx_east]
+        valid_ranges = []
+        for i in range(start, end + 1):
+            r = msg.ranges[i]
+            # Check if point is numeric, finite, and within sensor hardware bounds
+            if not math.isinf(r) and not math.isnan(r) and msg.range_min <= r <= msg.range_max:
+                valid_ranges.append(r)
+        
+        # Return furthest point if found (changed from min to max to prioritize the background wall),
+        # otherwise return None to indicate a blind direction
+        return max(valid_ranges) if valid_ranges else None
+
+    def scan_callback(self, msg):
+        # 1. Grab furthest points inside windows for all 4 cardinal directions
+        d_north = self.get_furthest_valid_in_window(0.0, msg)           # Front
+        d_west  = self.get_furthest_valid_in_window(math.pi / 2.0, msg)  # Left
+        d_south = self.get_furthest_valid_in_window(math.pi, msg)        # Back
+        d_east  = self.get_furthest_valid_in_window(-math.pi / 2.0, msg) # Right
+
+        # 2. Safety check: Exit if a full 10-degree window completely missed data
+        if None in [d_north, d_west, d_south, d_east]:
+            self.get_logger().warn("Localization skipped. One or more cardinal directions are completely blind.")
+            return
 
         # 3. Establish cross-checks using your known room dimensions
         # Validate X position (Length: South wall to North wall)
@@ -85,4 +110,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
