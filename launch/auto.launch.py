@@ -41,16 +41,6 @@ def generate_launch_description():
             "robot_description": robot_description_raw,
         }],
     )
-    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
-    slam_toolbox_node = Node(
-        package="slam_toolbox",
-        executable="async_slam_toolbox_node",
-        name="slam_toolbox",
-        output="screen",
-        parameters=[
-            slam_params_file,
-        ]
-    )
     relocalize_node = Node(
         package="sentry_pkg",
         executable="slam_relocalize_publisher",
@@ -81,7 +71,6 @@ def generate_launch_description():
             ),
             robot_state_publisher_node,
             sllidar_node,
-            slam_toolbox_node,
             pose_translator_node,
             relocalize_node,
         ]
