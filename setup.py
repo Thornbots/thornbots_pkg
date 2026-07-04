@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
+            'simple_relocalize_publisher= sentry_pkg.simple_relocalize_publisher:main',
             'pose_translator = sentry_pkg.pose_translator:main',
         ],
     },

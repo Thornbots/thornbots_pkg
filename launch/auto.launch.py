@@ -41,19 +41,24 @@ def generate_launch_description():
             "robot_description": robot_description_raw,
         }],
     )
-    relocalize_node = Node(
+    #slam_relocalize_node = Node(
+    #     package="sentry_pkg",
+    #     executable="slam_relocalize_publisher",
+    #     name="slam_relocalize_publisher",
+    #     output="screen",
+    #     parameters=[{
+    #         "map_frame": "map",
+    #         "base_frame": "root",
+    #         "publish_rate_hz": 1.0,
+    #         "relocalize_topic": "/dji_serial_bridge/relocalize",
+    #     }],
+    # )
+    simple_relocalize_node = Node(
         package="sentry_pkg",
-        executable="slam_relocalize_publisher",
-        name="slam_relocalize_publisher",
-        output="screen",
-        parameters=[{
-            "map_frame": "map",
-            "base_frame": "root",
-            "publish_rate_hz": 1.0,
-            "relocalize_topic": "/dji_serial_bridge/relocalize",
-        }],
+        executable="simple_relocalize_publisher",
+        name="simple_relocalize_publisher",
+        output='screen'
     )
-
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -72,6 +77,6 @@ def generate_launch_description():
             robot_state_publisher_node,
             sllidar_node,
             pose_translator_node,
-            relocalize_node,
+            simple_relocalize_node,
         ]
     )
