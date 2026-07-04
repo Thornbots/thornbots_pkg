@@ -86,8 +86,8 @@ class PoseTranslator(Node):
 
         js = JointState()
         js.header.stamp = stamp
-        js.name = ['headlink']
-        js.position = [float(msg.head_yaw)]
+        js.name = ['headlink', 'lidarlink']
+        js.position = [float(msg.head_yaw), -float(msg.head_yaw)]
         self.joint_pub.publish(js)
 
     def euler_to_quaternion(self, roll, pitch, yaw):
