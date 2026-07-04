@@ -118,8 +118,9 @@
     <parent link="body"/>
     <child link="head"/>
   </joint>
-  <joint name="lidarlink" type="fixed">
+  <joint name="lidarlink" type="continuous">
     <origin xyz="-0.170562 -0.139254 0.0718" rpy="0 0 -1.95964"/>
+    <axis xyz="0 0 1"/>
     <parent link="head"/>
     <child link="lidar"/>
   </joint>
