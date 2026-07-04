@@ -125,7 +125,7 @@ class SimpleRelocalizationPublisher(Node):
 
         # 4. Construct and publish position
         pos_msg = Point()
-        pos_msg.x = 3.312 - float(x_calculated)
+        pos_msg.x = 4.0 - float(x_calculated)
         pos_msg.y = 1.063 - float(y_calculated)
         pos_msg.z = 0.0
         
