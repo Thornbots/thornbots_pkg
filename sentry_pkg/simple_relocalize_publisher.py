@@ -22,7 +22,7 @@ class SimpleRelocalizationPublisher(Node):
         # --- KNOWN ROOM DIMENSIONS FROM BEFORE (in meters) ---
         self.ROOM_WIDTH = 2.5   # Total East-to-West distance
         self.ROOM_LENGTH = 8.0  # Total North-to-South distance
-        self.TOLERANCE = 0.45   #
+        self.TOLERANCE = 0.20   # Max allowable deviation (20cm) due to noise/obstacles
         
         # Window configuration to fallback on close points
         self.SEARCH_WINDOW_DEG = 5.0  # Look +/- 5 degrees around target direction
@@ -83,31 +83,62 @@ class SimpleRelocalizationPublisher(Node):
             self.get_logger().warn("Localization skipped. One or more cardinal directions are completely blind.")
             return
 
-        # 3. Establish cross-checks using your known room dimensions
-        x_calculated = d_south
+        # 3. Calculate room dimensions to verify clarity
         total_length_measured = d_north + d_south
-        
-        y_calculated = d_east
         total_width_measured = d_west + d_east
 
-        # 4. Filter out readings if an obstacle blocks a wall
         is_x_valid = abs(total_length_measured - self.ROOM_LENGTH) <= self.TOLERANCE
         is_y_valid = abs(total_width_measured - self.ROOM_WIDTH) <= self.TOLERANCE
 
-        if is_x_valid and is_y_valid:
-            # Publish position relative to the front-right corner (0,0)
-            pos_msg = Point()
-            pos_msg.x = 3.312 - float(x_calculated)
-            pos_msg.y = 1.063 - float(y_calculated)
-            pos_msg.z = 0.0
-            
-            self.publisher_.publish(pos_msg)
-            self.get_logger().info(f"Robot Position -> X: {pos_msg.x:.2f}m, Y: {pos_msg.y:.2f}m")
+        # Target value for selecting an optimal alternative wall when blocked
+        TARGET_FALLBACK = 0.5
+
+        # --- X POSITION DECISION LOGIC (Length: South wall to North wall) ---
+        if is_x_valid:
+            x_calculated = d_south
         else:
-            self.get_logger().warn(
-                f"Localization unreliable. Measured room: {total_length_measured:.2f}x{total_width_measured:.2f}m. "
-                f"Expected: {self.ROOM_LENGTH}x{self.ROOM_WIDTH}m."
+            # Check which reading is closer to the 0.5m target threshold
+            diff_south = abs(d_south  )
+            diff_north = abs(d_north  )
+            
+            if diff_south >= diff_north:
+                x_calculated = d_south  # Trust South reading directly
+                self.get_logger().debug("X Obstructed: Chose South wall (closer to 0.5m).")
+            else:
+                x_calculated = self.ROOM_LENGTH - d_north  # Derive X position using North reading
+                self.get_logger().debug("X Obstructed: Chose North wall (closer to 0.5m).")
+
+        # --- Y POSITION DECISION LOGIC (Width: East wall to West wall) ---
+        if is_y_valid:
+            y_calculated = d_east
+        else:
+            # Check which reading is closer to the 0.5m target threshold
+            diff_east = abs(d_east - TARGET_FALLBACK)
+            diff_west = abs(d_west - TARGET_FALLBACK)
+            
+            if diff_east <= diff_west:
+                y_calculated = d_east  # Trust East reading directly
+                self.get_logger().debug("Y Obstructed: Chose East wall (closer to 0.5m).")
+            else:
+                y_calculated = self.ROOM_WIDTH - d_west  # Derive Y position using West reading
+                self.get_logger().debug("Y Obstructed: Chose West wall (closer to 0.5m).")
+
+        # 4. Construct and publish position
+        pos_msg = Point()
+        pos_msg.x = 3.312 - float(x_calculated)
+        pos_msg.y = 1.063 - float(y_calculated)
+        pos_msg.z = 0.0
+        
+        self.publisher_.publish(pos_msg)
+
+        # Log running states
+        if not is_x_valid or not is_y_valid:
+            self.get_logger().info(
+                f"Obstructed Guess -> X: {pos_msg.x:.2f}m, Y: {pos_msg.y:.2f}m "
+                f"(Measured: {total_length_measured:.2f}x{total_width_measured:.2f}m)"
             )
+        else:
+            self.get_logger().info(f"Confident Position -> X: {pos_msg.x:.2f}m, Y: {pos_msg.y:.2f}m")
 
 def main(args=None):
     rclpy.init(args=args)
