@@ -1,82 +1,75 @@
+"""
+Turns whatever raw /odom and /scan are already on the ROS graph into a
+SLAM map. Deliberately has no dependency on real hardware -- no lidar
+driver, no serial bridge, just consumes topics -- so the same launch works
+against `ros2 launch sim sim.launch.py` (which publishes raw /odom and
+/scan) or a real driver later, as long as it publishes those same raw
+topics. Two stages:
+  1. odom_to_tf broadcasts /odom as the odom->root TF slam_toolbox needs
+     (nothing upstream publishes that TF on its own). This would ideally
+     be robot_localization's ekf_node, but that can't run in this
+     environment right now -- see sentry_pkg/odom_to_tf.py's docstring.
+  2. slam_toolbox consumes /scan + that TF to build /map.
+"""
 import os
-import xacro
+
 from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
-    default_model_path = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
-    robot_description_config = xacro.process_file(default_model_path)
-    robot_description_raw = robot_description_config.toxml()
-    lidar_port_cfg = LaunchConfiguration("lidar_serial_port")
-    sllidar_node = Node(
-        package="sllidar_ros2",
-        executable="sllidar_node",
-        name="sllidar_node",
-        respawn=True,
-        respawn_delay=2.0,
-        parameters=[{
-            "channel_type": "serial",
-            "serial_port": lidar_port_cfg,
-            "frame_id": "lidar",
-            "serial_baudrate": 115200,
-            "inverted": False,
-            "angle_compensate": True,
-        }],
-        output="screen",
+    slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time", default_value="true",
+        description="Set to false when running against real hardware's /odom + /scan"
     )
-    pose_translator_node = Node(
+    use_sim_time = LaunchConfiguration("use_sim_time")
+
+    yaw_joint_name_arg = DeclareLaunchArgument(
+        "yaw_joint_name", default_value="planar_y_to_root_yaw",
+        description="Sim-only workaround for gz sim's OdometryPublisher not "
+                     "reporting yaw correctly for a joint-constrained base; "
+                     "set to empty string on real hardware (the default "
+                     "there), where pose_translator already publishes "
+                     "correct orientation directly."
+    )
+    y_joint_name_arg = DeclareLaunchArgument(
+        "y_joint_name", default_value="planar_x_to_y",
+        description="Same workaround as yaw_joint_name but for /odom's Y "
+                     "position, which has the same gz sim OdometryPublisher "
+                     "bug; set to empty string on real hardware."
+    )
+
+    odom_to_tf_node = Node(
         package="sentry_pkg",
-        executable="pose_translator",
-        name="pose_translator",
+        executable="odom_to_tf",
+        name="odom_to_tf",
         output="screen",
-    )
-    robot_state_publisher_node = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
         parameters=[{
-            "robot_description": robot_description_raw,
+            "use_sim_time": use_sim_time,
+            "yaw_joint_name": LaunchConfiguration("yaw_joint_name"),
+            "y_joint_name": LaunchConfiguration("y_joint_name"),
         }],
     )
-    #slam_relocalize_node = Node(
-    #     package="sentry_pkg",
-    #     executable="slam_relocalize_publisher",
-    #     name="slam_relocalize_publisher",
-    #     output="screen",
-    #     parameters=[{
-    #         "map_frame": "map",
-    #         "base_frame": "root",
-    #         "publish_rate_hz": 1.0,
-    #         "relocalize_topic": "/dji_serial_bridge/relocalize",
-    #     }],
-    # )
-    simple_relocalize_node = Node(
-        package="sentry_pkg",
-        executable="simple_relocalize_publisher",
-        name="simple_relocalize_publisher",
-        output='screen'
+
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        output="screen",
+        parameters=[
+            slam_params_file,
+            {"use_sim_time": use_sim_time},
+        ],
     )
-    return LaunchDescription(
-        [
-            DeclareLaunchArgument(
-                name="model",
-                default_value=default_model_path,
-                description="Absolute path to robot urdf file",
-            ),
-            DeclareLaunchArgument(
-                name="lidar_serial_port",
-                default_value="/dev/ttyUSB0",
-                description="Serial device path for the SLLIDAR. Use /dev/ttyUSB0 "
-                            "when running standalone; inside the Isaac ROS container "
-                            "the hotplug USB lidar is read via the /host-dev bind, "
-                            "e.g. /host-dev/ttyUSB0.",
-            ),
-            robot_state_publisher_node,
-            sllidar_node,
-            pose_translator_node,
-            simple_relocalize_node,
-        ]
-    )
+
+    return LaunchDescription([
+        use_sim_time_arg, yaw_joint_name_arg, y_joint_name_arg,
+        odom_to_tf_node, slam_toolbox_node,
+    ])
