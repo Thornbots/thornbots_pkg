@@ -19,6 +19,8 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*launch.[pxy][yma]*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'world'), glob('world/*')),
+        (os.path.join('share', package_name, 'map'),
+            glob('map/*.yaml') + glob('map/*.pgm')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -32,6 +34,7 @@ setup(
             'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
             'simple_relocalize_publisher= sentry_pkg.simple_relocalize_publisher:main',
             'pose_translator = sentry_pkg.pose_translator:main',
+            'odom_to_tf = sentry_pkg.odom_to_tf:main',
         ],
     },
 )
