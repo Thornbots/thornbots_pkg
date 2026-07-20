@@ -7,16 +7,15 @@
 ###     heading -- see ARCC_2026_SENTRY_CONTEXT.md's "Our Sentry's
 ###     drivetrain"), so /odom's orientation field is always identity and
 ###     carries no information -- don't fuse yaw/vyaw from this source.
-###   odom1 (/scan_odom, from rf2o_laser_odometry): x, y only. rf2o only
+###   odom1 (/scan_odom, from rf2o_laser_odometry): x, y, yaw. rf2o only
 ###     ever sees scans while the head is near home (head_home_scan_gate,
 ###     see SESSION_NOTES.md), so /scan_odom updates in bursts during
 ###     head-home windows, not continuously -- treat it as an occasional
-###     absolute-ish correction, not a steady high-rate stream. Not fusing
-###     yaw from this source either for this first pass: even though rf2o
-###     can estimate yaw, chassis heading is physically fixed, so the very
-###     low yaw process noise below already pins yaw near zero on its own;
-###     adding a second, bursty yaw input just for a value that shouldn't
-###     move risks fighting the process model instead of helping it.
+###     absolute-ish correction, not a steady high-rate stream. Yaw is
+###     fused despite the chassis's heading being physically fixed, per
+###     user direction -- the low yaw process noise below still keeps yaw
+###     tightly trusted overall, this just lets rf2o's yaw estimate
+###     contribute during its update bursts rather than being ignored.
 ekf_filter_node:
   ros__parameters:
     frequency: 30.0
@@ -50,7 +49,7 @@ ekf_filter_node:
 
     odom1: /scan_odom
     odom1_config: [true,  true,  false,
-                   false, false, false,
+                   false, false, true,
                    false, false, false,
                    false, false, false,
                    false, false, false]
