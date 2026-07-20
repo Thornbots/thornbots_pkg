@@ -28,7 +28,13 @@ ekf_filter_node:
     # used throughout the rest of the pipeline (rf2o, slam_toolbox).
     odom_frame: odom
     base_link_frame: root
-    world_frame: root
+    # world_frame must equal odom_frame (not base_link_frame) for the
+    # standard "fuse continuous odometry, publish odom->base_link TF"
+    # case -- setting world_frame == base_link_frame is only for the
+    # global/map-frame fusion case (robot_localization docs), and
+    # silently disables odom->root TF publishing entirely if set wrong,
+    # which is why this is called out explicitly.
+    world_frame: odom
 
     publish_tf: true
 

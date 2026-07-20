@@ -209,7 +209,9 @@ def generate_launch_description():
                 "use_sim_time": use_sim_time,
                 "odom_frame": LaunchConfiguration("odom_frame"),
                 "base_link_frame": "root",
-                "world_frame": "root",
+                # Must match odom_frame, not base_link_frame -- see
+                # config/ekf.yaml's comment on world_frame.
+                "world_frame": LaunchConfiguration("odom_frame"),
             },
         ],
     )
