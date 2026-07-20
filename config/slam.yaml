@@ -41,8 +41,29 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.5
-    minimum_travel_heading: 0.5
+    # Was 0.5/0.5 (rad). 0.5m is far too coarse for this robot: sudden
+    # external position jerks (wheel slip on the arena's "Bumpy Road"
+    # zone, bumps/collisions -- see sim/sim/pose_emulator.py's
+    # trigger_jerk, added to model exactly this) are, by construction,
+    # invisible to wheel odometry (that's the whole point of needing SLAM
+    # correction) -- so if the robot is stationary or moving slowly when
+    # one happens, "distance traveled since the last processed scan" (as
+    # measured off reported /odom, which the jerk deliberately leaves
+    # unchanged) never crosses a 0.5m threshold, and slam_toolbox never
+    # even attempts a new scan match to notice the discrepancy: map->odom
+    # stays frozen indefinitely. Verified live in sim: a trigger_jerk call
+    # with the robot stationary produced no map->odom update at all over
+    # a 30s window at the old 0.5 value; driving the robot for real
+    # (actual /cmd_vel motion, not a jerk) did update map->odom normally,
+    # confirming the scan-matching pipeline itself was never the problem,
+    # just this gate. 0.1m (2 resolution cells) still limits scan-matching
+    # frequency/cost sensibly but lets slam_toolbox react promptly to a
+    # jerk even with little or no real motion since the last scan.
+    # minimum_travel_heading is irrelevant either way -- this chassis is
+    # holonomic and never rotates its heading -- left small rather than 0
+    # to avoid relying on exact-zero comparisons.
+    minimum_travel_distance: 0.1
+    minimum_travel_heading: 0.05
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
