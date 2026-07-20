@@ -64,6 +64,18 @@ EKF-fusion plan in SESSION_NOTES.md/ARCC_2026_SENTRY_CONTEXT.md):
     it just stops broadcasting TF itself (publish_tf parameter), so
     exactly one of {ekf_node, pose_translator} ever broadcasts odom->root
     at a time.
+
+slam_mode picks slam_toolbox's own mode param (mapping/localization),
+overriding the value baked into config/slam.yaml. Default is
+'localization' -- once ARCC26 is a good-enough field map, that's the
+normal running mode: slam_toolbox localizes root against the existing
+map instead of continuing to build/extend it. Pass slam_mode:=mapping
+(with load_map:=true to refine the existing map, or load_map:=false to
+build a fresh one from scratch) when you actually want to (re)build the
+map -- that should be an occasional, deliberate action, not the default.
+Note localization mode requires an actual map to localize against, i.e.
+load_map:=true with a real map_file; slam_mode:=localization with
+load_map:=false is not a meaningful combination.
 """
 import os
 
@@ -149,6 +161,21 @@ def generate_launch_description():
                      "graph (<map_file>.posegraph/.data, see "
                      "slam_toolbox/srv/SerializePoseGraph) to resume "
                      "mapping from. Only used when load_map:=true."
+    )
+
+    slam_mode_arg = DeclareLaunchArgument(
+        "slam_mode", default_value="localization",
+        choices=["mapping", "localization"],
+        description="slam_toolbox's own mode param, overriding config/"
+                     "slam.yaml's baked-in value. 'localization' (default): "
+                     "localize root against the existing map_file rather "
+                     "than continuing to build/extend it -- the normal "
+                     "running mode once ARCC26 is a good-enough field map. "
+                     "'mapping': (re)build the map -- pair with load_map:="
+                     "true to refine ARCC26, or load_map:=false to start "
+                     "fresh. slam_mode:=localization requires load_map:="
+                     "true with a real map_file; there's no map to "
+                     "localize against otherwise."
     )
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -287,6 +314,7 @@ def generate_launch_description():
                 "odom_frame": LaunchConfiguration("odom_frame"),
                 "map_file_name": LaunchConfiguration("map_file"),
                 "map_start_pose": [0.0, 0.0, 0.0],
+                "mode": LaunchConfiguration("slam_mode"),
             },
         ],
     )
@@ -301,6 +329,9 @@ def generate_launch_description():
             {
                 "use_sim_time": use_sim_time,
                 "odom_frame": LaunchConfiguration("odom_frame"),
+                # Always mapping: there's no saved map to localize
+                # against without load_map, regardless of slam_mode.
+                "mode": "mapping",
             },
         ],
     )
@@ -309,7 +340,7 @@ def generate_launch_description():
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, localization_backend_arg,
-        load_map_arg, map_file_arg, home_yaw_tolerance_arg,
+        load_map_arg, map_file_arg, slam_mode_arg, home_yaw_tolerance_arg,
         dji_serial_bridge_node, lidar_node,
         pose_translator_node, ekf_node,
         head_home_scan_gate_node, scan_odom_node,
