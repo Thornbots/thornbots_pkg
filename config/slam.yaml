@@ -28,7 +28,12 @@ slam_toolbox:
     min_laser_range: 0.15 # matches RPLIDAR A2M8 min range
     max_laser_range: 12.0 # matches RPLIDAR A2M8 max range
     minimum_time_interval: 0.5
-    transform_timeout: 0.2
+    transform_timeout: 1.0 # was 0.2: too tight for the current TF tree (12
+                           # frames, including the suspension chain), which
+                           # was causing every scan to get dropped
+                           # ("message filter queue full") even though the
+                           # transforms themselves were fine, just not
+                           # ready within the old tolerance
     tf_buffer_duration: 30.
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
     enable_interactive_mode: true

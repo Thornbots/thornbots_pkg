@@ -20,7 +20,8 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'world'), glob('world/*')),
         (os.path.join('share', package_name, 'map'),
-            glob('map/*.yaml') + glob('map/*.pgm')),
+            glob('map/*.yaml') + glob('map/*.pgm')
+            + glob('map/*.data') + glob('map/*.posegraph')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
