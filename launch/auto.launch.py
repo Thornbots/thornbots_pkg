@@ -51,6 +51,19 @@ isn't (see SESSION_NOTES.md). head_home_scan_gate feeds rf2o a filtered
 near its home (yaw ~ 0) position, so every scan rf2o ever sees (including
 its first, which fixes the cached transform) is consistent with that one
 head angle.
+
+localization_backend selects who owns odom->root TF (step 5 of the
+EKF-fusion plan in SESSION_NOTES.md/ARCC_2026_SENTRY_CONTEXT.md):
+  - 'passthrough' (default): pose_translator broadcasts odom->root itself,
+    straight off /pose, exactly as before this EKF work -- kept as the
+    default so it stays an instant, known-good fallback.
+  - 'ekf': ekf_node (sentry_pkg/config/ekf.yaml) fuses /odom (x, y, vx,
+    vy) and /scan_odom (x, y) and owns odom->root instead. pose_translator
+    keeps publishing /odom + /joint_states either way (both still needed
+    -- /odom feeds the EKF, /joint_states feeds robot_state_publisher),
+    it just stops broadcasting TF itself (publish_tf parameter), so
+    exactly one of {ekf_node, pose_translator} ever broadcasts odom->root
+    at a time.
 """
 import os
 
@@ -67,6 +80,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
     slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
+    ekf_params_file = os.path.join(pkg_share, "config", "ekf.yaml")
     sentry_xacro = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
 
     real_hardware_arg = DeclareLaunchArgument(
@@ -101,6 +115,23 @@ def generate_launch_description():
         "odom_frame", default_value="odom",
         description="Frame slam_toolbox treats as its drift-free reference, "
                      "parent of base_frame."
+    )
+
+    localization_backend_arg = DeclareLaunchArgument(
+        "localization_backend", default_value="passthrough",
+        choices=["ekf", "passthrough"],
+        description="Who owns odom->root TF. 'passthrough' (default): "
+                     "pose_translator broadcasts it directly off /pose, "
+                     "unchanged from before the EKF work -- kept as the "
+                     "default so it's an instant fallback. 'ekf': "
+                     "ekf_node (config/ekf.yaml) fuses /odom + /scan_odom "
+                     "and owns it instead; pose_translator's own TF "
+                     "broadcast is disabled in that mode (see module "
+                     "docstring)."
+    )
+    localization_backend = LaunchConfiguration("localization_backend")
+    publish_tf_from_pose_translator = PythonExpression(
+        ["'true' if '", localization_backend, "' == 'passthrough' else 'false'"]
     )
 
     load_map_arg = DeclareLaunchArgument(
@@ -156,7 +187,31 @@ def generate_launch_description():
         parameters=[{
             "use_sim_time": use_sim_time,
             "odom_frame": LaunchConfiguration("odom_frame"),
+            "publish_tf": ParameterValue(
+                publish_tf_from_pose_translator, value_type=bool
+            ),
         }],
+    )
+
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        condition=IfCondition(
+            PythonExpression(
+                ["'", localization_backend, "' == 'ekf'"]
+            )
+        ),
+        parameters=[
+            ekf_params_file,
+            {
+                "use_sim_time": use_sim_time,
+                "odom_frame": LaunchConfiguration("odom_frame"),
+                "base_link_frame": "root",
+                "world_frame": "root",
+            },
+        ],
     )
 
     home_yaw_tolerance_arg = DeclareLaunchArgument(
@@ -251,9 +306,11 @@ def generate_launch_description():
     return LaunchDescription([
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, load_map_arg, map_file_arg, home_yaw_tolerance_arg,
+        odom_frame_arg, localization_backend_arg,
+        load_map_arg, map_file_arg, home_yaw_tolerance_arg,
         dji_serial_bridge_node, lidar_node,
-        pose_translator_node, head_home_scan_gate_node, scan_odom_node,
+        pose_translator_node, ekf_node,
+        head_home_scan_gate_node, scan_odom_node,
         robot_state_publisher_node,
         slam_toolbox_with_map_node, slam_toolbox_no_map_node,
     ])
