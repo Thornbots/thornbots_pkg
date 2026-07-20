@@ -1,23 +1,32 @@
 """
-Turns whatever raw /odom and /scan are already on the ROS graph into a
-SLAM map. Deliberately has no dependency on real hardware -- no lidar
-driver, no serial bridge, just consumes topics -- so the same launch works
-against `ros2 launch sim sim.launch.py` (which publishes raw /odom and
-/scan) or a real driver later, as long as it publishes those same raw
-topics.
+Turns whatever raw /pose and /scan are on the ROS graph into a SLAM map.
+The actual pose_translator/robot_state_publisher/slam_toolbox pipeline
+consumes /pose + /scan only, so it's identical whether that data comes
+from real hardware or sim -- no dependency on which produced them.
 
-publish_odom_tf:=true, odom_frame:=odom by default (both sim and real
-hardware). sim/urdf/sentry.urdf.xacro's "root" link is a genuinely free
-6DOF body with no parent joint at all (see that file), so
-robot_state_publisher has nothing to publish odom->root from on its own --
-odom_to_tf, fed by OdometryPublisher's /odom, is the only source, same as
-real hardware. (An earlier version of the sim URDF drove root through a
-world->planar_x->planar_y->yaw_base->root joint chain instead, which let
-robot_state_publisher publish that transform directly -- but that also
-meant *two* different nodes were broadcasting a parent for "root"
-whenever odom_to_tf ran alongside it, an invalid TF tree that caused
-"message filter queue full" spam in slam_toolbox. That whole joint chain
-is gone now, so there's no longer a second broadcaster to conflict with.)
+real_hardware:=true by default: also launches dji_serial_bridge_node
+(publishes /pose from the Type-C board's serial link) and sllidar_ros2's
+driver (publishes /scan from the RPLIDAR A2M8 over its own serial link,
+serial port/baud set via lidar_serial_port/lidar_baudrate). This is now
+the default because running against real hardware is the common case.
+real_hardware also drives use_sim_time (there's no separate arg for it):
+false/wall-clock when real_hardware is true, true when it's false, since
+that's exactly when /clock exists to use instead.
+
+When running against sim instead (`ros2 launch sim sim.launch.py`, which
+runs sim/pose_emulator.py to publish /pose in the same
+dji_serial_bridge/msg/RobotPose format real hardware sends, plus raw
+/scan via its own gz bridge), launch this with real_hardware:=false so it
+doesn't also try to open the real serial devices, and so it uses sim's
+/clock.
+
+pose_translator (fed by /pose) is the sole source of /odom, /joint_states,
+and odom->root TF -- same code path for sim and real hardware, so there's
+only one place pose handling can go wrong. This package also runs its own
+robot_state_publisher off sentry_pkg/urdf/sentry.urdf.xacro (fed by
+pose_translator's /joint_states) rather than depending on sim's URDF/TF --
+sentry_pkg owns the whole TF tree itself now, sim only ever provides raw
+sensor data through the shared real-hardware-shaped interfaces.
 
 load_map:=true by default: deserializes map_file's saved pose graph
 (map/ARCC26.posegraph + .data under sentry_pkg, saved via
@@ -33,44 +42,48 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
     slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
+    sentry_xacro = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
 
-    use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time", default_value="true",
-        description="Set to false when running against real hardware's /odom + /scan"
+    real_hardware_arg = DeclareLaunchArgument(
+        "real_hardware", default_value="true",
+        description="Launch dji_serial_bridge_node (the Type-C board's /pose "
+                     "source) and sllidar_ros2's driver (/scan) directly. "
+                     "True by default since running against real hardware is "
+                     "now the default; set false when running against sim, "
+                     "which provides /pose (via pose_emulator) and /scan "
+                     "itself. Also drives use_sim_time (false when "
+                     "real_hardware is true -- wall clock -- true otherwise, "
+                     "since sim publishes /clock): no separate use_sim_time "
+                     "arg, they're the same knob."
     )
-    use_sim_time = LaunchConfiguration("use_sim_time")
+    real_hardware = LaunchConfiguration("real_hardware")
+    use_sim_time = PythonExpression(
+        ["'false' if '", real_hardware, "' == 'true' else 'true'"]
+    )
 
-    publish_odom_tf_arg = DeclareLaunchArgument(
-        "publish_odom_tf", default_value="true",
-        description="Run odom_to_tf to broadcast odom->root from /odom. "
-                     "True for both sim and real hardware now; nothing else "
-                     "publishes that transform on its own."
+    lidar_serial_port_arg = DeclareLaunchArgument(
+        "lidar_serial_port", default_value="/dev/ttyUSB0",
+        description="Serial device for the RPLIDAR A2M8, only used when "
+                     "real_hardware:=true."
     )
+    lidar_baudrate_arg = DeclareLaunchArgument(
+        "lidar_baudrate", default_value="115200",
+        description="Baud rate for the RPLIDAR A2M8, only used when "
+                     "real_hardware:=true."
+    )
+
     odom_frame_arg = DeclareLaunchArgument(
         "odom_frame", default_value="odom",
         description="Frame slam_toolbox treats as its drift-free reference, "
                      "parent of base_frame."
-    )
-
-    yaw_joint_name_arg = DeclareLaunchArgument(
-        "yaw_joint_name", default_value="",
-        description="Only needed if /odom's orientation field is wrong for "
-                     "some future base design (see odom_to_tf.py's "
-                     "docstring); root never rotates on the current sim "
-                     "base, so /odom's orientation is trusted directly."
-    )
-    y_joint_name_arg = DeclareLaunchArgument(
-        "y_joint_name", default_value="",
-        description="Only needed if /odom's Y field is wrong for some "
-                     "future base design (see odom_to_tf.py's docstring); "
-                     "empty by default, trusting /odom's Y directly."
     )
 
     load_map_arg = DeclareLaunchArgument(
@@ -90,16 +103,56 @@ def generate_launch_description():
                      "mapping from. Only used when load_map:=true."
     )
 
-    odom_to_tf_node = Node(
-        package="sentry_pkg",
-        executable="odom_to_tf",
-        name="odom_to_tf",
+    # device/baudrate for dji_serial_bridge_node are left at its own defaults
+    # (/dev/ttyTHS1, 115200) -- only the lidar's serial settings are exposed
+    # as launch args here.
+    dji_serial_bridge_node = Node(
+        package="dji_serial_bridge",
+        executable="dji_serial_bridge_node",
+        name="dji_serial_bridge",
         output="screen",
-        condition=IfCondition(LaunchConfiguration("publish_odom_tf")),
+        condition=IfCondition(real_hardware),
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
+    lidar_node = Node(
+        package="sllidar_ros2",
+        executable="sllidar_node",
+        name="sllidar_node",
+        output="screen",
+        condition=IfCondition(real_hardware),
+        parameters=[{
+            "serial_port": LaunchConfiguration("lidar_serial_port"),
+            "serial_baudrate": ParameterValue(
+                LaunchConfiguration("lidar_baudrate"), value_type=int
+            ),
+            "frame_id": "lidar",
+            "use_sim_time": use_sim_time,
+        }],
+    )
+
+    pose_translator_node = Node(
+        package="sentry_pkg",
+        executable="pose_translator",
+        name="pose_translator",
+        output="screen",
         parameters=[{
             "use_sim_time": use_sim_time,
-            "yaw_joint_name": LaunchConfiguration("yaw_joint_name"),
-            "y_joint_name": LaunchConfiguration("y_joint_name"),
+            "odom_frame": LaunchConfiguration("odom_frame"),
+        }],
+    )
+
+    robot_description = ParameterValue(
+        Command(["xacro ", sentry_xacro]), value_type=str
+    )
+    robot_state_publisher_node = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        name="robot_state_publisher",
+        output="screen",
+        parameters=[{
+            "robot_description": robot_description,
+            "use_sim_time": use_sim_time,
         }],
     )
 
@@ -140,8 +193,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        use_sim_time_arg, publish_odom_tf_arg, odom_frame_arg,
-        yaw_joint_name_arg, y_joint_name_arg,
-        load_map_arg, map_file_arg,
-        odom_to_tf_node, slam_toolbox_with_map_node, slam_toolbox_no_map_node,
+        real_hardware_arg,
+        lidar_serial_port_arg, lidar_baudrate_arg,
+        odom_frame_arg, load_map_arg, map_file_arg,
+        dji_serial_bridge_node, lidar_node,
+        pose_translator_node, robot_state_publisher_node,
+        slam_toolbox_with_map_node, slam_toolbox_no_map_node,
     ])
