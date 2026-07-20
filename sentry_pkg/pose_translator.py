@@ -22,10 +22,11 @@ class PoseTranslator(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
-        # Subscribe to the Type-C board custom interface topic
+        # Subscribe to the Type-C board custom interface topic (or sim's
+        # pose_emulator, which publishes the same topic/message)
         self.sub = self.create_subscription(
             RobotPose,
-            '/dji_serial_bridge/pose',
+            '/pose',
             self.pose_callback,
             qos_profile
         )
