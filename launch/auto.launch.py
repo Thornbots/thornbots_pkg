@@ -34,6 +34,14 @@ slam_toolbox/srv/SerializePoseGraph) at startup and continues mapping
 from it instead of starting blank, since ARCC26 is the sentry's actual
 field map. Pass load_map:=false for a fresh map (e.g. testing a
 different world in sim).
+
+rf2o_laser_odometry_node turns /scan into a second odometry-shaped estimate
+on /scan_odom (scan-matching, no TF broadcast -- publish_tf is left false
+since pose_translator/ekf_node owns odom->root, not this node). Not yet
+consumed by anything; this is step 2 of the EKF-fusion plan in
+SESSION_NOTES.md (step 3+ gates /scan_odom against wheel odometry and
+fuses both in robot_localization's ekf_node before this is trusted for
+odom->root).
 """
 import os
 
@@ -142,6 +150,23 @@ def generate_launch_description():
         }],
     )
 
+    scan_odom_node = Node(
+        package="rf2o_laser_odometry",
+        executable="rf2o_laser_odometry_node",
+        name="rf2o_laser_odometry",
+        output="screen",
+        parameters=[{
+            "laser_scan_topic": "/scan",
+            "odom_topic": "/scan_odom",
+            "publish_tf": False,
+            "base_frame_id": "root",
+            "odom_frame_id": LaunchConfiguration("odom_frame"),
+            "init_pose_from_topic": "",
+            "freq": 20.0,
+            "use_sim_time": use_sim_time,
+        }],
+    )
+
     robot_description = ParameterValue(
         Command(["xacro ", sentry_xacro]), value_type=str
     )
@@ -197,6 +222,6 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg,
         dji_serial_bridge_node, lidar_node,
-        pose_translator_node, robot_state_publisher_node,
+        pose_translator_node, scan_odom_node, robot_state_publisher_node,
         slam_toolbox_with_map_node, slam_toolbox_no_map_node,
     ])
