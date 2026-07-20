@@ -37,11 +37,11 @@ different world in sim).
 
 rf2o_laser_odometry_node turns /scan into a second odometry-shaped estimate
 on /scan_odom (scan-matching, no TF broadcast -- publish_tf is left false
-since pose_translator/ekf_node owns odom->root, not this node). Not yet
-consumed by anything; this is step 2 of the EKF-fusion plan in
-SESSION_NOTES.md (step 3+ gates /scan_odom against wheel odometry and
-fuses both in robot_localization's ekf_node before this is trusted for
-odom->root).
+since pose_translator/ekf_node owns odom->root, not this node). Only used
+by the EKF (localization_backend:=ekf); slam_toolbox's own localization
+doesn't consume /scan_odom or /scan_gated at all, so rf2o and
+head_home_scan_gate are both gated off (not launched) otherwise -- no
+reason to run either when nothing's reading their output.
 
 rf2o_laser_odometry only samples the lidar->root transform once, on its
 first received scan, and reuses that cached transform for its lifetime --
@@ -145,6 +145,9 @@ def generate_launch_description():
     publish_tf_from_pose_translator = PythonExpression(
         ["'true' if '", localization_backend, "' == 'passthrough' else 'false'"]
     )
+    ekf_backend_selected = PythonExpression(
+        ["'", localization_backend, "' == 'ekf'"]
+    )
 
     load_map_arg = DeclareLaunchArgument(
         "load_map", default_value="true",
@@ -225,11 +228,7 @@ def generate_launch_description():
         executable="ekf_node",
         name="ekf_filter_node",
         output="screen",
-        condition=IfCondition(
-            PythonExpression(
-                ["'", localization_backend, "' == 'ekf'"]
-            )
-        ),
+        condition=IfCondition(ekf_backend_selected),
         parameters=[
             ekf_params_file,
             {
@@ -252,11 +251,15 @@ def generate_launch_description():
                      "scan (see module docstring)."
     )
 
+    # Only feed the EKF (localization_backend:=ekf); slam_toolbox's own
+    # localization doesn't consume /scan_gated or /scan_odom at all, so
+    # there's no reason to run rf2o/the gate otherwise.
     head_home_scan_gate_node = Node(
         package="sentry_pkg",
         executable="head_home_scan_gate",
         name="head_home_scan_gate",
         output="screen",
+        condition=IfCondition(ekf_backend_selected),
         parameters=[{
             "use_sim_time": use_sim_time,
             "home_yaw_tolerance": ParameterValue(
@@ -270,6 +273,7 @@ def generate_launch_description():
         executable="rf2o_laser_odometry_node",
         name="rf2o_laser_odometry",
         output="screen",
+        condition=IfCondition(ekf_backend_selected),
         parameters=[{
             "laser_scan_topic": "/scan_gated",
             "odom_topic": "/scan_odom",
