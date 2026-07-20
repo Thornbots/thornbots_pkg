@@ -35,6 +35,7 @@ setup(
             'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
             'simple_relocalize_publisher= sentry_pkg.simple_relocalize_publisher:main',
             'pose_translator = sentry_pkg.pose_translator:main',
+            'head_home_scan_gate = sentry_pkg.head_home_scan_gate:main',
         ],
     },
 )

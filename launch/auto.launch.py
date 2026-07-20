@@ -42,6 +42,15 @@ consumed by anything; this is step 2 of the EKF-fusion plan in
 SESSION_NOTES.md (step 3+ gates /scan_odom against wheel odometry and
 fuses both in robot_localization's ekf_node before this is trusted for
 odom->root).
+
+rf2o_laser_odometry only samples the lidar->root transform once, on its
+first received scan, and reuses that cached transform for its lifetime --
+it assumes a rigidly-fixed sensor mount, which our head-mounted lidar
+isn't (see SESSION_NOTES.md). head_home_scan_gate feeds rf2o a filtered
+/scan_gated instead of raw /scan, forwarding scans only while the head is
+near its home (yaw ~ 0) position, so every scan rf2o ever sees (including
+its first, which fixes the cached transform) is consistent with that one
+head angle.
 """
 import os
 
@@ -150,13 +159,35 @@ def generate_launch_description():
         }],
     )
 
+    home_yaw_tolerance_arg = DeclareLaunchArgument(
+        "home_yaw_tolerance", default_value="0.05",
+        description="Max |head_yaw| (radians) for head_home_scan_gate to "
+                     "treat the head as 'home' and forward scans to rf2o. "
+                     "Keeps every scan rf2o ever sees consistent with the "
+                     "single lidar->root transform it caches on its first "
+                     "scan (see module docstring)."
+    )
+
+    head_home_scan_gate_node = Node(
+        package="sentry_pkg",
+        executable="head_home_scan_gate",
+        name="head_home_scan_gate",
+        output="screen",
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "home_yaw_tolerance": ParameterValue(
+                LaunchConfiguration("home_yaw_tolerance"), value_type=float
+            ),
+        }],
+    )
+
     scan_odom_node = Node(
         package="rf2o_laser_odometry",
         executable="rf2o_laser_odometry_node",
         name="rf2o_laser_odometry",
         output="screen",
         parameters=[{
-            "laser_scan_topic": "/scan",
+            "laser_scan_topic": "/scan_gated",
             "odom_topic": "/scan_odom",
             "publish_tf": False,
             "base_frame_id": "root",
@@ -220,8 +251,9 @@ def generate_launch_description():
     return LaunchDescription([
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, load_map_arg, map_file_arg,
+        odom_frame_arg, load_map_arg, map_file_arg, home_yaw_tolerance_arg,
         dji_serial_bridge_node, lidar_node,
-        pose_translator_node, scan_odom_node, robot_state_publisher_node,
+        pose_translator_node, head_home_scan_gate_node, scan_odom_node,
+        robot_state_publisher_node,
         slam_toolbox_with_map_node, slam_toolbox_no_map_node,
     ])
