@@ -16,6 +16,12 @@ class PoseTranslator(Node):
 
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'root')
+        # False when an ekf_node (robot_localization) owns odom->root TF
+        # instead (localization_backend:=ekf in auto.launch.py) -- this
+        # node still always publishes /odom + /joint_states either way,
+        # only its own TF broadcast is gated, so exactly one node ever
+        # broadcasts odom->root at a time.
+        self.declare_parameter('publish_tf', True)
 
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -70,7 +76,8 @@ class PoseTranslator(Node):
         t.transform.translation.y = float(msg.y)
         t.transform.translation.z = 0.0
         t.transform.rotation = q_chassis
-        self.tf_broadcaster.sendTransform(t)
+        if self.get_parameter('publish_tf').value:
+            self.tf_broadcaster.sendTransform(t)
 
         odom = Odometry()
         odom.header.stamp = stamp
