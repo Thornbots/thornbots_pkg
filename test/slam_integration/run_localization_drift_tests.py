@@ -68,9 +68,11 @@ sourcing already provides), from the host:
 Optional: --backend {slam,amcl,ekf} (default slam) to pick which
 auto.launch.py localization_mode to exercise. --scenario NAME to run just
 one scenario (see SCENARIOS below), --keep-running to skip teardown after
-the last scenario (for interactive follow-up inspection), --gui to run
-gz-sim with its GUI instead of headless (slower, only useful for visually
-debugging a failure).
+the last scenario (for interactive follow-up inspection), --headless to
+run gz-sim headless instead of the default GUI window (faster, but
+nothing to watch -- GUI is on by default so a human can watch/sanity-check
+scenario behavior live, matching the standing "always launch sim with
+GUI" rule in SESSION_NOTES.md).
 
 This script manages its OWN sim + sentry_pkg launch trees end to end (using
 the same setsid/process-group approach as dexec.sh -d / kill_launch.sh, see
@@ -923,10 +925,13 @@ def main():
     parser.add_argument('--scenario', choices=sorted(SCENARIOS.keys()),
                          help='Run only this scenario (default: all, in '
                               'the order listed in the module docstring)')
-    parser.add_argument('--gui', action='store_true',
-                         help='Run gz-sim with GUI instead of headless '
-                              '(slower; only useful for visual debugging)')
+    parser.add_argument('--headless', action='store_true',
+                         help='Run gz-sim headless instead of the default '
+                              'GUI window (faster, but nothing to watch -- '
+                              'GUI is on by default, see the module '
+                              'docstring)')
     args = parser.parse_args()
+    gui = not args.headless
 
     check_no_orphans('pre-flight')
 
@@ -936,7 +941,7 @@ def main():
         results = []
         for name in names:
             print(f'\n=== Running scenario: {name} (backend={args.backend}) ===')
-            sc = SCENARIOS[name](args.gui, args.backend)
+            sc = SCENARIOS[name](gui, args.backend)
             results.append(sc)
     finally:
         rclpy.shutdown()
