@@ -424,6 +424,45 @@ BACKEND_FRAMES = {
     'ekf': ('odom', 'root'),
 }
 
+# Driving path used by continuous_drift/jerk_with_motion, at the robot's
+# real 4.0 m/s top speed (see those scenarios' git history for why, vs.
+# the old 0.15 m/s wiggle).
+#
+# A first version of this (2026-07-20) tried to actually tour the field --
+# mapped clean_map.pgm's wall positions via connected-component analysis,
+# converted to world coords via clean_map.yaml's resolution/origin, and
+# built a 6-leg loop that AABB-checked clear of every wall by real margin
+# (the closest was ~0.77m from the maze block). It still ended up driving
+# into the upper-middle wall, confirmed live by watching gz-sim: the first
+# ~10 loop cycles (~40s) tracked fine, then map->odom error grew sharply
+# and never recovered (see that commit's test log) -- consistent with an
+# actual collision partway through, not a wrong-from-the-start coordinate
+# error (which would fail the very first cycle, not the tenth). Most
+# likely cause: these legs are open-loop (fixed velocity for a fixed
+# duration, no position feedback at all), so small per-leg execution
+# error on the free-floating chassis (no joint chain, no friction to
+# damp overshoot) can accumulate across many repeated cycles until it's
+# enough to clip a wall that looked comfortably clear on paper. Not worth
+# chasing the exact mechanism further -- the fix is a smaller, simpler
+# loop, not a more precisely-computed big one.
+#
+# This version stays inside the open central gap the whole time -- never
+# needs to approach any wall's x/y band at all, at any point in the loop,
+# so there's nothing to route around and no accumulated-drift budget that
+# matters: even generous execution error still lands nowhere near a wall.
+# Comfortable margins at this size (world coords, meters): ~1.49m south
+# of upper_mid's near edge (y=2.49), ~1.11m north of lower_mid's (y=
+# -2.11), and both are nowhere near bottom_wall's ramp-adjacent edge
+# (y=-3.35) -- this loop never goes south of y=-1.0.
+# Legs are (vx, vy, duration), not (vx, vy) cycled at a fixed duration,
+# so scenarios can reuse this one constant either way.
+PATROL_LEGS = [
+    (4.0, 0.0, 0.25),    # east   0,0   -> 1,0
+    (0.0, 4.0, 0.25),    # north  1,0   -> 1,1
+    (-4.0, 0.0, 0.25),   # west   1,1   -> 0,1
+    (0.0, -4.0, 0.25),   # south  0,1   -> 0,0
+]
+
 
 def source_prefix():
     return (
@@ -641,18 +680,18 @@ def scenario_continuous_drift(gui, backend):
 
         samples = []
         OBSERVE_SECONDS = 60.0
-        DRIVE_CHUNK = 3.0
-        t0 = time.monotonic()
-        # Alternate small movements in x/y so the backend's distance-
-        # traveled gate keeps opening throughout the window (a fully
+        # Real 4.0 m/s driving around PATROL_LEGS's mapped-safe loop (see
+        # its definition for the wall-clearance derivation), not the old
+        # timid 0.15 m/s wiggle near the start -- also keeps the
+        # distance-traveled gate opening throughout the window (a fully
         # stationary robot wouldn't exercise periodic correction at all,
         # see the jerk_stationary scenario for that case specifically).
-        directions = [(0.15, 0.0), (0.0, 0.15), (-0.15, 0.0), (0.0, -0.15)]
+        t0 = time.monotonic()
         i = 0
         while time.monotonic() - t0 < OBSERVE_SECONDS:
-            vx, vy = directions[i % len(directions)]
+            vx, vy, duration = PATROL_LEGS[i % len(PATROL_LEGS)]
             i += 1
-            helper.drive(vx, vy, DRIVE_CHUNK)
+            helper.drive(vx, vy, duration)
             p = helper.get_correction_tf(timeout=2.0)
             if p is not None:
                 elapsed = time.monotonic() - t0
@@ -708,7 +747,11 @@ def scenario_jerk_with_motion(gui, backend):
     parent, child = BACKEND_FRAMES[backend]
     edge = f'{parent}->{child}'
     sim_tree = sentry_tree = helper = None
-    JERK_STDDEV = 0.3
+    # 0.5, not the old 0.3 -- exercises jerks up to the
+    # robot's real worst-case bump/slip displacement (see
+    # ARCC_2026_SENTRY_CONTEXT.md's "Bumpy Road" zone), not
+    # just a gentle nudge.
+    JERK_STDDEV = 0.5
     try:
         sim_tree, sentry_tree, helper = run_stack(
             gui, backend, odom_noise_enabled=False, odom_jerk_stddev=JERK_STDDEV)
@@ -785,25 +828,34 @@ def scenario_jerk_with_motion(gui, backend):
         # indistinguishable from zero. Not yet independently re-validated
         # against amcl's own plateau behavior -- if amcl runs of this
         # scenario turn out flaky, that's the first constant to revisit.
+        # CAVEAT (2026-07-20): all of the above was calibrated against the
+        # old 0.15 m/s / JERK_STDDEV=0.3 parameters. Both were since bumped
+        # to the robot's real top speed (4 m/s) and a larger worst-case
+        # jerk (0.5) to make this suite actually exercise realistic
+        # conditions -- if this scenario starts failing/flaking under the
+        # new parameters, re-derive the plateau fraction rather than
+        # assuming the old 0.3 still applies; faster driving and bigger
+        # jerks are not guaranteed to produce the same correction-fraction
+        # plateau.
         CORRECTION_TIMEOUT = 60.0
         CORRECTION_FRACTION = 0.3
         correction_threshold = applied_jerk_mag * CORRECTION_FRACTION
         t0 = time.monotonic()
         max_seen = 0.0
         corrected_pose = None
-        # Drive a small square-ish loop (holonomic chassis, so this is
-        # x+/y+/x-/y- legs) rather than pure back-and-forth wiggle on one
-        # axis -- a wiggle-in-place pattern was found to net very little
-        # actual displacement/geometric diversity for scan-matching to
+        # Drive PATROL_LEGS's mapped-safe loop (holonomic chassis, real
+        # 4.0 m/s -- see its definition for the wall-clearance derivation)
+        # rather than pure back-and-forth wiggle on one axis -- a
+        # wiggle-in-place pattern was found to net very little actual
+        # displacement/geometric diversity for scan-matching to
         # triangulate against, which correlated with slow/partial
         # correction independent of host CPU load. A loop gives the
         # backend multiple distinct vantage points against the map.
-        loop_legs = [(0.15, 0.0), (0.0, 0.15), (-0.15, 0.0), (0.0, -0.15)]
         leg_i = 0
         while time.monotonic() - t0 < CORRECTION_TIMEOUT:
-            vx, vy = loop_legs[leg_i % len(loop_legs)]
+            vx, vy, duration = PATROL_LEGS[leg_i % len(PATROL_LEGS)]
             leg_i += 1
-            helper.drive(vx, vy, 2.0)
+            helper.drive(vx, vy, duration)
             p = helper.get_correction_tf(timeout=2.0)
             if p is not None:
                 delta = math.hypot(p[0] - pose_before[0], p[1] - pose_before[1])
@@ -861,7 +913,8 @@ def scenario_jerk_stationary(gui, backend):
     sim_tree = sentry_tree = helper = None
     try:
         sim_tree, sentry_tree, helper = run_stack(
-            gui, backend, odom_noise_enabled=False, odom_jerk_stddev=0.3)
+            gui, backend, odom_noise_enabled=False,
+            odom_jerk_stddev=0.5)  # matches jerk_with_motion's bump
         if not wait_for_stack_ready(sc, helper):
             sc.result(False, 'stack failed to reach a healthy /scan rate '
                               'in time -- see log above')
