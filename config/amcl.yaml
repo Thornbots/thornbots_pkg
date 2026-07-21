@@ -42,11 +42,11 @@ amcl:
     # straight to an aggressive value, AND validate against
     # continuous_drift (real injected drift/jitter/slip) alongside
     # unmapped_obstacle so a fix for one doesn't regress the other.
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
+    alpha1: 0.0875
+    alpha2: 0.0875
+    alpha3: 0.0875
+    alpha4: 0.0875
+    alpha5: 0.0875
 
     # Matches slam.yaml's minimum_travel_distance/minimum_travel_heading
     # -- same reasoning: small update thresholds so AMCL reacts promptly
@@ -73,7 +73,7 @@ amcl:
     # quality against the existing slam_mode:=localization default in
     # sim before adjusting these (see SESSION_NOTES.md).
     laser_model_type: likelihood_field
-    max_beams: 60
+    max_beams: 180
     laser_likelihood_max_dist: 2.0
     lambda_short: 0.1
     sigma_hit: 0.2
