@@ -29,7 +29,6 @@ setup(
     maintainer_email='baptisbc@rose-hulman.edu',
     description='Sentry SLAM for RHIT Thornbots ARC 2026',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
