@@ -6,10 +6,6 @@
   <description>Sentry SLAM with LIDAR for ARC 2026</description>
   <maintainer email="baptisbc@rose-hulman.edu">ubuntu</maintainer>
   <license>Apache-2.0</license>
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
-  <test_depend>python3-pytest</test_depend>
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
@@ -20,6 +16,9 @@
   <exec_depend>sllidar_ros2</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>rf2o_laser_odometry</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
