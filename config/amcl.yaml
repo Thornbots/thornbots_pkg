@@ -1,0 +1,74 @@
+amcl:
+  ros__parameters:
+    # Frames match the rest of sentry_pkg's TF tree (see slam.yaml's
+    # equivalent comment) -- odom_frame_id/base_frame_id/global_frame_id
+    # are overridden again from auto.launch.py to stay in sync with the
+    # odom_frame launch arg; the values below are just this file's own
+    # standalone defaults (e.g. for running amcl directly, outside the
+    # launch file).
+    odom_frame_id: odom
+    base_frame_id: root
+    global_frame_id: map
+    scan_topic: /scan
+
+    # Chassis is holonomic -- translates in x/y without needing to
+    # rotate to move (see SESSION_NOTES.md) -- so nav2_amcl's default
+    # DifferentialMotionModel (rotate-then-translate odometry noise) is
+    # the wrong shape for this robot. OmniMotionModel adds a dedicated
+    # strafe noise term instead.
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    # Matches slam.yaml's minimum_travel_distance/minimum_travel_heading
+    # -- same reasoning: small update thresholds so AMCL reacts promptly
+    # to slip events (e.g. the arena's "Bumpy Road" zone) instead of
+    # waiting for a large accumulated move since the last update.
+    update_min_d: 0.1
+    update_min_a: 0.05
+
+    # Matches slam_toolbox's map_start_pose (both start from the same
+    # assumed origin).
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+    # RPLIDAR A2M8 range, matches slam.yaml/lidar_node.
+    laser_min_range: 0.15
+    laser_max_range: 12.0
+
+    # Everything below is stock nav2 defaults, not yet tuned against
+    # this robot/map -- next step is comparing AMCL's localization
+    # quality against the existing slam_mode:=localization default in
+    # sim before adjusting these (see SESSION_NOTES.md).
+    laser_model_type: likelihood_field
+    max_beams: 60
+    laser_likelihood_max_dist: 2.0
+    lambda_short: 0.1
+    sigma_hit: 0.2
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    do_beamskip: false
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    min_particles: 500
+    max_particles: 2000
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    save_pose_rate: 0.5
+    first_map_only: false
+    always_reset_initial_pose: false
+    tf_broadcast: true
+    transform_tolerance: 1.0
