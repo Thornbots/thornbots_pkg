@@ -17,6 +17,31 @@ amcl:
     # the wrong shape for this robot. OmniMotionModel adds a dedicated
     # strafe noise term instead.
     robot_model_type: "nav2_amcl::OmniMotionModel"
+    # alpha1-5: stock 0.2. TRIED lowering all five to 0.05 on 2026-07-21
+    # to fight unmapped_obstacle's ~0.3-0.4m map->odom wobble (diagnosed
+    # as motion-model noise fighting this sim's near-perfect,
+    # odom_noise_enabled=false odometry, not an obstacle-robustness
+    # issue -- see git history) -- REVERTED after it crashed amcl
+    # outright, reproducibly: "amcl: ./src/pf/pf_kdtree.c:363:
+    # pf_kdtree_cluster: Assertion `node ==
+    # pf_kdtree_find_node(self, self->root, node->key)' failed", process
+    # dies with SIGABRT during startup Configuring/initTransforms, before
+    # any driving even starts. This is a known class of nav2_amcl bug
+    # where alpha values too low let resampling collapse particle
+    # diversity enough to break the kd-tree clustering's node-uniqueness
+    # invariant. Also: the sim's noise/drift model exists specifically so
+    # tests can validate behavior under realistic conditions (per the
+    # user, 2026-07-21) -- tuning alpha down against the
+    # odom_noise_enabled=false condition specifically risks making amcl
+    # LESS responsive to the genuine slip/drift continuous_drift and real
+    # hardware runs care about, which is the opposite of what "tune it to
+    # be better" should mean. Left at stock 0.2 pending a safer, more
+    # incremental approach (see project memory / SESSION_NOTES.md for
+    # current status) -- if retrying, step down gradually (e.g. 0.15,
+    # then 0.1) and check for the pf_kdtree crash at each step, not
+    # straight to an aggressive value, AND validate against
+    # continuous_drift (real injected drift/jitter/slip) alongside
+    # unmapped_obstacle so a fix for one doesn't regress the other.
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
@@ -56,7 +81,20 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    do_beamskip: false
+    # do_beamskip: true (was false, stock default) -- enabled 2026-07-21,
+    # nav2_amcl's built-in mechanism for excluding beams that disagree
+    # with the map-predicted likelihood (e.g. an unmapped obstacle) from
+    # a scan's weight update, rather than letting them drag the whole
+    # particle weighting toward "unexpected obstacle" evidence. Tried
+    # FIRST as the fix for unmapped_obstacle's ~0.3-0.4m map->odom
+    # wobble, and measurably did NOT help (0.409m after enabling vs.
+    # 0.395-0.443m before) -- turned out the wobble wasn't obstacle-
+    # related at all (see alpha1-5 above for the actual diagnosis and
+    # fix). Left enabled anyway: it's still correct, low-risk defense
+    # for the real dynamic obstacles the competition will actually
+    # produce (other robots, thrown game pieces), just not what fixed
+    # this particular symptom.
+    do_beamskip: true
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
