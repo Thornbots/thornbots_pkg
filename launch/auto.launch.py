@@ -21,74 +21,71 @@ doesn't also try to open the real serial devices, and so it uses sim's
 /clock.
 
 pose_translator (fed by /pose) is the sole source of /odom, /joint_states,
-and odom->root TF -- same code path for sim and real hardware, so there's
-only one place pose handling can go wrong. This package also runs its own
-robot_state_publisher off sentry_pkg/urdf/sentry.urdf.xacro (fed by
-pose_translator's /joint_states) rather than depending on sim's URDF/TF --
-sentry_pkg owns the whole TF tree itself now, sim only ever provides raw
-sensor data through the shared real-hardware-shaped interfaces.
+and (outside localization_mode:=ekf) odom->root TF -- same code path for
+sim and real hardware, so there's only one place pose handling can go
+wrong. This package also runs its own robot_state_publisher off
+sentry_pkg/urdf/sentry.urdf.xacro (fed by pose_translator's /joint_states)
+rather than depending on sim's URDF/TF -- sentry_pkg owns the whole TF
+tree itself now, sim only ever provides raw sensor data through the
+shared real-hardware-shaped interfaces.
 
 load_map:=true by default: deserializes map_file's saved pose graph
 (map/ARCC26.posegraph + .data under sentry_pkg, saved via
-slam_toolbox/srv/SerializePoseGraph) at startup and continues mapping
-from it instead of starting blank, since ARCC26 is the sentry's actual
-field map. Pass load_map:=false for a fresh map (e.g. testing a
-different world in sim).
+slam_toolbox/srv/SerializePoseGraph) at startup and continues from it
+instead of starting blank, since ARCC26 is the sentry's actual field map.
+Only affects the slam/mapping localization_mode values below (slam_toolbox
+always either loads or doesn't); amcl always loads map_file's .yaml
+regardless (it has no concept of starting blank), and ekf mode doesn't run
+any map node at all so load_map has no effect there.
 
-rf2o_laser_odometry_node turns /scan into a second odometry-shaped estimate
-on /scan_odom (scan-matching, no TF broadcast -- publish_tf is left false
-since pose_translator/ekf_node owns odom->root, not this node). Only used
-by the EKF (localization_backend:=ekf); slam_toolbox's own localization
-doesn't consume /scan_odom or /scan_gated at all, so rf2o and
-head_home_scan_gate are both gated off (not launched) otherwise -- no
-reason to run either when nothing's reading their output.
-
-rf2o_laser_odometry only samples the lidar->root transform once, on its
-first received scan, and reuses that cached transform for its lifetime --
-it assumes a rigidly-fixed sensor mount, which our head-mounted lidar
-isn't (see SESSION_NOTES.md). head_home_scan_gate feeds rf2o a filtered
-/scan_gated instead of raw /scan, forwarding scans only while the head is
-near its home (yaw ~ 0) position, so every scan rf2o ever sees (including
-its first, which fixes the cached transform) is consistent with that one
-head angle.
-
-localization_backend selects who owns odom->root TF (step 5 of the
-EKF-fusion plan in SESSION_NOTES.md/ARCC_2026_SENTRY_CONTEXT.md):
-  - 'passthrough' (default): pose_translator broadcasts odom->root itself,
-    straight off /pose, exactly as before this EKF work -- kept as the
-    default so it stays an instant, known-good fallback.
-  - 'ekf': ekf_node (sentry_pkg/config/ekf.yaml) fuses /odom (x, y, vx,
-    vy) and /scan_odom (x, y) and owns odom->root instead. pose_translator
-    keeps publishing /odom + /joint_states either way (both still needed
-    -- /odom feeds the EKF, /joint_states feeds robot_state_publisher),
-    it just stops broadcasting TF itself (publish_tf parameter), so
-    exactly one of {ekf_node, pose_translator} ever broadcasts odom->root
-    at a time.
-
-slam_mode picks slam_toolbox's own mode param (mapping/localization),
-overriding the value baked into config/slam.yaml. Default is
-'localization' -- once ARCC26 is a good-enough field map, that's the
-normal running mode: slam_toolbox localizes root against the existing
-map instead of continuing to build/extend it. Pass slam_mode:=mapping
-(with load_map:=true to refine the existing map, or load_map:=false to
-build a fresh one from scratch) when you actually want to (re)build the
-map -- that should be an occasional, deliberate action, not the default.
-Note localization mode requires an actual map to localize against, i.e.
-load_map:=true with a real map_file; slam_mode:=localization with
-load_map:=false is not a meaningful combination.
-
-map_localizer picks who owns map->odom TF -- the map-relative correction,
-same conceptual role slam_mode:=localization plays above:
-  - 'slam_toolbox' (default): unchanged, the slam_toolbox_* nodes above.
-  - 'amcl': nav2's map_server + amcl localize root against map_file's
-    saved occupancy grid (<map_file>.yaml, same basename slam_toolbox's
-    posegraph uses) instead. slam_toolbox isn't launched at all in this
-    mode -- AMCL never builds a map, only localizes against one, so
-    there's no mapping-mode equivalent; pair with load_map:=true and a
-    real map_file, same requirement slam_mode:=localization already has.
-    map_server and amcl are nav2 lifecycle nodes, brought up by a
-    lifecycle_manager node (autostart:true) rather than starting active
-    on their own.
+localization_mode picks the whole localization scheme in one choice --
+who (if anyone) owns map->odom TF, and who owns odom->root TF:
+  - 'slam' (default): slam_toolbox in its own 'localization' mode owns
+    map->odom, localizing root against the existing map_file rather than
+    building/extending it -- the normal running mode once ARCC26 is a
+    good-enough field map. pose_translator owns odom->root directly off
+    /pose (passthrough). Requires load_map:=true with a real map_file --
+    'slam' with load_map:=false is not a meaningful combination (there's
+    no map to localize against).
+  - 'mapping': slam_toolbox in its own 'mapping' mode owns map->odom,
+    (re)building/extending the map instead of just localizing against it
+    -- pair with load_map:=true to refine ARCC26, or load_map:=false to
+    build a fresh one from scratch. This should be an occasional,
+    deliberate action, not the default. use_map_saver is only turned on
+    in this mode (see below) -- the map is only ever savable/updatable
+    when you've deliberately opted into mapping, never as a side effect
+    of ordinary localization/amcl/ekf running. pose_translator owns
+    odom->root directly off /pose (passthrough), same as 'slam'.
+  - 'amcl': nav2's map_server + amcl own map->odom instead, localizing
+    root against map_file's saved occupancy grid (<map_file>.yaml, same
+    basename slam_toolbox's posegraph uses). slam_toolbox isn't launched
+    at all in this mode -- AMCL never builds a map, only localizes
+    against one. map_server and amcl are nav2 lifecycle nodes, brought up
+    by a lifecycle_manager node (autostart:true) rather than starting
+    active on their own. pose_translator owns odom->root directly off
+    /pose (passthrough), same as 'slam'/'mapping'.
+  - 'ekf': no map->odom node runs at all (no slam_toolbox, no amcl/
+    map_server/lifecycle_manager -- the map frame doesn't exist in this
+    mode). Instead, ekf_node (robot_localization, config/ekf.yaml) fuses
+    /odom (x, y, vx, vy) and /scan_odom (x, y) and owns odom->root.
+    pose_translator keeps publishing /odom + /joint_states as always
+    (both still needed -- /odom feeds the EKF, /joint_states feeds
+    robot_state_publisher), it just stops broadcasting TF itself
+    (publish_tf parameter), so exactly one of {ekf_node, pose_translator}
+    ever broadcasts odom->root at a time. This mode also launches
+    rf2o_laser_odometry_node (turns /scan into a second odometry-shaped
+    estimate on /scan_odom, scan-matching, no TF broadcast of its own --
+    publish_tf is left false since ekf_node owns odom->root, not this
+    node) and head_home_scan_gate. rf2o only samples the lidar->root
+    transform once, on its first received scan, and reuses that cached
+    transform for its lifetime -- it assumes a rigidly-fixed sensor
+    mount, which our head-mounted lidar isn't (see SESSION_NOTES.md).
+    head_home_scan_gate feeds rf2o a filtered /scan_gated instead of raw
+    /scan, forwarding scans only while the head is near its home (yaw ~
+    0) position, so every scan rf2o ever sees (including its first,
+    which fixes the cached transform) is consistent with that one head
+    angle. Neither node is launched in any other localization_mode --
+    nothing else reads /scan_odom or /scan_gated.
 """
 import os
 
@@ -139,87 +136,66 @@ def generate_launch_description():
 
     odom_frame_arg = DeclareLaunchArgument(
         "odom_frame", default_value="odom",
-        description="Frame slam_toolbox treats as its drift-free reference, "
-                     "parent of base_frame."
-    )
-
-    localization_backend_arg = DeclareLaunchArgument(
-        "localization_backend", default_value="passthrough",
-        choices=["ekf", "passthrough"],
-        description="Who owns odom->root TF. 'passthrough' (default): "
-                     "pose_translator broadcasts it directly off /pose, "
-                     "unchanged from before the EKF work -- kept as the "
-                     "default so it's an instant fallback. 'ekf': "
-                     "ekf_node (config/ekf.yaml) fuses /odom + /scan_odom "
-                     "and owns it instead; pose_translator's own TF "
-                     "broadcast is disabled in that mode (see module "
-                     "docstring)."
-    )
-    localization_backend = LaunchConfiguration("localization_backend")
-    publish_tf_from_pose_translator = PythonExpression(
-        ["'true' if '", localization_backend, "' == 'passthrough' else 'false'"]
-    )
-    ekf_backend_selected = PythonExpression(
-        ["'", localization_backend, "' == 'ekf'"]
+        description="Frame slam_toolbox/amcl/ekf_node treat as their "
+                     "drift-free reference, parent of base_frame."
     )
 
     load_map_arg = DeclareLaunchArgument(
         "load_map", default_value="true",
         description="Deserialize map_file's saved pose graph at startup and "
-                     "continue mapping from it instead of starting blank. "
-                     "Defaults on since ARCC26 (see map_file below) is the "
-                     "sentry's actual field map."
+                     "continue from it instead of starting blank. Defaults "
+                     "on since ARCC26 (see map_file below) is the sentry's "
+                     "actual field map. Only affects localization_mode:="
+                     "slam/mapping; amcl always loads map_file's .yaml "
+                     "regardless, and ekf runs no map node at all."
     )
     map_file_arg = DeclareLaunchArgument(
         "map_file", default_value=os.path.join(
             get_package_share_directory("sentry_pkg"), "map", "ARCC26"
         ),
-        description="Path (no extension) to a slam_toolbox-serialized pose "
-                     "graph (<map_file>.posegraph/.data, see "
-                     "slam_toolbox/srv/SerializePoseGraph) to resume "
-                     "mapping from. Only used when load_map:=true."
+        description="Path (no extension) to the map to use: slam_toolbox "
+                     "reads <map_file>.posegraph/.data (see "
+                     "slam_toolbox/srv/SerializePoseGraph), amcl reads "
+                     "<map_file>.yaml (see nav2_map_server). Same basename, "
+                     "both refer to the same saved map."
     )
 
-    slam_mode_arg = DeclareLaunchArgument(
-        "slam_mode", default_value="localization",
-        choices=["mapping", "localization"],
-        description="slam_toolbox's own mode param, overriding config/"
-                     "slam.yaml's baked-in value. 'localization' (default): "
-                     "localize root against the existing map_file rather "
-                     "than continuing to build/extend it -- the normal "
-                     "running mode once ARCC26 is a good-enough field map. "
-                     "'mapping': (re)build the map -- pair with load_map:="
-                     "true to refine ARCC26, or load_map:=false to start "
-                     "fresh. slam_mode:=localization requires load_map:="
-                     "true with a real map_file; there's no map to "
-                     "localize against otherwise."
+    localization_mode_arg = DeclareLaunchArgument(
+        "localization_mode", default_value="slam",
+        choices=["slam", "mapping", "amcl", "ekf"],
+        description="Selects the whole localization scheme in one choice "
+                     "-- see the module docstring for what each of "
+                     "slam/mapping/amcl/ekf actually launches and which "
+                     "TF edges (map->odom, odom->root) it owns."
     )
-
-    map_localizer_arg = DeclareLaunchArgument(
-        "map_localizer", default_value="slam_toolbox",
-        choices=["slam_toolbox", "amcl"],
-        description="Who owns map->odom TF. 'slam_toolbox' (default): "
-                     "unchanged, the slam_toolbox_* nodes below, mode "
-                     "picked by slam_mode above. 'amcl': nav2's "
-                     "map_server + amcl (config/amcl.yaml) localize "
-                     "root against map_file's saved occupancy grid "
-                     "(<map_file>.yaml) instead; slam_toolbox isn't "
-                     "launched at all in this mode -- AMCL never builds "
-                     "a map, only localizes against one, so pair with "
-                     "load_map:=true and a real map_file (see module "
-                     "docstring)."
+    localization_mode = LaunchConfiguration("localization_mode")
+    ekf_selected = PythonExpression(
+        ["'", localization_mode, "' == 'ekf'"]
     )
-    map_localizer = LaunchConfiguration("map_localizer")
     amcl_selected = PythonExpression(
-        ["'", map_localizer, "' == 'amcl'"]
+        ["'", localization_mode, "' == 'amcl'"]
+    )
+    mapping_selected = PythonExpression(
+        ["'", localization_mode, "' == 'mapping'"]
     )
     slam_toolbox_with_map_selected = PythonExpression(
-        ["'", map_localizer, "' == 'slam_toolbox' and '",
+        ["'", localization_mode, "' in ('slam', 'mapping') and '",
          LaunchConfiguration("load_map"), "' == 'true'"]
     )
     slam_toolbox_no_map_selected = PythonExpression(
-        ["'", map_localizer, "' == 'slam_toolbox' and '",
+        ["'", localization_mode, "' == 'mapping' and '",
          LaunchConfiguration("load_map"), "' == 'false'"]
+    )
+    slam_toolbox_mode_param = PythonExpression(
+        ["'mapping' if '", localization_mode, "' == 'mapping' "
+         "else 'localization'"]
+    )
+    # Map saving/updating (slam_toolbox's use_map_saver, overriding
+    # config/slam.yaml's baked-in value) is only ever enabled in mapping
+    # mode -- never a side effect of ordinary localization/amcl/ekf
+    # running, per the module docstring.
+    publish_tf_from_pose_translator = PythonExpression(
+        ["'false' if '", localization_mode, "' == 'ekf' else 'true'"]
     )
     map_yaml_file = PythonExpression(
         ["'", LaunchConfiguration("map_file"), "' + '.yaml'"]
@@ -272,7 +248,7 @@ def generate_launch_description():
         executable="ekf_node",
         name="ekf_filter_node",
         output="screen",
-        condition=IfCondition(ekf_backend_selected),
+        condition=IfCondition(ekf_selected),
         parameters=[
             ekf_params_file,
             {
@@ -292,18 +268,18 @@ def generate_launch_description():
                      "treat the head as 'home' and forward scans to rf2o. "
                      "Keeps every scan rf2o ever sees consistent with the "
                      "single lidar->root transform it caches on its first "
-                     "scan (see module docstring)."
+                     "scan (see module docstring). Only used when "
+                     "localization_mode:=ekf."
     )
 
-    # Only feed the EKF (localization_backend:=ekf); slam_toolbox's own
-    # localization doesn't consume /scan_gated or /scan_odom at all, so
-    # there's no reason to run rf2o/the gate otherwise.
+    # Only used by localization_mode:=ekf; nothing else reads /scan_odom
+    # or /scan_gated.
     head_home_scan_gate_node = Node(
         package="sentry_pkg",
         executable="head_home_scan_gate",
         name="head_home_scan_gate",
         output="screen",
-        condition=IfCondition(ekf_backend_selected),
+        condition=IfCondition(ekf_selected),
         parameters=[{
             "use_sim_time": use_sim_time,
             "home_yaw_tolerance": ParameterValue(
@@ -317,7 +293,7 @@ def generate_launch_description():
         executable="rf2o_laser_odometry_node",
         name="rf2o_laser_odometry",
         output="screen",
-        condition=IfCondition(ekf_backend_selected),
+        condition=IfCondition(ekf_selected),
         parameters=[{
             "laser_scan_topic": "/scan_gated",
             "odom_topic": "/scan_odom",
@@ -394,9 +370,9 @@ def generate_launch_description():
     # gz_sim_headless split): map_file_name is only meaningful to
     # slam_toolbox when actually set, and launch Node parameter dicts are
     # static, so load_map:=false needs a version of this node that omits
-    # the key entirely rather than passing it empty. Both are also
-    # gated on map_localizer:=slam_toolbox -- not launched at all when
-    # map_localizer:=amcl owns map->odom instead.
+    # the key entirely rather than passing it empty. Both are also gated
+    # on localization_mode being slam/mapping -- not launched at all when
+    # localization_mode is amcl/ekf.
     slam_toolbox_with_map_node = Node(
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
@@ -410,7 +386,10 @@ def generate_launch_description():
                 "odom_frame": LaunchConfiguration("odom_frame"),
                 "map_file_name": LaunchConfiguration("map_file"),
                 "map_start_pose": [0.0, 0.0, 0.0],
-                "mode": LaunchConfiguration("slam_mode"),
+                "mode": slam_toolbox_mode_param,
+                "use_map_saver": ParameterValue(
+                    mapping_selected, value_type=bool
+                ),
             },
         ],
     )
@@ -425,9 +404,12 @@ def generate_launch_description():
             {
                 "use_sim_time": use_sim_time,
                 "odom_frame": LaunchConfiguration("odom_frame"),
-                # Always mapping: there's no saved map to localize
-                # against without load_map, regardless of slam_mode.
+                # Always mapping: this variant only ever launches when
+                # localization_mode:=mapping (see
+                # slam_toolbox_no_map_selected above) -- there's no saved
+                # map to localize against without load_map anyway.
                 "mode": "mapping",
+                "use_map_saver": True,
             },
         ],
     )
@@ -435,8 +417,7 @@ def generate_launch_description():
     return LaunchDescription([
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, localization_backend_arg,
-        load_map_arg, map_file_arg, slam_mode_arg, map_localizer_arg,
+        odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         home_yaw_tolerance_arg,
         dji_serial_bridge_node, lidar_node,
         pose_translator_node, ekf_node,
