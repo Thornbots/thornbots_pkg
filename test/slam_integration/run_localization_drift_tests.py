@@ -255,7 +255,11 @@ def check_no_orphans(label):
             ['bash', '-c',
              "ps aux | grep -E 'ign gazebo|gz sim|slam_toolbox|amcl|"
              "map_server|ekf_filter_node|pose_translator|pose_emulator' | "
-             "grep -v grep"],
+             "grep -v grep | "
+             # Excludes this script's own process: --backend amcl/ekf on
+             # its own command line would otherwise self-match the
+             # amcl/ekf_filter_node patterns above.
+             "grep -v run_localization_drift_tests.py"],
             capture_output=True, text=True, timeout=10,
         ).stdout.strip()
     except Exception as e:
