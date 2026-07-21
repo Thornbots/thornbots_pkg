@@ -126,10 +126,13 @@ SCENARIOS
                        spawn pose, so a consistent ~0.1-0.15m absolute
                        offset here is normal. No ERROR in any log.
 2. continuous_drift -- odom_noise_enabled:=true, default drift/jitter
-                       stddevs, robot given small continuous motion. Over
+                       stddevs plus 0.5 wheel-slip ratio (reported
+                       odometry loses half of every meter actually
+                       driven, see pose_emulator.py's odom_slip_ratio),
+                       robot given continuous motion at real speed. Over
                        an observation window, the correction TF should
                        stay BOUNDED (periodic correction keeping up with
-                       accumulated drift), not grow without bound.
+                       accumulated drift+slip), not grow without bound.
 3. jerk_with_motion -- (slam/amcl only, see BACKENDS) fire trigger_jerk,
                        then command a small amount of /cmd_vel motion.
                        Assert the correction TF produces a prompt, real
@@ -507,7 +510,8 @@ class Scenario:
 
 
 def run_stack(gui, backend, odom_noise_enabled, odom_jerk_stddev=None,
-              odom_drift_stddev=None, odom_jitter_stddev=None):
+              odom_drift_stddev=None, odom_jitter_stddev=None,
+              odom_slip_ratio=None):
     """Starts sim + sentry_pkg launch trees, waits for the graph to come
     up, returns (sim_tree, sentry_tree, helper_node). Caller must call
     teardown_stack() when done."""
@@ -523,6 +527,8 @@ def run_stack(gui, backend, odom_noise_enabled, odom_jerk_stddev=None,
         sim_args += f' odom_drift_stddev:={odom_drift_stddev}'
     if odom_jitter_stddev is not None:
         sim_args += f' odom_jitter_stddev:={odom_jitter_stddev}'
+    if odom_slip_ratio is not None:
+        sim_args += f' odom_slip_ratio:={odom_slip_ratio}'
 
     sim_tree = LaunchTree(
         'sim', launch_cmd(sim_args),
@@ -662,13 +668,21 @@ def scenario_continuous_drift(gui, backend):
     parent, child = BACKEND_FRAMES[backend]
     edge = f'{parent}->{child}'
     sc = Scenario('continuous_drift',
-                  f'continuous drift+jitter with motion: {edge} should '
-                  'correct periodically and stay bounded, not grow without '
-                  'limit')
+                  f'continuous drift+jitter+slip with motion: {edge} '
+                  'should correct periodically and stay bounded, not grow '
+                  'without limit')
     sim_tree = sentry_tree = helper = None
+    # 0.5 -- reported odometry loses half of every meter the robot actually
+    # drives (see pose_emulator.py's odom_slip_ratio for the model), on top
+    # of the existing drift/jitter random-walk. A much more severe,
+    # continuous, motion-proportional discrepancy than drift/jitter alone
+    # produce -- this is what "make the tests harder" meant for this
+    # scenario specifically, distinct from the speed/jerk bump the other
+    # scenarios got.
+    SLIP_RATIO = 0.5
     try:
         sim_tree, sentry_tree, helper = run_stack(
-            gui, backend, odom_noise_enabled=True)
+            gui, backend, odom_noise_enabled=True, odom_slip_ratio=SLIP_RATIO)
         if not wait_for_stack_ready(sc, helper):
             sc.result(False, 'stack failed to reach a healthy /scan rate '
                               'in time -- see log above')
