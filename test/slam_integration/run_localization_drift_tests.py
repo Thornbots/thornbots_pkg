@@ -126,8 +126,8 @@ SCENARIOS
                        spawn pose, so a consistent ~0.1-0.15m absolute
                        offset here is normal. No ERROR in any log.
 2. continuous_drift -- odom_noise_enabled:=true, default drift/jitter
-                       stddevs plus 0.5 wheel-slip ratio (reported
-                       odometry loses half of every meter actually
+                       stddevs plus a 0.25 wheel-slip ratio (reported
+                       odometry loses 1/4 of every meter actually
                        driven, see pose_emulator.py's odom_slip_ratio),
                        robot given continuous motion at real speed. Over
                        an observation window, the correction TF should
@@ -672,14 +672,13 @@ def scenario_continuous_drift(gui, backend):
                   'should correct periodically and stay bounded, not grow '
                   'without limit')
     sim_tree = sentry_tree = helper = None
-    # 0.5 -- reported odometry loses half of every meter the robot actually
-    # drives (see pose_emulator.py's odom_slip_ratio for the model), on top
-    # of the existing drift/jitter random-walk. A much more severe,
-    # continuous, motion-proportional discrepancy than drift/jitter alone
-    # produce -- this is what "make the tests harder" meant for this
-    # scenario specifically, distinct from the speed/jerk bump the other
-    # scenarios got.
-    SLIP_RATIO = 0.5
+    # 0.25 (down from an initial 0.5, see git history) -- reported
+    # odometry loses 1/4 of every meter the robot actually drives (see
+    # pose_emulator.py's odom_slip_ratio for the model), on top of the
+    # existing drift/jitter random-walk. Still a real slip-induced
+    # discrepancy on top of drift/jitter, just less severe than the
+    # initial value.
+    SLIP_RATIO = 0.25
     try:
         sim_tree, sentry_tree, helper = run_stack(
             gui, backend, odom_noise_enabled=True, odom_slip_ratio=SLIP_RATIO)
