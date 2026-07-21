@@ -76,6 +76,19 @@ map -- that should be an occasional, deliberate action, not the default.
 Note localization mode requires an actual map to localize against, i.e.
 load_map:=true with a real map_file; slam_mode:=localization with
 load_map:=false is not a meaningful combination.
+
+map_localizer picks who owns map->odom TF -- the map-relative correction,
+same conceptual role slam_mode:=localization plays above:
+  - 'slam_toolbox' (default): unchanged, the slam_toolbox_* nodes above.
+  - 'amcl': nav2's map_server + amcl localize root against map_file's
+    saved occupancy grid (<map_file>.yaml, same basename slam_toolbox's
+    posegraph uses) instead. slam_toolbox isn't launched at all in this
+    mode -- AMCL never builds a map, only localizes against one, so
+    there's no mapping-mode equivalent; pair with load_map:=true and a
+    real map_file, same requirement slam_mode:=localization already has.
+    map_server and amcl are nav2 lifecycle nodes, brought up by a
+    lifecycle_manager node (autostart:true) rather than starting active
+    on their own.
 """
 import os
 
@@ -83,7 +96,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -93,6 +106,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("sentry_pkg")
     slam_params_file = os.path.join(pkg_share, "config", "slam.yaml")
     ekf_params_file = os.path.join(pkg_share, "config", "ekf.yaml")
+    amcl_params_file = os.path.join(pkg_share, "config", "amcl.yaml")
     sentry_xacro = os.path.join(pkg_share, "urdf", "sentry.urdf.xacro")
 
     real_hardware_arg = DeclareLaunchArgument(
@@ -179,6 +193,36 @@ def generate_launch_description():
                      "fresh. slam_mode:=localization requires load_map:="
                      "true with a real map_file; there's no map to "
                      "localize against otherwise."
+    )
+
+    map_localizer_arg = DeclareLaunchArgument(
+        "map_localizer", default_value="slam_toolbox",
+        choices=["slam_toolbox", "amcl"],
+        description="Who owns map->odom TF. 'slam_toolbox' (default): "
+                     "unchanged, the slam_toolbox_* nodes below, mode "
+                     "picked by slam_mode above. 'amcl': nav2's "
+                     "map_server + amcl (config/amcl.yaml) localize "
+                     "root against map_file's saved occupancy grid "
+                     "(<map_file>.yaml) instead; slam_toolbox isn't "
+                     "launched at all in this mode -- AMCL never builds "
+                     "a map, only localizes against one, so pair with "
+                     "load_map:=true and a real map_file (see module "
+                     "docstring)."
+    )
+    map_localizer = LaunchConfiguration("map_localizer")
+    amcl_selected = PythonExpression(
+        ["'", map_localizer, "' == 'amcl'"]
+    )
+    slam_toolbox_with_map_selected = PythonExpression(
+        ["'", map_localizer, "' == 'slam_toolbox' and '",
+         LaunchConfiguration("load_map"), "' == 'true'"]
+    )
+    slam_toolbox_no_map_selected = PythonExpression(
+        ["'", map_localizer, "' == 'slam_toolbox' and '",
+         LaunchConfiguration("load_map"), "' == 'false'"]
+    )
+    map_yaml_file = PythonExpression(
+        ["'", LaunchConfiguration("map_file"), "' + '.yaml'"]
     )
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -286,6 +330,52 @@ def generate_launch_description():
         }],
     )
 
+    map_server_node = Node(
+        package="nav2_map_server",
+        executable="map_server",
+        name="map_server",
+        output="screen",
+        condition=IfCondition(amcl_selected),
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "yaml_filename": map_yaml_file,
+        }],
+    )
+
+    amcl_node = Node(
+        package="nav2_amcl",
+        executable="amcl",
+        name="amcl",
+        output="screen",
+        condition=IfCondition(amcl_selected),
+        parameters=[
+            amcl_params_file,
+            {
+                "use_sim_time": use_sim_time,
+                "odom_frame_id": LaunchConfiguration("odom_frame"),
+                "base_frame_id": "root",
+                "global_frame_id": "map",
+                "scan_topic": "/scan",
+            },
+        ],
+    )
+
+    # map_server/amcl are nav2 lifecycle nodes -- they start unconfigured
+    # and inactive on their own; this brings both up automatically
+    # instead of requiring a manual configure/activate service call.
+    amcl_lifecycle_manager_node = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_localization",
+        output="screen",
+        condition=IfCondition(amcl_selected),
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "autostart": True,
+            "node_names": ["map_server", "amcl"],
+        }],
+    )
+
     robot_description = ParameterValue(
         Command(["xacro ", sentry_xacro]), value_type=str
     )
@@ -304,13 +394,15 @@ def generate_launch_description():
     # gz_sim_headless split): map_file_name is only meaningful to
     # slam_toolbox when actually set, and launch Node parameter dicts are
     # static, so load_map:=false needs a version of this node that omits
-    # the key entirely rather than passing it empty.
+    # the key entirely rather than passing it empty. Both are also
+    # gated on map_localizer:=slam_toolbox -- not launched at all when
+    # map_localizer:=amcl owns map->odom instead.
     slam_toolbox_with_map_node = Node(
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
         name="slam_toolbox",
         output="screen",
-        condition=IfCondition(LaunchConfiguration("load_map")),
+        condition=IfCondition(slam_toolbox_with_map_selected),
         parameters=[
             slam_params_file,
             {
@@ -327,7 +419,7 @@ def generate_launch_description():
         executable="async_slam_toolbox_node",
         name="slam_toolbox",
         output="screen",
-        condition=UnlessCondition(LaunchConfiguration("load_map")),
+        condition=IfCondition(slam_toolbox_no_map_selected),
         parameters=[
             slam_params_file,
             {
@@ -344,10 +436,12 @@ def generate_launch_description():
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, localization_backend_arg,
-        load_map_arg, map_file_arg, slam_mode_arg, home_yaw_tolerance_arg,
+        load_map_arg, map_file_arg, slam_mode_arg, map_localizer_arg,
+        home_yaw_tolerance_arg,
         dji_serial_bridge_node, lidar_node,
         pose_translator_node, ekf_node,
         head_home_scan_gate_node, scan_odom_node,
         robot_state_publisher_node,
         slam_toolbox_with_map_node, slam_toolbox_no_map_node,
+        map_server_node, amcl_node, amcl_lifecycle_manager_node,
     ])
