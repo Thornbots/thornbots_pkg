@@ -17,7 +17,7 @@ class PoseTranslator(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'root')
         # False when an ekf_node (robot_localization) owns odom->root TF
-        # instead (localization_backend:=ekf in auto.launch.py) -- this
+        # instead (localization_mode:=ekf in auto.launch.py) -- this
         # node still always publishes /odom + /joint_states either way,
         # only its own TF broadcast is gated, so exactly one node ever
         # broadcasts odom->root at a time.
