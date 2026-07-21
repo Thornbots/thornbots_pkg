@@ -143,21 +143,33 @@ def generate_launch_description():
     load_map_arg = DeclareLaunchArgument(
         "load_map", default_value="true",
         description="Deserialize map_file's saved pose graph at startup and "
-                     "continue from it instead of starting blank. Defaults "
-                     "on since ARCC26 (see map_file below) is the sentry's "
-                     "actual field map. Only affects localization_mode:="
-                     "slam/mapping; amcl always loads map_file's .yaml "
-                     "regardless, and ekf runs no map node at all."
+                     "continue from it instead of starting blank. Only "
+                     "affects localization_mode:=slam/mapping (and only "
+                     "actually works for those modes against a map_file "
+                     "that has a real .posegraph/.data, see map_file "
+                     "below -- clean_map does not yet); amcl always loads "
+                     "map_file's .yaml regardless, and ekf runs no map "
+                     "node at all."
     )
     map_file_arg = DeclareLaunchArgument(
         "map_file", default_value=os.path.join(
-            get_package_share_directory("sentry_pkg"), "map", "ARCC26"
+            get_package_share_directory("sentry_pkg"), "map", "clean_map"
         ),
         description="Path (no extension) to the map to use: slam_toolbox "
                      "reads <map_file>.posegraph/.data (see "
                      "slam_toolbox/srv/SerializePoseGraph), amcl reads "
                      "<map_file>.yaml (see nav2_map_server). Same basename, "
-                     "both refer to the same saved map."
+                     "both refer to the same saved map. Default is "
+                     "clean_map (a simpler/cleaner simulated rendering of "
+                     "the same field as map/ARCC26, added 2026-07-20) -- "
+                     "it only has a .yaml/.pgm (map_server-ready, so "
+                     "localization_mode:=amcl works against it out of the "
+                     "box), NOT a .posegraph/.data, so "
+                     "localization_mode:=slam/mapping with load_map:=true "
+                     "(both also defaults) will fail to deserialize "
+                     "against it until a real mapping run produces one -- "
+                     "pass map_file:=<pkg_share>/map/ARCC26 explicitly for "
+                     "slam/mapping until then."
     )
 
     localization_mode_arg = DeclareLaunchArgument(
