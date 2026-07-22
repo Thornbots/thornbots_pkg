@@ -527,7 +527,21 @@ def launch_cmd(args_str):
 # the point: from the backend's perspective this is a lidar return with
 # no corresponding feature in the map it loaded.
 OBSTACLE_XY = (0.5, 0.5)
-OBSTACLE_SIZE = 0.3  # meters, cube
+OBSTACLE_SIZE = 0.3  # meters, x/y footprint
+# height, NOT a cube -- 2026-07-21: the original 0.3m cube (spanning
+# z=[0, 0.3], resting on the ground) sat entirely below the lidar's
+# mounted height (lidar link is offset ~0.35m above ground: body's own
+# ~0.16m + headlink's 0.252m + lidarlink's 0.072m, see
+# sim/urdf/sentry.urdf.xacro), so the single-plane 2D scan never actually
+# intersected the box at all -- it was invisible to the lidar the entire
+# time, which is why every unmapped_obstacle run and every do_beamskip/
+# alpha/max_beams tuning attempt showed the same wobble whether the box
+# was spawned or not (see the no-obstacle diagnostic in this session's
+# history -- it wasn't actually isolating anything, the "with obstacle"
+# case never saw the obstacle either). >0.6m tall, based at the ground
+# (z=[0, OBSTACLE_HEIGHT]), guarantees it spans the lidar's height with
+# margin on both sides regardless of the exact mount height.
+OBSTACLE_HEIGHT = 0.8  # meters
 
 # 2m square loop centered on OBSTACLE_XY, corners at (-0.5,-0.5),
 # (1.5,-0.5), (1.5,1.5), (-0.5,1.5) -- exactly 1m out from the box's
@@ -553,7 +567,8 @@ OBSTACLE_LOOP_LEGS = [
 
 
 def spawn_box_obstacle(name='unmapped_test_obstacle', xy=OBSTACLE_XY,
-                        size=OBSTACLE_SIZE, timeout=15.0):
+                        size=OBSTACLE_SIZE, height=OBSTACLE_HEIGHT,
+                        timeout=15.0):
     """One-shot spawn of a static box into the running gz-sim world, via
     the same `ros_gz_sim create -string <inline SDF>` mechanism
     sim.launch.py's spawn_robot uses (-topic is documented broken for
@@ -564,18 +579,21 @@ def spawn_box_obstacle(name='unmapped_test_obstacle', xy=OBSTACLE_XY,
     physics/inertia needed, it should never move on its own. Torn down
     for free when the scenario's full sim teardown kills the whole
     gz-sim process group afterward -- no separate despawn needed.
+    size is the x/y footprint, height is z (NOT a cube -- see
+    OBSTACLE_HEIGHT's comment for why it must clear the lidar's mounted
+    height), based at the ground (z=[0, height]).
     """
     x, y = xy
     sdf = (
         '<sdf version="1.6"><model name="{name}"><static>true</static>'
         '<pose>{x} {y} {z} 0 0 0</pose><link name="link">'
-        '<collision name="collision"><geometry><box><size>{s} {s} {s}'
+        '<collision name="collision"><geometry><box><size>{s} {s} {h}'
         '</size></box></geometry></collision>'
-        '<visual name="visual"><geometry><box><size>{s} {s} {s}</size>'
+        '<visual name="visual"><geometry><box><size>{s} {s} {h}</size>'
         '</box></geometry><material><ambient>0.8 0.1 0.1 1</ambient>'
         '<diffuse>0.8 0.1 0.1 1</diffuse></material></visual>'
         '</link></model></sdf>'
-    ).format(name=name, x=x, y=y, z=size / 2.0, s=size)
+    ).format(name=name, x=x, y=y, z=height / 2.0, s=size, h=height)
     cmd = (f'ros2 run ros_gz_sim create -string {shlex.quote(sdf)} '
            f'-name {name} -allow_renaming false')
     result = subprocess.run(
@@ -1124,10 +1142,10 @@ def scenario_unmapped_obstacle(gui, backend):
         sc.log(f'{edge} before obstacle spawn = {pose_before}')
 
         spawn_box_obstacle()
-        sc.log(f'spawned {OBSTACLE_SIZE}m box obstacle at {OBSTACLE_XY} '
-               f'(not present in the saved map) -- at the center of the '
-               f'loop this scenario is about to drive, see '
-               f'OBSTACLE_LOOP_LEGS')
+        sc.log(f'spawned {OBSTACLE_SIZE}x{OBSTACLE_SIZE}x{OBSTACLE_HEIGHT}m '
+               f'box obstacle at {OBSTACLE_XY} (not present in the saved '
+               f'map) -- at the center of the loop this scenario is '
+               f'about to drive, see OBSTACLE_LOOP_LEGS')
         scans_before_drive = helper._scan_count
 
         # Move from spawn (0,0, inside the loop) out to the loop's own
