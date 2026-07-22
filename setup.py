@@ -19,22 +19,17 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*launch.[pxy][yma]*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'world'), glob('world/*')),
-        (os.path.join('share', package_name, 'map'),
-            glob('map/*.yaml') + glob('map/*.pgm')
-            + glob('map/*.data') + glob('map/*.posegraph')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ubuntu',
     maintainer_email='baptisbc@rose-hulman.edu',
-    description='Sentry SLAM for RHIT Thornbots ARC 2026',
+    description='Sentry hardware interface and robot description for RHIT Thornbots ARC 2026',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'slam_relocalize_publisher = sentry_pkg.slam_relocalize_publisher:main',
-            'simple_relocalize_publisher= sentry_pkg.simple_relocalize_publisher:main',
             'pose_translator = sentry_pkg.pose_translator:main',
-            'head_home_scan_gate = sentry_pkg.head_home_scan_gate:main',
+            'odom_tf_broadcaster = sentry_pkg.odom_tf_broadcaster:main',
         ],
     },
 )
