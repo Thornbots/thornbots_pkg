@@ -1,27 +1,29 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.time import Time
 from math import sin, cos
-from geometry_msgs.msg import TransformStamped, Quaternion
+from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
-from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from dji_serial_bridge.msg import RobotPose
 
 
 class PoseTranslator(Node):
+    """
+    Turns /pose (dji_serial_bridge/msg/RobotPose, from real hardware or
+    sim/pose_emulator.py) into /odom and /joint_states -- raw, uncorrected
+    wheel odometry, not the localized odom->root pose. sentry_localization
+    consumes /odom and publishes the corrected result on /localization/odom;
+    this package's odom_tf_broadcaster turns that back into odom->root TF.
+    See sentry_pkg/README.md for the full pose_translator ->
+    sentry_localization -> odom_tf_broadcaster pipeline.
+    """
+
     def __init__(self):
         super().__init__('pose_translator')
 
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'root')
-        # False when an ekf_node (robot_localization) owns odom->root TF
-        # instead (localization_mode:=ekf in auto.launch.py) -- this
-        # node still always publishes /odom + /joint_states either way,
-        # only its own TF broadcast is gated, so exactly one node ever
-        # broadcasts odom->root at a time.
-        self.declare_parameter('publish_tf', True)
 
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -37,10 +39,8 @@ class PoseTranslator(Node):
             qos_profile
         )
 
-        # Standard publishers and TF broadcaster for mapping
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
-        self.tf_broadcaster = TransformBroadcaster(self)
 
         self._warned_zero_stamp = False
 
@@ -66,18 +66,6 @@ class PoseTranslator(Node):
         # Chassis is holonomic and does not rotate; head_yaw is gimbal-only
         # heading, not chassis heading, so chassis orientation stays identity.
         q_chassis = self.euler_to_quaternion(0.0, 0.0, 0.0)
-
-        t = TransformStamped()
-        t.header.stamp = stamp
-        t.header.frame_id = odom_frame
-        t.child_frame_id = base_frame
-
-        t.transform.translation.x = float(msg.x)
-        t.transform.translation.y = float(msg.y)
-        t.transform.translation.z = 0.0
-        t.transform.rotation = q_chassis
-        if self.get_parameter('publish_tf').value:
-            self.tf_broadcaster.sendTransform(t)
 
         odom = Odometry()
         odom.header.stamp = stamp
