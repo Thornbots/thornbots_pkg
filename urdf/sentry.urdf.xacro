@@ -129,12 +129,12 @@
   <!-- Pitch axis for the head-mounted camera. Centered laterally (y=0) at
        the same height as the lidar's mount z (raised ~5cm to clear it),
        moved forward (+x) from head center so it sits out past the head's
-       front face rather than buried inside it. rpy counters head's own
+       front face rather than buried inside it. rpy matches head's own
        <visual> mesh rotation (rpy="0 0 1.18195") so the camera box sits
        flush/aligned with the head mesh as rendered instead of skewed
        relative to it. -->
   <joint name="headpitch" type="revolute">
-    <origin xyz="0.08 0 0.1218" rpy="0 0 -1.18195"/>
+    <origin xyz="0.08 0 0.1218" rpy="0 0 1.18195"/>
     <axis xyz="0 1 0"/>
     <parent link="head"/>
     <child link="head_pitch"/>
