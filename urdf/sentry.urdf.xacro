@@ -135,7 +135,7 @@
        subsequent 180deg flip turned out to be wrong too, so this is
        back to that original value). -->
   <joint name="headpitch" type="revolute">
-    <origin xyz="0.08 0 0.1218" rpy="0 0 -0.38885"/>
+    <origin xyz="0.16 0 0.1218" rpy="0 0 -0.38885"/>
     <axis xyz="0 1 0"/>
     <parent link="head"/>
     <child link="head_pitch"/>
