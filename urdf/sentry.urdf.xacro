@@ -133,7 +133,7 @@
        against the rendered scene/camera feed (head's own <visual> mesh
        rotation is rpy="0 0 1.18195" but that alone overshot by 90deg;
        this is that value minus pi/2, still being verified against the
-       live feed -- may need further tuning). -->
+       live feed, may need further tuning). -->
   <joint name="headpitch" type="revolute">
     <origin xyz="0.08 0 0.1218" rpy="0 0 -0.38885"/>
     <axis xyz="0 1 0"/>
