@@ -126,10 +126,12 @@
     <parent link="head"/>
     <child link="lidar"/>
   </joint>
-  <!-- Pitch axis for the head-mounted camera. Centered on the head (x/y=0)
-       at the same height as the lidar's mount z, raised ~5cm to clear it. -->
+  <!-- Pitch axis for the head-mounted camera. Centered laterally (y=0) at
+       the same height as the lidar's mount z (raised ~5cm to clear it),
+       moved forward (+x) from head center so it sits out past the head's
+       front face rather than buried inside it. -->
   <joint name="headpitch" type="revolute">
-    <origin xyz="0 0 0.1218" rpy="0 0 0"/>
+    <origin xyz="0.08 0 0.1218" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <parent link="head"/>
     <child link="head_pitch"/>
