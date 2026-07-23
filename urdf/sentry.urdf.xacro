@@ -126,11 +126,11 @@
     <parent link="head"/>
     <child link="lidar"/>
   </joint>
-  <!-- Pitch axis for the head-mounted camera. Placeholder mount point
-       (front-center of head, y-axis tilt) until it's positioned against
-       the real head mesh's geometry. -->
+  <!-- Pitch axis for the head-mounted camera. Mounted directly above the
+       lidar (same x/y as lidarlink's origin above, z raised ~5cm to clear
+       it) so the camera looks out from the same face of the head. -->
   <joint name="headpitch" type="revolute">
-    <origin xyz="0.1 0 0" rpy="0 0 0"/>
+    <origin xyz="-0.170562 -0.139254 0.1218" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <parent link="head"/>
     <child link="head_pitch"/>
