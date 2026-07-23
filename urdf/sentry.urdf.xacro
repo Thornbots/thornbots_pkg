@@ -131,11 +131,11 @@
        moved forward (+x) from head center so it sits out past the head's
        front face rather than buried inside it. rpy z tuned empirically
        against the rendered scene/camera feed (head's own <visual> mesh
-       rotation is rpy="0 0 1.18195"; this is that value minus pi/2, then
-       rotated a further 180deg per feedback that the lens was facing
-       backwards). -->
+       rotation is rpy="0 0 1.18195"; this is that value minus pi/2. A
+       subsequent 180deg flip turned out to be wrong too, so this is
+       back to that original value). -->
   <joint name="headpitch" type="revolute">
-    <origin xyz="0.08 0 0.1218" rpy="0 0 2.75274"/>
+    <origin xyz="0.08 0 0.1218" rpy="0 0 -0.38885"/>
     <axis xyz="0 1 0"/>
     <parent link="head"/>
     <child link="head_pitch"/>
