@@ -24,12 +24,29 @@ of the head's own mesh". Real hardware has no such trick available at all
 (it's a physical beam). A software filter with a known fixed blind sector
 is the one approach that actually works for both.
 
-Defaults were measured empirically in sim with headlink at rest (0 rad):
-/scan showed a contiguous cluster of near-range returns (indices ~1417 to
-~1443 of 3000, angle_increment ~0.002094 rad) at roughly 2.967-3.022 rad,
-consistent with the head's own bulk rather than noise. Widened somewhat
-for margin. These are sim-mesh-derived and will likely need retuning
-against a real /scan_raw capture before trusting them on real hardware.
+The blind sector is wider than the literal near-range self-hit cluster
+sim's mesh happens to produce. A solid real head blocks its whole real
+angular footprint outright, but sim's mesh only registers as a self-hit
+right at its tangent edge against the lidar's exact scan plane -- beams
+aimed more centrally through the head's bulk can pass clean through a
+thin/non-watertight STL without registering any hit at all, "seeing"
+whatever real geometry (walls, etc.) sits beyond the head, which the
+real hardware's fully-solid head would never let through. So this sector
+isn't just "wherever /scan_raw shows a close self-hit"; it's sized to
+the head's actual real-world angular footprint from the lidar's
+vantage point.
+
+Current values (0.30 rad wide): the raw self-hit cluster measured
+roughly 2.967-3.022 rad, and blind_angle_start=2.90 lines up with a
+natural transition already visible in a raw /scan_raw capture (indices
+1415-1416 read `inf` -- no return at all -- right before the cluster
+starts, unlike the smoothly-increasing real wall distances at every
+angle before that). blind_angle_end is widened past the cluster's own
+end (3.022) out to 3.20 to approximate the real head's full width,
+since immediately after the cluster (from ~3.024) sim's mesh already
+lets real wall hits back through. These are still sim-mesh-derived
+estimates and will need retuning against a real /scan_raw capture
+before trusting them on real hardware.
 """
 import math
 
@@ -43,7 +60,7 @@ class LidarSelfFilter(Node):
         super().__init__('lidar_self_filter')
 
         self.declare_parameter('blind_angle_start', 2.90)
-        self.declare_parameter('blind_angle_end', 3.10)
+        self.declare_parameter('blind_angle_end', 3.20)
 
         self.sub = self.create_subscription(
             LaserScan, 'scan_raw', self.scan_callback, 10
