@@ -168,6 +168,19 @@ def generate_launch_description():
         parameters=[{"use_sim_time": use_sim_time}],
     )
 
+    # FASTRTPS_DEFAULT_PROFILES_FILE forces UDP-only transport (no shared
+    # memory) for just these two nodes: they've been observed hanging in
+    # rcl_node_init/FastDDS SharedMemTransport::CreateInputChannelResource
+    # on startup, before rclpy.spin() even runs, once /dev/shm accumulates
+    # many stale fastrtps_* segments from earlier SIGKILLed runs -- SIGINT
+    # and SIGTERM are never handled because the hang is below the Python
+    # signal-check point. See config/fastdds_no_shm.xml.
+    no_shm_env = {
+        "FASTRTPS_DEFAULT_PROFILES_FILE": os.path.join(
+            pkg_share, "config", "fastdds_no_shm.xml"
+        )
+    }
+
     pose_translator_node = Node(
         package="sentry_pkg",
         executable="pose_translator",
@@ -177,6 +190,7 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "odom_frame": LaunchConfiguration("odom_frame"),
         }],
+        additional_env=no_shm_env,
     )
 
     odom_tf_broadcaster_node = Node(
@@ -188,6 +202,7 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "odom_frame": LaunchConfiguration("odom_frame"),
         }],
+        additional_env=no_shm_env,
     )
 
     robot_description = ParameterValue(
