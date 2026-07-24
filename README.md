@@ -104,9 +104,9 @@ isaac_ros_common/scripts/dexec.sh -- rviz2 -d install/sentry_pkg/share/sentry_pk
 ## Testing
 
 The localization drift/jerk-correction integration suite now lives in
-`sentry_localization/test/slam_integration/run_localization_drift_tests.py`
+`sim/test/localization/run_localization_drift_tests.py`
 (it launches this package's `auto.launch.py`, which includes
-`sentry_localization`) — see `sentry_localization/README.md`'s Testing
+`sentry_localization`) — see `sim/README.md`'s Testing
 section.
 
 Standard `colcon test`-style checks (`ament_copyright`/`ament_flake8`/
