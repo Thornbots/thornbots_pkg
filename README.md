@@ -30,9 +30,16 @@ See `sentry_localization/README.md` for the actual localization backends
     (`pose_translator`'s raw MCB odometry). Once they've drifted apart past
     a threshold and the chassis is nearly stationary, sends the corrected
     `(x, y)` to `dji_serial_bridge_node`'s `~/relocalize`.
-  - **cv_target**: republishes the CV pipeline's `CVTarget` unchanged onto
-    `dji_serial_bridge_node`'s `~/cv_target`.
+  - **cv_target**: republishes `/cv/target` (`CVTarget`, from
+    `point_to_cv_target` below) unchanged onto `dji_serial_bridge_node`'s
+    `~/cv_target`.
   Only launched alongside `dji_serial_bridge_node` (`real_hardware:=true`).
+- `point_to_cv_target` — converts the vision pipeline's `/roi_point`
+  (`geometry_msgs/PointStamped`, REP-103 camera frame) into the `CVTarget`
+  `mcb_relay` expects on `/cv/target`, estimating velocity/acceleration by
+  finite-differencing consecutive points and publishing a zero-confidence
+  `CVTarget` if the target goes stale. Same `real_hardware` gate, plus its
+  own `enable_cv_target_bridge` toggle.
 - Its own `robot_state_publisher`, off `urdf/sentry.urdf.xacro`.
 - Includes `sentry_localization`'s launch file to bring up whichever
   localization backend `localization_mode` selects.
@@ -44,8 +51,8 @@ See `sentry_localization/README.md` for the actual localization backends
                           \-> /joint_states --[robot_state_publisher]--> rest of TF tree
 /scan ------------------------------> sentry_localization (map->odom TF owned directly by slam_toolbox/amcl there)
 
-/localization/odom vs /odom --[mcb_relay, drift-gated]--> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
-CV pipeline's target        --[mcb_relay]-------------->  dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
+/localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
+/roi_point --[point_to_cv_target]--> /cv/target --[mcb_relay]-----------> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
 ```
 
 ## Prerequisites
@@ -119,6 +126,8 @@ isaac_ros_common/scripts/dexec.sh -- rviz2 -d install/sentry_pkg/share/sentry_pk
 - `pose_translator.py` — `/pose` → `/odom` + `/joint_states`.
 - `odom_tf_broadcaster.py` — `/localization/odom` → `odom->root` TF.
 - `mcb_relay.py` — sole relay onto `dji_serial_bridge_node`'s topics; see
+  "What it owns" above.
+- `point_to_cv_target.py` — `/roi_point` → `/cv/target` (`CVTarget`); see
   "What it owns" above.
 
 ## Testing
