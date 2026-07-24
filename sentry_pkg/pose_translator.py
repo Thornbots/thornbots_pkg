@@ -44,6 +44,27 @@ class PoseTranslator(Node):
 
         self._warned_zero_stamp = False
 
+        # First-pass covariance, not measured/validated (same disclaimer as
+        # config/ekf.yaml's process_noise_covariance) -- but non-zero is the
+        # important part. Left at all-zero, robot_localization's EKF has no
+        # signal that this source's absolute x/y is any more or less
+        # trustworthy than /scan_odom's, so it can't weight rf2o's
+        # scan-matched estimate more heavily even when it should be -- see
+        # SESSION_NOTES.md's 2026-07-24 EKF investigation. 1cm stddev on
+        # position/velocity is a reasonable per-sample encoder-noise order
+        # of magnitude to start from; unset fields (z/roll/pitch, and yaw --
+        # this chassis is holonomic and never reports real orientation, see
+        # the class docstring) are left at 0, which is fine since
+        # odom0_config in ekf.yaml excludes them from fusion.
+        POS_VAR = 0.01 ** 2
+        VEL_VAR = 0.01 ** 2
+        self._pose_covariance = [0.0] * 36
+        self._pose_covariance[0] = POS_VAR   # x
+        self._pose_covariance[7] = POS_VAR   # y
+        self._twist_covariance = [0.0] * 36
+        self._twist_covariance[0] = VEL_VAR  # vx
+        self._twist_covariance[7] = VEL_VAR  # vy
+
     def pose_callback(self, msg):
         odom_frame = self.get_parameter('odom_frame').value
         base_frame = self.get_parameter('base_frame').value
@@ -75,9 +96,11 @@ class PoseTranslator(Node):
         odom.pose.pose.position.x = float(msg.x)
         odom.pose.pose.position.y = float(msg.y)
         odom.pose.pose.orientation = q_chassis
+        odom.pose.covariance = self._pose_covariance
 
         odom.twist.twist.linear.x = float(msg.vel_x)
         odom.twist.twist.linear.y = float(msg.vel_y)
+        odom.twist.covariance = self._twist_covariance
         self.odom_pub.publish(odom)
 
         js = JointState()
