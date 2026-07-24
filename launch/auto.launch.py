@@ -36,6 +36,15 @@ broadcasts the actual odom->root TF -- so this package never needs to
 know which localization_mode is active. See sentry_pkg/README.md and
 sentry_localization/README.md for the full pipeline and the meaning of
 each localization_mode/load_map/map_file arg forwarded below.
+
+mcb_relay is the sole relay onto dji_serial_bridge_node's topics -- only
+sentry_pkg is allowed to talk to dji_serial_bridge directly. It reshapes
+each upstream package's own output into what dji_serial_bridge_node
+expects: /localization/odom vs /odom (drift-gated) -> ~/relocalize, and the
+CV pipeline's CVTarget -> ~/cv_target. Backend-agnostic by construction --
+no TF lookups, no assumption about which localization_mode is running. See
+sentry_pkg/mcb_relay.py's docstring. Only launched alongside
+dji_serial_bridge_node (real_hardware:=true).
 """
 import os
 
@@ -139,6 +148,20 @@ def generate_launch_description():
         parameters=[{"use_sim_time": use_sim_time}],
     )
 
+    # Sole relay onto dji_serial_bridge_node's topics -- sentry_localization
+    # (relocalize corrections) and the CV pipeline (targets) publish on this
+    # node's input topics instead of touching dji_serial_bridge_node
+    # directly; see sentry_pkg/mcb_relay.py's docstring. Only meaningful
+    # alongside dji_serial_bridge_node itself, hence the same real_hardware
+    # gate.
+    mcb_relay_node = Node(
+        package="sentry_pkg",
+        executable="mcb_relay",
+        name="mcb_relay",
+        output="screen",
+        condition=IfCondition(real_hardware),
+    )
+
     # Published as scan_raw, not scan -- lidar_self_filter_node below is the
     # only thing that publishes the final /scan, for both real_hardware and
     # sim (see that node's own docstring for why this needs to be a software
@@ -236,7 +259,7 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         home_yaw_tolerance_arg,
-        dji_serial_bridge_node, lidar_node, lidar_self_filter_node,
+        dji_serial_bridge_node, mcb_relay_node, lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
         robot_state_publisher_node,
         localization_launch_include,

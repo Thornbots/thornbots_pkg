@@ -30,6 +30,7 @@ setup(
             'pose_translator = sentry_pkg.pose_translator:main',
             'odom_tf_broadcaster = sentry_pkg.odom_tf_broadcaster:main',
             'lidar_self_filter = sentry_pkg.lidar_self_filter:main',
+            'mcb_relay = sentry_pkg.mcb_relay:main',
         ],
     },
 )
