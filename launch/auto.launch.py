@@ -45,6 +45,14 @@ CV pipeline's CVTarget -> ~/cv_target. Backend-agnostic by construction --
 no TF lookups, no assumption about which localization_mode is running. See
 sentry_pkg/mcb_relay.py's docstring. Only launched alongside
 dji_serial_bridge_node (real_hardware:=true).
+
+point_to_cv_target converts the vision pipeline's /roi_point (REP-103
+camera frame) into the CVTarget mcb_relay's cv_target input expects on
+/cv/target -- estimating velocity/acceleration by finite-differencing
+consecutive points, and publishing a zero-confidence CVTarget if the
+target goes stale. Same real_hardware gate, plus its own
+enable_cv_target_bridge toggle. See sentry_pkg/point_to_cv_target.py's
+docstring.
 """
 import os
 
@@ -136,6 +144,22 @@ def generate_launch_description():
                      "sentry_localization/head_home_scan_gate.py."
     )
 
+    enable_cv_target_bridge_arg = DeclareLaunchArgument(
+        "enable_cv_target_bridge", default_value="true",
+        description="Launch point_to_cv_target to feed the vision "
+                     "pipeline's /roi_point into mcb_relay's /cv/target "
+                     "input. Only meaningful when real_hardware:=true."
+    )
+    roi_point_topic_arg = DeclareLaunchArgument(
+        "roi_point_topic", default_value="/roi_point",
+        description="PointStamped topic published by "
+                     "roi_depth_query/roi_depth_node."
+    )
+    roi_topic_arg = DeclareLaunchArgument(
+        "roi_topic", default_value="/roi",
+        description="Detection2D topic read only for a confidence score."
+    )
+
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
     # (/dev/ttyTHS1, 115200) -- only the lidar's serial settings are exposed
     # as launch args here.
@@ -160,6 +184,28 @@ def generate_launch_description():
         name="mcb_relay",
         output="screen",
         condition=IfCondition(real_hardware),
+    )
+
+    # Converts the vision pipeline's /roi_point into the CVTarget mcb_relay
+    # expects on /cv/target. Only meaningful alongside dji_serial_bridge_node
+    # itself, hence the same real_hardware gate; enable_cv_target_bridge lets
+    # you disable it if you intend to publish /cv/target yourself.
+    point_to_cv_target_node = Node(
+        package="sentry_pkg",
+        executable="point_to_cv_target",
+        name="point_to_cv_target",
+        output="screen",
+        condition=IfCondition(
+            PythonExpression(
+                ["'", real_hardware, "' == 'true' and '",
+                 LaunchConfiguration("enable_cv_target_bridge"), "' == 'true'"]
+            )
+        ),
+        parameters=[{
+            "point_topic": LaunchConfiguration("roi_point_topic"),
+            "confidence_topic": LaunchConfiguration("roi_topic"),
+            "output_topic": "/cv/target",
+        }],
     )
 
     # Published as scan_raw, not scan -- lidar_self_filter_node below is the
@@ -259,7 +305,9 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         home_yaw_tolerance_arg,
-        dji_serial_bridge_node, mcb_relay_node, lidar_node, lidar_self_filter_node,
+        enable_cv_target_bridge_arg, roi_point_topic_arg, roi_topic_arg,
+        dji_serial_bridge_node, mcb_relay_node, point_to_cv_target_node,
+        lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
         robot_state_publisher_node,
         localization_launch_include,
