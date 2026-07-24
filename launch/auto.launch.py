@@ -139,12 +139,17 @@ def generate_launch_description():
         parameters=[{"use_sim_time": use_sim_time}],
     )
 
+    # Published as scan_raw, not scan -- lidar_self_filter_node below is the
+    # only thing that publishes the final /scan, for both real_hardware and
+    # sim (see that node's own docstring for why this needs to be a software
+    # filter rather than something modeled in the URDF/world).
     lidar_node = Node(
         package="sllidar_ros2",
         executable="sllidar_node",
         name="sllidar_node",
         output="screen",
         condition=IfCondition(real_hardware),
+        remappings=[("scan", "scan_raw")],
         parameters=[{
             "serial_port": LaunchConfiguration("lidar_serial_port"),
             "serial_baudrate": ParameterValue(
@@ -153,6 +158,14 @@ def generate_launch_description():
             "frame_id": "lidar",
             "use_sim_time": use_sim_time,
         }],
+    )
+
+    lidar_self_filter_node = Node(
+        package="sentry_pkg",
+        executable="lidar_self_filter",
+        name="lidar_self_filter",
+        output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
     )
 
     pose_translator_node = Node(
@@ -208,7 +221,7 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         home_yaw_tolerance_arg,
-        dji_serial_bridge_node, lidar_node,
+        dji_serial_bridge_node, lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
         robot_state_publisher_node,
         localization_launch_include,
