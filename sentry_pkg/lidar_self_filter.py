@@ -37,15 +37,15 @@ the head's actual real-world angular footprint from the lidar's
 vantage point.
 
 Current values (1.0 rad wide): the raw self-hit cluster measured
-roughly 2.967-3.022 rad, and blind_angle_start=2.90 lines up with a
-natural transition already visible in a raw /scan_raw capture (indices
-1415-1416 read `inf` -- no return at all -- right before the cluster
-starts, unlike the smoothly-increasing real wall distances at every
-angle before that). blind_angle_end is widened well past the cluster's
-own end (3.022), out to 3.90, to approximate the real head's full
-width, since immediately after the cluster (from ~3.024) sim's mesh
-already lets real wall hits back through. These are still sim-mesh-derived
-estimates and will need retuning against a real /scan_raw capture
+roughly 2.967-3.022 rad, and blind_angle_end=3.20 lines up with where
+sim's mesh already lets real wall hits back through (from ~3.024,
+right after the cluster) -- that edge is left alone. blind_angle_start
+is widened well before the cluster's own start (2.967), down to 2.20,
+to approximate the real head's full width, since sim's mesh only
+registers a self-hit right at its tangent edge and lets real wall
+hits through everywhere else in the head's true angular footprint.
+These are still sim-mesh-derived estimates and will need retuning
+against a real /scan_raw capture
 before trusting them on real hardware.
 """
 import math
@@ -59,8 +59,8 @@ class LidarSelfFilter(Node):
     def __init__(self):
         super().__init__('lidar_self_filter')
 
-        self.declare_parameter('blind_angle_start', 2.90)
-        self.declare_parameter('blind_angle_end', 3.90)
+        self.declare_parameter('blind_angle_start', 2.20)
+        self.declare_parameter('blind_angle_end', 3.20)
 
         self.sub = self.create_subscription(
             LaserScan, 'scan_raw', self.scan_callback, 10
