@@ -83,18 +83,19 @@ def generate_launch_description():
 
     localization_mode_arg = DeclareLaunchArgument(
         "localization_mode", default_value="slam",
-        choices=["slam", "mapping", "amcl", "ekf"],
-        description="Forwarded to sentry_localization -- selects the whole "
-                     "localization scheme. See sentry_localization's "
+        choices=["slam", "mapping", "amcl", "none"],
+        description="Forwarded to sentry_localization -- selects who owns "
+                     "map->odom. See sentry_localization's "
                      "localization.launch.py module docstring for what each "
                      "value launches."
     )
-
-    home_yaw_tolerance_arg = DeclareLaunchArgument(
-        "home_yaw_tolerance", default_value="0.05",
-        description="Forwarded to sentry_localization -- only used when "
-                     "localization_mode:=ekf. See "
-                     "sentry_localization/head_home_scan_gate.py."
+    use_ekf_arg = DeclareLaunchArgument(
+        "use_ekf", default_value="false",
+        description="Forwarded to sentry_localization -- whether odom->root "
+                     "is EKF-fused instead of passed through raw from /odom. "
+                     "Independent of localization_mode. See "
+                     "sentry_localization's localization.launch.py module "
+                     "docstring."
     )
 
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
@@ -249,7 +250,7 @@ def generate_launch_description():
             "load_map": LaunchConfiguration("load_map"),
             "map_file": LaunchConfiguration("map_file"),
             "localization_mode": LaunchConfiguration("localization_mode"),
-            "home_yaw_tolerance": LaunchConfiguration("home_yaw_tolerance"),
+            "use_ekf": LaunchConfiguration("use_ekf"),
         }.items(),
     )
 
@@ -257,7 +258,7 @@ def generate_launch_description():
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
-        home_yaw_tolerance_arg,
+        use_ekf_arg,
         enable_cv_target_bridge_arg, roi_point_topic_arg, roi_topic_arg,
         dji_serial_bridge_node, mcb_relay_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,

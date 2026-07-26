@@ -90,21 +90,25 @@ ros2 launch sentry_pkg auto.launch.py real_hardware:=false
 it (false/wall-clock when `real_hardware:=true`, true when it's `false`,
 since that's exactly when sim's `/clock` exists to use).
 
-### `localization_mode` — pick the whole localization scheme
+### `localization_mode` / `use_ekf` — pick the map->odom owner and the odom->root source
 
-Forwarded straight through to `sentry_localization`; see
-`sentry_localization/README.md` for the full table and rationale of each
-value (`slam` default / `mapping` / `amcl` / `ekf`).
+Both forwarded straight through to `sentry_localization`; see
+`sentry_localization/README.md` for the full tables and rationale.
+`localization_mode` (`slam` default / `mapping` / `amcl` / `none`) picks
+who owns `map->odom`; `use_ekf` (default `false`) independently picks
+whether `odom->root` is EKF-fused, layerable on top of any
+`localization_mode`.
 
 ```bash
 ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=amcl
 ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
+ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=true
 ```
 
 ### Other useful args
 
-- `map_file`, `load_map`, `odom_frame`, `home_yaw_tolerance` — forwarded
-  to `sentry_localization`; see its README for what each controls.
+- `map_file`, `load_map`, `odom_frame` — forwarded to
+  `sentry_localization`; see its README for what each controls.
 - `lidar_serial_port` / `lidar_baudrate` (defaults `/dev/ttyUSB0` /
   `115200`) — RPLIDAR A2M8 serial settings, only used when
   `real_hardware:=true`. Owned by `sentry_pkg` since it owns the hardware
@@ -179,12 +183,12 @@ reads each upstream package's own output and reshapes it into whatever
 `dji_serial_bridge_node`'s subscription expects.
 
 `relocalize`: compares `localization_odom_topic` (`/localization/odom` —
-`sentry_localization`'s one guaranteed output, published by every
-`localization_mode`: slam/mapping/amcl/ekf) against `raw_odom_topic`
+`sentry_localization`'s one guaranteed output, published regardless of
+`localization_mode`/`use_ekf`) against `raw_odom_topic`
 (`/odom` — `sentry_pkg`'s own `pose_translator`, i.e. the MCB's raw
 uncorrected wheel odometry). Deliberately backend-agnostic: no TF lookups,
-no assumption about which `localization_mode` is running, just two
-Odometry topics. Once they've drifted apart by more than
+no assumption about which `localization_mode`/`use_ekf` combination is
+running, just two Odometry topics. Once they've drifted apart by more than
 `error_threshold_meters` *and* the chassis is nearly stationary (raw odom
 speed below `max_move_speed`, so the correction isn't stale by the time
 the MCB applies it), publishes the localized `(x, y)` as a `Point` on
