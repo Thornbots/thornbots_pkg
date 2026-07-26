@@ -1,58 +1,11 @@
 """
-Gets /pose and /scan onto the ROS graph and owns the robot description,
-then hands off to sentry_localization for the actual odom->root/map->odom
-localization work.
+Gets /pose and /scan onto the graph, owns the robot description, then
+hands off to sentry_localization for odom->root/map->odom localization.
+See README.md for design rationale and per-node breakdown.
 
-real_hardware:=true by default: also launches dji_serial_bridge_node
-(publishes /pose from the Type-C board's serial link) and sllidar_ros2's
-driver (publishes /scan from the RPLIDAR A2M8 over its own serial link,
-serial port/baud set via lidar_serial_port/lidar_baudrate). This is now
-the default because running against real hardware is the common case.
-real_hardware also drives use_sim_time (there's no separate arg for it):
-false/wall-clock when real_hardware is true, true when it's false, since
-that's exactly when /clock exists to use instead.
-
-When running against sim instead (`ros2 launch sim sim.launch.py`, which
-runs sim/pose_emulator.py to publish /pose in the same
-dji_serial_bridge/msg/RobotPose format real hardware sends, plus raw
-/scan via its own gz bridge), launch this with real_hardware:=false so it
-doesn't also try to open the real serial devices, and so it uses sim's
-/clock.
-
-pose_translator (fed by /pose) turns raw hardware pose into /odom (raw,
-uncorrected wheel odometry) and /joint_states -- same code path for sim
-and real hardware, so there's only one place pose handling can go wrong.
-This package also runs its own robot_state_publisher off
-sentry_pkg/urdf/sentry.urdf.xacro (fed by pose_translator's /joint_states)
-rather than depending on sim's URDF/TF -- sentry_pkg owns the whole TF
-tree itself, sim only ever provides raw sensor data through the shared
-real-hardware-shaped interfaces.
-
-sentry_pkg no longer computes odom->root itself: /odom + /scan are handed
-to sentry_localization (included below), which always publishes the
-localized result on /localization/odom regardless of which backend
-localization_mode selects. odom_tf_broadcaster subscribes that topic and
-broadcasts the actual odom->root TF -- so this package never needs to
-know which localization_mode is active. See sentry_pkg/README.md and
-sentry_localization/README.md for the full pipeline and the meaning of
-each localization_mode/load_map/map_file arg forwarded below.
-
-mcb_relay is the sole relay onto dji_serial_bridge_node's topics -- only
-sentry_pkg is allowed to talk to dji_serial_bridge directly. It reshapes
-each upstream package's own output into what dji_serial_bridge_node
-expects: /localization/odom vs /odom (drift-gated) -> ~/relocalize, and the
-CV pipeline's CVTarget -> ~/cv_target. Backend-agnostic by construction --
-no TF lookups, no assumption about which localization_mode is running. See
-sentry_pkg/mcb_relay.py's docstring. Only launched alongside
-dji_serial_bridge_node (real_hardware:=true).
-
-point_to_cv_target converts the vision pipeline's /roi_point (REP-103
-camera frame) into the CVTarget mcb_relay's cv_target input expects on
-/cv/target -- estimating velocity/acceleration by finite-differencing
-consecutive points, and publishing a zero-confidence CVTarget if the
-target goes stale. Same real_hardware gate, plus its own
-enable_cv_target_bridge toggle. See sentry_pkg/point_to_cv_target.py's
-docstring.
+real_hardware:=true (default) launches dji_serial_bridge_node + sllidar_ros2
+and sets use_sim_time accordingly; run real_hardware:=false against
+sim.launch.py instead.
 """
 import os
 

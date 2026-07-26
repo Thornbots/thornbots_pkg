@@ -1,52 +1,10 @@
 """
 Blanks out a fixed angular sector of /scan_raw where the robot's own head
-sits in the lidar's field of view, republishing the result on /scan.
+sits in the lidar's FOV (fixed in the lidar's frame; no joint-state sub
+needed), republishing on /scan. Works for sim and real hardware.
 
-The lidar is mounted rigidly on the head (see sim/urdf/sentry.urdf.xacro's
-lidarlink joint), so head and lidar always rotate together as one unit --
-whatever part of the head's own structure blocks the lidar's view sits at a
-FIXED angle in the lidar's own frame regardless of headlink's current yaw,
-even though that blocked WORLD-frame bearing sweeps around as headlink
-rotates (see sim/head_sweep.py's docstring: sweeping headlink moves this
-blind wedge around the world so SLAM eventually gets full coverage). That
-fixed relationship is what makes a static angular filter here viable at
-all -- no joint-state subscription needed.
-
-Runs for both sim and real hardware (see sentry_pkg/launch/auto.launch.py):
-sim's gpu_lidar is a rendering sensor with no physics collision to fall
-back on, so trying to model this via mesh visibility in the URDF instead
-(gz-sim's visibility_mask/visibility_flags) was unreliable -- it could
-only ever be all-or-nothing per visual (either the whole head is invisible
-to the lidar, seeing straight through it even where it should genuinely
-occlude, or fully visible and back to reporting self-hits) and had no way
-to express "block the beam here without counting it as a false detection
-of the head's own mesh". Real hardware has no such trick available at all
-(it's a physical beam). A software filter with a known fixed blind sector
-is the one approach that actually works for both.
-
-The blind sector is wider than the literal near-range self-hit cluster
-sim's mesh happens to produce. A solid real head blocks its whole real
-angular footprint outright, but sim's mesh only registers as a self-hit
-right at its tangent edge against the lidar's exact scan plane -- beams
-aimed more centrally through the head's bulk can pass clean through a
-thin/non-watertight STL without registering any hit at all, "seeing"
-whatever real geometry (walls, etc.) sits beyond the head, which the
-real hardware's fully-solid head would never let through. So this sector
-isn't just "wherever /scan_raw shows a close self-hit"; it's sized to
-the head's actual real-world angular footprint from the lidar's
-vantage point.
-
-Current values (1.0 rad wide): the raw self-hit cluster measured
-roughly 2.967-3.022 rad, and blind_angle_end=3.20 lines up with where
-sim's mesh already lets real wall hits back through (from ~3.024,
-right after the cluster) -- that edge is left alone. blind_angle_start
-is widened well before the cluster's own start (2.967), down to 2.20,
-to approximate the real head's full width, since sim's mesh only
-registers a self-hit right at its tangent edge and lets real wall
-hits through everywhere else in the head's true angular footprint.
-These are still sim-mesh-derived estimates and will need retuning
-against a real /scan_raw capture
-before trusting them on real hardware.
+Current values: blind_angle_start=2.20, blind_angle_end=3.20 (1.0 rad),
+sim-mesh-derived -- see README.md for design rationale and retuning notes.
 """
 import math
 
