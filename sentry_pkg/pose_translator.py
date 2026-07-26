@@ -44,18 +44,11 @@ class PoseTranslator(Node):
 
         self._warned_zero_stamp = False
 
-        # First-pass covariance, not measured/validated (same disclaimer as
-        # config/ekf.yaml's process_noise_covariance) -- but non-zero is the
-        # important part. Left at all-zero, robot_localization's EKF has no
-        # signal that this source's absolute x/y is any more or less
-        # trustworthy than /scan_odom's, so it can't weight rf2o's
-        # scan-matched estimate more heavily even when it should be -- see
-        # SESSION_NOTES.md's 2026-07-24 EKF investigation. 1cm stddev on
-        # position/velocity is a reasonable per-sample encoder-noise order
-        # of magnitude to start from; unset fields (z/roll/pitch, and yaw --
-        # this chassis is holonomic and never reports real orientation, see
-        # the class docstring) are left at 0, which is fine since
-        # odom0_config in ekf.yaml excludes them from fusion.
+        # First-pass covariance, not measured/validated. Non-zero (1cm stddev)
+        # is required so the EKF can weight rf2o's scan-matched estimate
+        # against this source; unset fields (z/roll/pitch/yaw) stay 0, which
+        # is fine since odom0_config in ekf.yaml excludes them from fusion.
+        # see README.md for design rationale
         POS_VAR = 0.01 ** 2
         VEL_VAR = 0.01 ** 2
         self._pose_covariance = [0.0] * 36

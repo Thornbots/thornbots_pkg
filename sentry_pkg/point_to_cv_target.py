@@ -9,44 +9,12 @@ from dji_serial_bridge.msg import CVTarget
 class PointToCvTarget(Node):
     """
     Bridges the vision pipeline's 3-D target estimate to a CVTarget message
-    for mcb_relay -- this is the missing link between roi_depth_query/
-    roi_depth_node and mcb_relay's cv_target input, since only sentry_pkg is
-    allowed to publish the messages that eventually reach dji_serial_bridge.
+    for mcb_relay. See README.md for design rationale.
 
-    Subscribes:
-      point_topic       (geometry_msgs/PointStamped) -- REP-103 camera body
-                         frame (X forward, Y left, Z up). Default "roi_point",
-                         published by roi_depth_query/roi_depth_node.
-      confidence_topic   (vision_msgs/Detection2D, optional) -- read only for
-                         a confidence score (max of all hypothesis scores,
-                         same rule detection_picker_node uses). Default "roi".
-
-    Publishes:
-      output_topic       (dji_serial_bridge/msg/CVTarget) -- camera-frame
-                         convention (X right, Y up, Z forward), see
-                         CVTarget.msg. Default "/cv/target", matching
-                         mcb_relay's cv_target_input_topic default.
-
-    Frame conversion (REP-103 -> CVTarget convention):
-      cv.x =  -p.y   (right    = -left)
-      cv.y =   p.z   (up       =  up)
-      cv.z =   p.x   (forward  =  forward)
-
-    Velocity / acceleration:
-      roi_depth_node only publishes position. When estimate_velocity is true
-      (default), v_x/v_y/v_z and a_x/a_y/a_z are estimated by finite-
-      differencing consecutive PointStamped samples (using the message
-      timestamps, not wall-clock arrival time) and smoothed with a simple
-      exponential moving average (velocity_filter_alpha). This is a coarse
-      estimate, not a proper tracker/filter -- if you already have a tracked
-      velocity upstream, publish it separately and set
-      estimate_velocity:=false to leave those fields at zero.
-
-    Stale-target watchdog:
-      If no new point arrives for target_timeout_s, a single zero-confidence
-      CVTarget is published (so the MCB/gimbal can stop tracking a ghost
-      target) and the velocity filter resets; publishing resumes cleanly on
-      the next fresh point.
+    Subscribes point_topic/confidence_topic (PointStamped/Detection2D);
+    publishes output_topic (CVTarget). Frame conversion: cv.x=-p.y, cv.y=p.z,
+    cv.z=p.x. Velocity/acceleration EMA-smoothed when estimate_velocity is
+    true; resets to zero-confidence after target_timeout_s idle.
     """
 
     def __init__(self):

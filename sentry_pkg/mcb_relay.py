@@ -10,33 +10,12 @@ from dji_serial_bridge.msg import CVTarget
 
 class McbRelay(Node):
     """
-    Sole relay between sentry_pkg/sentry_localization/CV and
-    dji_serial_bridge_node's topics. Per project convention, only sentry_pkg
-    is allowed to publish/subscribe directly on dji_serial_bridge's topics --
-    dji_serial_bridge itself stays a pure UART/DJI-protocol translator, with
-    no other package wired to it. This node reads each upstream package's own
-    output and reshapes it into whatever dji_serial_bridge_node's
-    subscription expects.
+    Sole relay onto dji_serial_bridge_node's topics -- only sentry_pkg talks
+    to dji_serial_bridge directly. See README.md for design rationale.
 
-    relocalize: compares localization_odom_topic (/localization/odom --
-    sentry_localization's one guaranteed output, published by every
-    localization_mode: slam/mapping/amcl/ekf -- see
-    sentry_localization/README.md) against raw_odom_topic (/odom --
-    sentry_pkg's own pose_translator, i.e. the MCB's raw uncorrected wheel
-    odometry). Deliberately backend-agnostic: no TF lookups, no assumption
-    about which localization_mode is running, just two Odometry topics. Once
-    they've drifted apart by more than error_threshold_meters *and* the
-    chassis is nearly stationary (raw odom speed below max_move_speed, so
-    the correction isn't stale by the time the MCB applies it), publishes
-    the localized (x, y) as a Point on relocalize_output_topic --
-    dji_serial_bridge_node's ~/relocalize (default resolved name
-    /dji_serial_bridge/relocalize) packs this into a RelocalizePayload and
-    sends it over UART so the MCB can reset its own odometry origin.
-
-    cv_target: republishes cv_target_input_topic (dji_serial_bridge/msg/
-    CVTarget, from the CV pipeline) unchanged onto cv_target_output_topic --
-    dji_serial_bridge_node's ~/cv_target (default resolved name
-    /dji_serial_bridge/cv_target).
+    relocalize: publishes corrected (x, y) on relocalize_output_topic when
+    localization_odom_topic and raw_odom_topic drift apart while stationary.
+    cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
     """
 
     def __init__(self):
