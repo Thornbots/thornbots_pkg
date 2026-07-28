@@ -82,7 +82,7 @@ def generate_launch_description():
     )
 
     localization_mode_arg = DeclareLaunchArgument(
-        "localization_mode", default_value="slam",
+        "localization_mode", default_value="amcl",
         choices=["slam", "mapping", "amcl", "none"],
         description="Forwarded to sentry_localization -- selects who owns "
                      "map->odom. See sentry_localization's "
@@ -101,8 +101,10 @@ def generate_launch_description():
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         "enable_cv_target_bridge", default_value="true",
         description="Launch point_to_cv_target to feed the vision "
-                     "pipeline's /roi_point into mcb_relay's /cv/target "
-                     "input. Only meaningful when real_hardware:=true."
+                     "pipeline's /roi_point into /cv/target. Independent "
+                     "of real_hardware -- consumed by mcb_relay when "
+                     "real_hardware:=true, and by sim's cv_head_aim node "
+                     "when running against sim."
     )
     roi_point_topic_arg = DeclareLaunchArgument(
         "roi_point_topic", default_value="/roi_point",
@@ -140,21 +142,17 @@ def generate_launch_description():
         condition=IfCondition(real_hardware),
     )
 
-    # Converts the vision pipeline's /roi_point into the CVTarget mcb_relay
-    # expects on /cv/target. Only meaningful alongside dji_serial_bridge_node
-    # itself, hence the same real_hardware gate; enable_cv_target_bridge lets
-    # you disable it if you intend to publish /cv/target yourself.
+    # Converts the vision pipeline's /roi_point into the CVTarget published
+    # on /cv/target -- consumed by mcb_relay (real_hardware:=true) and/or
+    # sim's cv_head_aim node (real_hardware:=false), so this runs in both
+    # modes; enable_cv_target_bridge lets you disable it if you intend to
+    # publish /cv/target yourself.
     point_to_cv_target_node = Node(
         package="sentry_pkg",
         executable="point_to_cv_target",
         name="point_to_cv_target",
         output="screen",
-        condition=IfCondition(
-            PythonExpression(
-                ["'", real_hardware, "' == 'true' and '",
-                 LaunchConfiguration("enable_cv_target_bridge"), "' == 'true'"]
-            )
-        ),
+        condition=IfCondition(LaunchConfiguration("enable_cv_target_bridge")),
         parameters=[{
             "point_topic": LaunchConfiguration("roi_point_topic"),
             "confidence_topic": LaunchConfiguration("roi_topic"),

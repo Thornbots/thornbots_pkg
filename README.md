@@ -36,10 +36,11 @@ See `sentry_localization/README.md` for the actual localization backends
   Only launched alongside `dji_serial_bridge_node` (`real_hardware:=true`).
 - `point_to_cv_target` — converts the vision pipeline's `/roi_point`
   (`geometry_msgs/PointStamped`, REP-103 camera frame) into the `CVTarget`
-  `mcb_relay` expects on `/cv/target`, estimating velocity/acceleration by
-  finite-differencing consecutive points and publishing a zero-confidence
-  `CVTarget` if the target goes stale. Same `real_hardware` gate, plus its
-  own `enable_cv_target_bridge` toggle.
+  published on `/cv/target` (position + confidence only), publishing a
+  zero-confidence `CVTarget` if the target goes stale. Runs independently
+  of `real_hardware` (its own `enable_cv_target_bridge` toggle only) since
+  `/cv/target` is consumed both by `mcb_relay` (real hardware) and `sim`'s
+  `cv_head_aim` node (sim).
 - Its own `robot_state_publisher`, off `urdf/sentry.urdf.xacro`.
 - Includes `sentry_localization`'s launch file to bring up whichever
   localization backend `localization_mode` selects.
@@ -53,6 +54,7 @@ See `sentry_localization/README.md` for the actual localization backends
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /roi_point --[point_to_cv_target]--> /cv/target --[mcb_relay]-----------> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
+                                                 \-[sim's cv_head_aim]---> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
 
 ## Prerequisites
@@ -265,25 +267,20 @@ body frame (X forward, Y left, Z up), default `"roi_point"`, published by
 default `"roi"`.
 
 Publishes `output_topic` (`dji_serial_bridge/msg/CVTarget`) — camera-frame
-convention (X right, Y up, Z forward), see `CVTarget.msg`. Default
-`"/cv/target"`, matching `mcb_relay`'s `cv_target_input_topic` default.
+convention (X right, Y up, Z forward), position + confidence only (no
+velocity/acceleration fields — removed 2026-07-28 along with the matching
+UART wire struct, see `ros2_dji_serial_bridge/README.md`), see
+`CVTarget.msg`. Default `"/cv/target"`, matching `mcb_relay`'s
+`cv_target_input_topic` default and consumed both by `mcb_relay`
+(real hardware) and `sim`'s `cv_head_aim` node (sim).
 
 Frame conversion (REP-103 -> CVTarget convention): `cv.x = -p.y` (right =
 -left), `cv.y = p.z` (up = up), `cv.z = p.x` (forward = forward).
 
-Velocity/acceleration: `roi_depth_node` only publishes position. When
-`estimate_velocity` is true (default), `v_x/v_y/v_z` and `a_x/a_y/a_z` are
-estimated by finite-differencing consecutive `PointStamped` samples (using
-the message timestamps, not wall-clock arrival time) and smoothed with a
-simple exponential moving average (`velocity_filter_alpha`). This is a
-coarse estimate, not a proper tracker/filter — if you already have a
-tracked velocity upstream, publish it separately and set
-`estimate_velocity:=false` to leave those fields at zero.
-
 Stale-target watchdog: if no new point arrives for `target_timeout_s`, a
 single zero-confidence CVTarget is published (so the MCB/gimbal can stop
-tracking a ghost target) and the velocity filter resets; publishing
-resumes cleanly on the next fresh point.
+tracking a ghost target); publishing resumes cleanly on the next fresh
+point.
 
 ### auto.launch.py
 
@@ -319,8 +316,10 @@ assumption about which `localization_mode` is running. Only launched
 alongside `dji_serial_bridge_node` (`real_hardware:=true`).
 
 `point_to_cv_target` converts the vision pipeline's `/roi_point` (REP-103
-camera frame) into the CVTarget `mcb_relay`'s `cv_target` input expects on
-`/cv/target` — estimating velocity/acceleration by finite-differencing
-consecutive points, and publishing a zero-confidence CVTarget if the
-target goes stale. Same `real_hardware` gate, plus its own
-`enable_cv_target_bridge` toggle.
+camera frame) into the CVTarget published on `/cv/target` (position +
+confidence only), publishing a zero-confidence CVTarget if the target
+goes stale. Independent of `real_hardware` (its own
+`enable_cv_target_bridge` toggle only) since `/cv/target` feeds both
+`mcb_relay`'s `cv_target` input (real hardware) and `sim`'s `cv_head_aim`
+node (sim) — unlike `mcb_relay` itself, which stays gated on
+`real_hardware:=true`.
