@@ -34,11 +34,14 @@ See `sentry_localization/README.md` for the actual localization backends
     `point_to_cv_target` below) unchanged onto `dji_serial_bridge_node`'s
     `~/cv_target`.
   Only launched alongside `dji_serial_bridge_node` (`real_hardware:=true`).
-- `point_to_cv_target` — converts the vision pipeline's `/roi_point`
-  (`geometry_msgs/PointStamped`, REP-103 camera frame) into the `CVTarget`
-  published on `/cv/target` (position + confidence only), publishing a
-  zero-confidence `CVTarget` if the target goes stale. Runs independently
-  of `real_hardware` (its own `enable_cv_target_bridge` toggle only) since
+- `point_to_cv_target` — converts the vision pipeline's `/cv/panel_detection`
+  (`dji_serial_bridge/msg/PanelDetection`, bbox corners + center + depth +
+  confidence, REP-103 camera frame) into the `CVTarget` published on
+  `/cv/target` (position + confidence only) and the `PolygonStamped`
+  published on `/cv/panel_polygon` (the panel corners, unmodified, for
+  visualization/future firing logic), publishing a zero-confidence
+  `CVTarget` if the target goes stale. Runs independently of
+  `real_hardware` (its own `enable_cv_target_bridge` toggle only) since
   `/cv/target` is consumed both by `mcb_relay` (real hardware) and `sim`'s
   `cv_head_aim` node (sim).
 - Its own `robot_state_publisher`, off `urdf/sentry.urdf.xacro`.
@@ -53,8 +56,9 @@ See `sentry_localization/README.md` for the actual localization backends
 /scan ------------------------------> sentry_localization (map->odom TF owned directly by slam_toolbox/amcl there)
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
-/roi_point --[point_to_cv_target]--> /cv/target --[mcb_relay]-----------> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
-                                                 \-[sim's cv_head_aim]---> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
+/cv/panel_detection --[point_to_cv_target]--> /cv/panel_polygon (rviz/foxglove)
+                                          \--> /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
+                                                          \-[sim's cv_head_aim]---> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
 
 ## Prerequisites
@@ -133,8 +137,9 @@ isaac_ros_common/scripts/dexec.sh -- rviz2 -d install/sentry_pkg/share/sentry_pk
 - `odom_tf_broadcaster.py` — `/localization/odom` → `odom->root` TF.
 - `mcb_relay.py` — sole relay onto `dji_serial_bridge_node`'s topics; see
   "What it owns" above.
-- `point_to_cv_target.py` — `/roi_point` → `/cv/target` (`CVTarget`); see
-  "What it owns" above.
+- `point_to_cv_target.py` — `/cv/panel_detection` → `/cv/target`
+  (`CVTarget`) + `/cv/panel_polygon` (`PolygonStamped`); see "What it owns"
+  above.
 
 ## Testing
 
@@ -253,34 +258,41 @@ them on real hardware.
 
 ### point_to_cv_target.py
 
-Bridges the vision pipeline's 3-D target estimate to a CVTarget message
-for `mcb_relay` — this is the missing link between `roi_depth_query`/
-`roi_depth_node` and `mcb_relay`'s `cv_target` input, since only
-`sentry_pkg` is allowed to publish the messages that eventually reach
-`dji_serial_bridge`.
+Bridges the vision pipeline's bbox+depth panel detection to a CVTarget
+message for `mcb_relay` — this is the missing link between
+`roi_depth_query`/`roi_depth_node` and `mcb_relay`'s `cv_target` input,
+since only `sentry_pkg` is allowed to publish the messages that eventually
+reach `dji_serial_bridge`.
 
-Subscribes `point_topic` (`geometry_msgs/PointStamped`) — REP-103 camera
-body frame (X forward, Y left, Z up), default `"roi_point"`, published by
-`roi_depth_query`/`roi_depth_node` — and `confidence_topic`
-(`vision_msgs/Detection2D`, optional) — read only for a confidence score
-(max of all hypothesis scores, same rule `detection_picker_node` uses),
-default `"roi"`.
+Subscribes `panel_topic` (`dji_serial_bridge/msg/PanelDetection`) —
+4 bbox corners + center deprojected to 3-D, depth, confidence, and
+class_id, all in the REP-103 camera body frame (X forward, Y left, Z up),
+default `"/cv/panel_detection"`, published by `roi_depth_query`/
+`roi_depth_node`.
 
-Publishes `output_topic` (`dji_serial_bridge/msg/CVTarget`) — camera-frame
-convention (X right, Y up, Z forward), position + confidence only (no
-velocity/acceleration fields — removed 2026-07-28 along with the matching
-UART wire struct, see `ros2_dji_serial_bridge/README.md`), see
-`CVTarget.msg`. Default `"/cv/target"`, matching `mcb_relay`'s
-`cv_target_input_topic` default and consumed both by `mcb_relay`
-(real hardware) and `sim`'s `cv_head_aim` node (sim).
+Publishes:
+- `polygon_topic` (`geometry_msgs/PolygonStamped`) — the 4 corners,
+  unmodified, same header/frame as the incoming message. Default
+  `"/cv/panel_polygon"`. For rviz/foxglove visualization now; the full
+  polygon shape is also available here for future firing-logic geometric
+  reasoning (panel orientation, size-based range checks) — not used for
+  any decision yet, per the project's CV-first priority.
+- `output_topic` (`dji_serial_bridge/msg/CVTarget`) — camera-frame
+  convention (X right, Y up, Z forward), the panel's `center` +
+  `confidence` only (no velocity/acceleration fields — removed
+  2026-07-28 along with the matching UART wire struct, see
+  `ros2_dji_serial_bridge/README.md`), see `CVTarget.msg`. Default
+  `"/cv/target"`, matching `mcb_relay`'s `cv_target_input_topic` default
+  and consumed both by `mcb_relay` (real hardware) and `sim`'s
+  `cv_head_aim` node (sim).
 
 Frame conversion (REP-103 -> CVTarget convention): `cv.x = -p.y` (right =
 -left), `cv.y = p.z` (up = up), `cv.z = p.x` (forward = forward).
 
-Stale-target watchdog: if no new point arrives for `target_timeout_s`, a
-single zero-confidence CVTarget is published (so the MCB/gimbal can stop
+Stale-target watchdog: if no new detection arrives for `target_timeout_s`,
+a single zero-confidence CVTarget is published (so the MCB/gimbal can stop
 tracking a ghost target); publishing resumes cleanly on the next fresh
-point.
+detection.
 
 ### auto.launch.py
 
@@ -315,10 +327,11 @@ package never needs to know which `localization_mode` is active.
 assumption about which `localization_mode` is running. Only launched
 alongside `dji_serial_bridge_node` (`real_hardware:=true`).
 
-`point_to_cv_target` converts the vision pipeline's `/roi_point` (REP-103
-camera frame) into the CVTarget published on `/cv/target` (position +
-confidence only), publishing a zero-confidence CVTarget if the target
-goes stale. Independent of `real_hardware` (its own
+`point_to_cv_target` converts the vision pipeline's `/cv/panel_detection`
+(REP-103 camera frame) into the CVTarget published on `/cv/target`
+(position + confidence only) and the `/cv/panel_polygon` PolygonStamped,
+publishing a zero-confidence CVTarget if the target goes stale.
+Independent of `real_hardware` (its own
 `enable_cv_target_bridge` toggle only) since `/cv/target` feeds both
 `mcb_relay`'s `cv_target` input (real hardware) and `sim`'s `cv_head_aim`
 node (sim) — unlike `mcb_relay` itself, which stays gated on
