@@ -101,19 +101,15 @@ def generate_launch_description():
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         "enable_cv_target_bridge", default_value="true",
         description="Launch point_to_cv_target to feed the vision "
-                     "pipeline's /roi_point into /cv/target. Independent "
-                     "of real_hardware -- consumed by mcb_relay when "
-                     "real_hardware:=true, and by sim's cv_head_aim node "
-                     "when running against sim."
+                     "pipeline's /cv/panel_detection into /cv/target + "
+                     "/cv/panel_polygon. Independent of real_hardware -- "
+                     "consumed by mcb_relay when real_hardware:=true, and "
+                     "by sim's cv_head_aim node when running against sim."
     )
-    roi_point_topic_arg = DeclareLaunchArgument(
-        "roi_point_topic", default_value="/roi_point",
-        description="PointStamped topic published by "
-                     "roi_depth_query/roi_depth_node."
-    )
-    roi_topic_arg = DeclareLaunchArgument(
-        "roi_topic", default_value="/roi",
-        description="Detection2D topic read only for a confidence score."
+    panel_topic_arg = DeclareLaunchArgument(
+        "panel_topic", default_value="/cv/panel_detection",
+        description="PanelDetection topic (bbox corners+center+depth+"
+                     "confidence) published by roi_depth_query/roi_depth_node."
     )
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -142,11 +138,12 @@ def generate_launch_description():
         condition=IfCondition(real_hardware),
     )
 
-    # Converts the vision pipeline's /roi_point into the CVTarget published
-    # on /cv/target -- consumed by mcb_relay (real_hardware:=true) and/or
-    # sim's cv_head_aim node (real_hardware:=false), so this runs in both
-    # modes; enable_cv_target_bridge lets you disable it if you intend to
-    # publish /cv/target yourself.
+    # Converts the vision pipeline's /cv/panel_detection into the CVTarget
+    # published on /cv/target (+ /cv/panel_polygon) -- consumed by mcb_relay
+    # (real_hardware:=true) and/or sim's cv_head_aim node
+    # (real_hardware:=false), so this runs in both modes;
+    # enable_cv_target_bridge lets you disable it if you intend to publish
+    # /cv/target yourself.
     point_to_cv_target_node = Node(
         package="sentry_pkg",
         executable="point_to_cv_target",
@@ -154,8 +151,7 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("enable_cv_target_bridge")),
         parameters=[{
-            "point_topic": LaunchConfiguration("roi_point_topic"),
-            "confidence_topic": LaunchConfiguration("roi_topic"),
+            "panel_topic": LaunchConfiguration("panel_topic"),
             "output_topic": "/cv/target",
         }],
     )
@@ -257,7 +253,7 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         use_ekf_arg,
-        enable_cv_target_bridge_arg, roi_point_topic_arg, roi_topic_arg,
+        enable_cv_target_bridge_arg, panel_topic_arg,
         dji_serial_bridge_node, mcb_relay_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
