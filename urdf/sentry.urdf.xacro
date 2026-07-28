@@ -13,7 +13,7 @@
         <mesh filename="package://sentry_pkg/meshes/Body.stl" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
-        <color rgba="0.615686 0.811765 0.929412 1"/>
+        <color rgba="1 0 0 1"/>
       </material>
     </visual>
   </link>
@@ -29,7 +29,7 @@
         <mesh filename="package://sentry_pkg/meshes/Head.stl" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
-        <color rgba="0.615686 0.811765 0.929412 1"/>
+        <color rgba="1 0 0 1"/>
       </material>
     </visual>
   </link>
@@ -45,7 +45,7 @@
         <mesh filename="package://sentry_pkg/meshes/Lidar.stl" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
-        <color rgba="0.615686 0.811765 0.929412 1"/>
+        <color rgba="1 0 0 1"/>
       </material>
     </visual>
   </link>
@@ -89,7 +89,7 @@
         <mesh filename="package://sentry_pkg/meshes/OdoWheel.stl" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
-        <color rgba="0.615686 0.811765 0.929412 1"/>
+        <color rgba="1 0 0 1"/>
       </material>
     </visual>
   </link>
@@ -105,7 +105,7 @@
         <mesh filename="package://sentry_pkg/meshes/OdoWheel.stl" scale="1 1 1"/>
       </geometry>
       <material name="0.615686_0.811765_0.929412_0.000000_0.000000">
-        <color rgba="0.615686 0.811765 0.929412 1"/>
+        <color rgba="1 0 0 1"/>
       </material>
     </visual>
   </link>
