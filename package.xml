@@ -24,7 +24,6 @@
   <depend>ros_gz_sim</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
-  <depend>vision_msgs</depend>
   <depend>dji_serial_bridge</depend>
   <export>
     <build_type>ament_python</build_type>
