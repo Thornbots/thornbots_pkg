@@ -112,6 +112,31 @@ def generate_launch_description():
                      "published by target_selector, consumed by "
                      "point_to_cv_target."
     )
+    lead_enabled_arg = DeclareLaunchArgument(
+        "lead_enabled", default_value="false",
+        description="point_to_cv_target: apply the intercept/lead solve "
+                     "(Phase 3) to /cv/target. false emits the raw "
+                     "target_tracker centre with no prediction -- one "
+                     "param flip between before/after."
+    )
+    firmware_latency_s_arg = DeclareLaunchArgument(
+        "firmware_latency_s", default_value="0.0",
+        description="point_to_cv_target: fixed MCB/UART latency added to "
+                     "the measured now-detection_stamp latency for the "
+                     "intercept solve's tau. Needs measuring on hardware; "
+                     "0.0 is a placeholder."
+    )
+    v_muzzle_arg = DeclareLaunchArgument(
+        "v_muzzle", default_value="25.0",
+        description="point_to_cv_target: projectile speed (m/s) used only "
+                     "to size the intercept solve's prediction horizon -- "
+                     "Type-C computes the real ballistic flight time."
+    )
+    cv_target_publish_rate_hz_arg = DeclareLaunchArgument(
+        "cv_target_publish_rate_hz", default_value="30.0",
+        description="point_to_cv_target: /cv/target publish rate, "
+                     "decoupled from the ~60Hz detection rate (plan Phase 3)."
+    )
 
     enable_target_selector_arg = DeclareLaunchArgument(
         "enable_target_selector", default_value="true",
@@ -144,6 +169,19 @@ def generate_launch_description():
         "priority_class_ids", default_value="[2, 6]",
         description="target_selector: class IDs treated as high-value "
                      "targets."
+    )
+
+    enable_target_tracker_arg = DeclareLaunchArgument(
+        "enable_target_tracker", default_value="true",
+        description="Launch target_tracker to publish /cv/target_state "
+                     "(spin-centre KF estimate in odom) from panel_topic. "
+                     "Independent of real_hardware, same as "
+                     "enable_target_selector."
+    )
+    target_state_topic_arg = DeclareLaunchArgument(
+        "target_state_topic", default_value="/cv/target_state",
+        description="TargetState topic published by target_tracker, "
+                     "consumed by point_to_cv_target's intercept solver."
     )
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -185,8 +223,23 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("enable_cv_target_bridge")),
         parameters=[{
+            "use_sim_time": use_sim_time,
             "panel_topic": LaunchConfiguration("panel_topic"),
+            "target_state_topic": LaunchConfiguration("target_state_topic"),
             "output_topic": "/cv/target",
+            "odom_frame": LaunchConfiguration("odom_frame"),
+            "lead_enabled": ParameterValue(
+                LaunchConfiguration("lead_enabled"), value_type=bool
+            ),
+            "firmware_latency_s": ParameterValue(
+                LaunchConfiguration("firmware_latency_s"), value_type=float
+            ),
+            "v_muzzle": ParameterValue(
+                LaunchConfiguration("v_muzzle"), value_type=float
+            ),
+            "cv_target_publish_rate_hz": ParameterValue(
+                LaunchConfiguration("cv_target_publish_rate_hz"), value_type=float
+            ),
         }],
     )
 
@@ -210,6 +263,25 @@ def generate_launch_description():
             "center_weight":        LaunchConfiguration("center_weight"),
             "priority_class_bonus": LaunchConfiguration("priority_class_bonus"),
             "priority_class_ids":   LaunchConfiguration("priority_class_ids"),
+        }],
+    )
+
+    # Estimates the tracked robot's spin-centre in odom from panel_topic --
+    # downstream of target_selector, upstream of point_to_cv_target's
+    # intercept solve. Own enable toggle for the same reason as
+    # target_selector: run_shot_hit_tests.py's robot_tf launch needs its own
+    # standalone copy without auto.launch.py launching a second one.
+    target_tracker_node = Node(
+        package="sentry_pkg",
+        executable="target_tracker",
+        name="target_tracker",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_target_tracker")),
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "panel_topic": LaunchConfiguration("panel_topic"),
+            "output_topic": LaunchConfiguration("target_state_topic"),
+            "odom_frame": LaunchConfiguration("odom_frame"),
         }],
     )
 
@@ -311,10 +383,13 @@ def generate_launch_description():
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         use_ekf_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
+        lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
+        cv_target_publish_rate_hz_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
+        enable_target_tracker_arg, target_state_topic_arg,
         dji_serial_bridge_node, mcb_relay_node,
-        target_selector_node, point_to_cv_target_node,
+        target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
         robot_state_publisher_node,
