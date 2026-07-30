@@ -108,8 +108,42 @@ def generate_launch_description():
     )
     panel_topic_arg = DeclareLaunchArgument(
         "panel_topic", default_value="/cv/panel_detection",
-        description="PanelDetection topic (bbox corners+center+depth+"
-                     "confidence) published by roi_depth_query/roi_depth_node."
+        description="Singular PanelDetection topic (the picked panel) -- "
+                     "published by target_selector, consumed by "
+                     "point_to_cv_target."
+    )
+
+    enable_target_selector_arg = DeclareLaunchArgument(
+        "enable_target_selector", default_value="true",
+        description="Launch target_selector to turn roi_depth_query's "
+                     "/cv/panel_detections (PanelDetectionArray, ALL "
+                     "detections) into the singular panel_topic. Independent "
+                     "of real_hardware, same as enable_cv_target_bridge."
+    )
+    panel_array_topic_arg = DeclareLaunchArgument(
+        "panel_array_topic", default_value="/cv/panel_detections",
+        description="PanelDetectionArray topic published by "
+                     "roi_depth_query/roi_depth_node, consumed by "
+                     "target_selector."
+    )
+    ref_sys_topic_arg = DeclareLaunchArgument(
+        "ref_sys_topic", default_value="/dji_serial_bridge/ref_sys",
+        description="RefSysStatus topic target_selector reads for the "
+                     "referee team colour (allied-detection filtering)."
+    )
+    center_weight_arg = DeclareLaunchArgument(
+        "center_weight", default_value="1.0",
+        description="target_selector: weight of 3D centrality in the panel "
+                     "score."
+    )
+    priority_class_bonus_arg = DeclareLaunchArgument(
+        "priority_class_bonus", default_value="0.5",
+        description="target_selector: score bonus for priority_class_ids."
+    )
+    priority_class_ids_arg = DeclareLaunchArgument(
+        "priority_class_ids", default_value="[2, 6]",
+        description="target_selector: class IDs treated as high-value "
+                     "targets."
     )
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -153,6 +187,29 @@ def generate_launch_description():
         parameters=[{
             "panel_topic": LaunchConfiguration("panel_topic"),
             "output_topic": "/cv/target",
+        }],
+    )
+
+    # Picks the winning panel out of roi_depth_query's /cv/panel_detections
+    # (ALL detections) and republishes it as the singular panel_topic --
+    # upstream of point_to_cv_target_node in the pipeline, hence its own
+    # enable_target_selector toggle (see run_shot_hit_tests.py's robot_tf
+    # launch for why these two toggles are independent of
+    # enable_cv_target_bridge: it needs point_to_cv_target's/target_selector's
+    # own standalone copies without auto.launch.py launching a second one).
+    target_selector_node = Node(
+        package="sentry_pkg",
+        executable="target_selector",
+        name="target_selector",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_target_selector")),
+        parameters=[{
+            "panel_array_topic":    LaunchConfiguration("panel_array_topic"),
+            "panel_topic":          LaunchConfiguration("panel_topic"),
+            "ref_sys_topic":        LaunchConfiguration("ref_sys_topic"),
+            "center_weight":        LaunchConfiguration("center_weight"),
+            "priority_class_bonus": LaunchConfiguration("priority_class_bonus"),
+            "priority_class_ids":   LaunchConfiguration("priority_class_ids"),
         }],
     )
 
@@ -254,7 +311,10 @@ def generate_launch_description():
         odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
         use_ekf_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
-        dji_serial_bridge_node, mcb_relay_node, point_to_cv_target_node,
+        enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
+        center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
+        dji_serial_bridge_node, mcb_relay_node,
+        target_selector_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,
         pose_translator_node, odom_tf_broadcaster_node,
         robot_state_publisher_node,

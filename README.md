@@ -34,6 +34,13 @@ See `sentry_localization/README.md` for the actual localization backends
     `point_to_cv_target` below) unchanged onto `dji_serial_bridge_node`'s
     `~/cv_target`.
   Only launched alongside `dji_serial_bridge_node` (`real_hardware:=true`).
+- `target_selector` — replaces the old C++ `detection_picker_node`. Reads
+  `roi_depth_query`'s `/cv/panel_detections` (`PanelDetectionArray`, ALL
+  detections, post-depth 3D), applies team filtering + 3D robot grouping +
+  robot-level hysteresis + per-frame panel pick, and republishes the winner
+  as a singular `PanelDetection` on `/cv/panel_detection` (unchanged
+  shape/topic, so `point_to_cv_target` needs no changes). Own
+  `enable_target_selector` toggle. See `### target_selector.py` below.
 - `point_to_cv_target` — converts the vision pipeline's `/cv/panel_detection`
   (`dji_serial_bridge/msg/PanelDetection`, bbox corners + center + depth +
   confidence, REP-103 camera frame) into the `CVTarget` published on
@@ -56,9 +63,9 @@ See `sentry_localization/README.md` for the actual localization backends
 /scan ------------------------------> sentry_localization (map->odom TF owned directly by slam_toolbox/amcl there)
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
-/cv/panel_detection --[point_to_cv_target]--> /cv/panel_polygon (rviz/foxglove)
-                                          \--> /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
-                                                          \-[sim's cv_head_aim]---> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
+/cv/panel_detections --[target_selector]--> /cv/panel_detection --[point_to_cv_target]--> /cv/panel_polygon (rviz/foxglove)
+                                                                                        \--> /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target)  --> UART --> MCB
+                                                                                                        \-[sim's cv_head_aim]---> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
 
 ## Prerequisites
@@ -153,6 +160,11 @@ Standard `colcon test`-style checks (`ament_copyright`/`ament_flake8`/
 `ament_pep257`) apply via the normal `colcon test --packages-select
 sentry_pkg`.
 
+`test/test_target_selector.py` unit-tests `target_selector.py`'s pure
+scoring/centrality/grouping/hysteresis functions against synthetic inputs
+(no rclpy, no live topics) — run directly with `python3 -m pytest
+test/test_target_selector.py` or via `colcon test`.
+
 ## Cleaning up
 
 Always fully stop a launch tree (`isaac_ros_common/scripts/kill_launch.sh
@@ -178,6 +190,55 @@ encoder-noise order of magnitude to start from. Unset fields (z/roll/pitch,
 and yaw — this chassis is holonomic and never reports real orientation)
 are left at 0, which is fine since `odom0_config` in `ekf.yaml` excludes
 them from fusion.
+
+### target_selector.py
+
+Ported from `detection_picker_node.cpp`'s scoring (score = confidence +
+`center_weight`*centrality + `priority_class_bonus` added conditionally for
+`priority_class_ids`, `min_score` gating on raw confidence only), but two
+things changed deliberately rather than being ported byte-for-byte:
+
+- **Centrality is redefined for 3D.** The old picker measured distance from
+  the image centre in pixels (pre-depth, network space). Post-depth, that's
+  meaningless — `centrality_3d()` instead measures bearing off the camera's
+  +X (forward) axis, 1.0 at boresight, clamped to 0.0 at `centrality_max_angle_rad`
+  or beyond (default 45°, ballpark half of the camera's ~87° horizontal FOV).
+  A point behind the camera (`x<=0`) scores 0 rather than hitting an
+  undefined `atan2`.
+- **Grouping is single-linkage clustering at `panel_group_radius_m` (default
+  0.4m), chosen explicitly over centroid linkage.** Adjacent panels of one
+  robot sit `hypot(0.30, 0.24)=0.384m` apart (opposite pairs 0.48-0.60m), so
+  0.4m links adjacent pairs and single-linkage transitivity reaches all 4
+  panels even though usually only 1-2 are visible at once — that's the
+  behaviour we want. The known failure mode: two robots whose *nearest*
+  panels happen to fall within 0.4m will merge into one cluster. Not fixed
+  here; revisit if it shows up in practice (e.g. switch to centroid linkage,
+  which trades the opposite failure — legitimately splitting one spinning
+  robot's panels across frames as its centroid estimate wanders).
+
+Clustering runs on camera-frame (x,y,z) directly, not a world/odom frame —
+valid because every panel in one `PanelDetectionArray` shares the same
+camera pose, so Euclidean distance in camera frame equals true metric
+distance (a rigid transform preserves it).
+
+**Robot-level hysteresis, not panel-level** — panels of a spinning robot
+legitimately vanish every 0.5-1s (145° exposure cone, 1-2Hz spin), so panel
+stickiness would delay every *correct* handoff. `RobotHysteresis` tracks
+the incumbent robot's last centroid; each frame, the cluster nearest that
+centroid is the incumbent's continuation, and a challenger must beat it by
+`switch_margin` for `switch_hold_frames` consecutive frames before the
+`robot_track_id` actually changes. Track *acquisition* (no incumbent yet,
+or the incumbent's nearest match exceeds `gate_radius_m`) is immediate —
+only switching between two simultaneously-visible candidates is delayed.
+
+**No predicted-centre association yet.** The original plan called for
+`target_selector` to subscribe `target_tracker`'s predicted centre to
+bridge single-panel handoffs (when a spinning robot shows only one panel
+and it changes, grouping alone can't tell it's the same robot). Since
+`target_tracker.py` doesn't exist yet (Phase 2, not built), this always
+runs in the "no prediction available" fallback: pure per-frame grouping +
+hysteresis. Wiring the prediction subscription is future work once
+`target_tracker.py` lands.
 
 ### mcb_relay.py
 
