@@ -32,6 +32,7 @@ setup(
             'lidar_self_filter = sentry_pkg.lidar_self_filter:main',
             'mcb_relay = sentry_pkg.mcb_relay:main',
             'point_to_cv_target = sentry_pkg.point_to_cv_target:main',
+            'target_selector = sentry_pkg.target_selector:main',
         ],
     },
 )
