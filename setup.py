@@ -33,6 +33,7 @@ setup(
             'mcb_relay = sentry_pkg.mcb_relay:main',
             'point_to_cv_target = sentry_pkg.point_to_cv_target:main',
             'target_selector = sentry_pkg.target_selector:main',
+            'target_tracker = sentry_pkg.target_tracker:main',
         ],
     },
 )

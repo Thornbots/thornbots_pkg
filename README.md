@@ -231,14 +231,138 @@ centroid is the incumbent's continuation, and a challenger must beat it by
 or the incumbent's nearest match exceeds `gate_radius_m`) is immediate —
 only switching between two simultaneously-visible candidates is delayed.
 
-**No predicted-centre association yet.** The original plan called for
-`target_selector` to subscribe `target_tracker`'s predicted centre to
-bridge single-panel handoffs (when a spinning robot shows only one panel
-and it changes, grouping alone can't tell it's the same robot). Since
-`target_tracker.py` doesn't exist yet (Phase 2, not built), this always
-runs in the "no prediction available" fallback: pure per-frame grouping +
-hysteresis. Wiring the prediction subscription is future work once
-`target_tracker.py` lands.
+**No predicted-centre association yet, even though `target_tracker.py` now
+exists.** The original plan called for `target_selector` to subscribe
+`target_tracker`'s predicted centre to bridge single-panel handoffs (when a
+spinning robot shows only one panel and it changes, grouping alone can't
+tell it's the same robot). `target_tracker.py`'s `/cv/target_state` is in
+the `odom` frame (it needs `odom` to filter correctly through sentry
+motion — see its own Notes below), but `target_selector` clusters in
+camera frame deliberately, to avoid needing a TF lookup per frame (every
+panel in one `PanelDetectionArray` shares one camera pose, so camera-frame
+distance is already true metric distance). Wiring the prediction in would
+mean either TF-transforming the predicted centre into camera frame each
+frame, or moving clustering into `odom` frame — both are real design
+changes, not a small addition, so this stays on the "optional improvement,
+never a requirement" list from the plan. Today's stand-in is
+`RobotHysteresis`'s own last-known-centroid continuation (nearest cluster
+to the incumbent's last position), which is a zero-order-hold predictor
+without `target_tracker`'s velocity term — good enough for the common case
+but weaker than the plan's original design during long handoff gaps.
+
+### target_tracker.py
+
+WHERE IT'S GOING: consumes `target_selector`'s per-frame panel pick
+(`/cv/panel_detection`), estimates the tracked robot's spin-centre in
+`odom`, publishes `dji_serial_bridge/msg/TargetState` on
+`/cv/target_state`. Pure logic lives in `target_tracker_core.py` (no
+rclpy import), unit-tested in `test/test_target_tracker.py`, same split as
+`target_selector`/`target_selector_core`.
+
+**Filters in `odom`, not `root` or camera** — see the plan's Phase 2:
+`root` translates with the sentry, so a constant-velocity model there
+breaks under sentry acceleration; camera additionally rotates with the
+gimbal. `lookupTransform(odom, camera, detection_stamp + pose_latency_s)`
+gets both corrections in one step. `pose_latency_s` (default 0.01s)
+exists because `dji_serial_bridge_node.cpp`'s `handle_pose()` stamps
+`RobotPose` with `now()` at parse time, not MCB sample time — shifting the
+TF query time is how that bias gets absorbed; the right value has to be
+found empirically on hardware (tune-by-sweep, see the plan's verification
+item 5), 0.01s is a placeholder within the documented 3-25ms range, not a
+measured number.
+
+**TF failure is loud, not silent.** A `TransformException` (most likely:
+`camera_frame` from the detection header isn't in the TF tree, or the
+requested stamp isn't covered yet) logs an error and drops the detection
+— it never falls back to a stale or zero transform. This is deliberate:
+Phase 2 rests on this lookup succeeding on real hardware, and silently
+degrading here would let a broken TF tree pass CI in sim (where
+`robot_state_publisher` happens to always be running) and then fail
+invisibly at the competition.
+
+**Spin/no-spin branch, decided by `SpinDetector`.** A spinning target's
+visible panel changes as `class_id` cycles; `SpinDetector` looks at the
+timing between those changes, not any single interval — it needs
+`spin_min_handoffs` (default 3) roughly-equal-length intervals (coefficient
+of variation under `spin_cv_max`, default 0.35) before it calls a target
+"spinning", and falls back to "not spinning" if `class_id` hasn't changed
+in `spin_handoff_timeout_s` (default 1.5s). `spin_hz` assumes exactly one
+handoff per quarter-revolution (4 armor panels), which conflates the true
+handoff period with the quarter-revolution period and can't tell spin
+direction — coarse by design, since the only thing gated on it is the
+binary branch choice, not `spin_hz`'s absolute accuracy. `spin_phase` is
+re-derived from time-since-last-handoff modulo the estimated period, not a
+phase-locked estimate — also coarse, and downstream nothing currently
+consumes it besides the wire-excluded `TargetState` field itself.
+
+**Per-panel radial correction replaces literal orbit averaging — and
+deliberately does NOT use `PanelDetection.corners` for it.** The plan's
+Phase 2 describes the spinning branch as "a running mean of panel
+positions... corrected for the known exposure-cone bias" (only near-facing
+panels are visible, skewing the raw arc toward the camera). An earlier
+version of this correction used the panel's 4 corners (a real plane
+normal via one cross product) — that turned out to be dead weight, not
+just unnecessary: `roi_depth_node.cpp`'s `deprojectDetection()` deprojects
+all 4 corners at one shared `mean_depth_m` (its own comment calls this
+the "planar assumption"), which makes every real detection's quad exactly
+fronto-parallel to the camera by construction. The cross product of two
+edges in that plane is always exactly the camera's boresight axis — for
+an off-boresight panel that's a different (and wrong) direction than
+"back toward the camera along *this panel's* bearing," not just a less
+precise version of the right answer. `cv_target_emulator.py`'s corners
+*do* encode real tilt (built from the true canted `right_dir`/`up_dir`),
+so the corner approach would have worked in sim and silently produced a
+different wrong answer on hardware — the plan's prereq-5 sim/hardware
+divergence, via geometry instead of `frame_id` this time, and exactly the
+kind of thing a sim-only hit-rate can't catch.
+
+`corrected_centre()` now just pushes the panel position further along its
+own existing camera-to-panel ray by `panel_radius_m` — approximating the
+chassis centre as sitting directly behind the visible panel along the
+current line of sight. No corners, no normal estimate, no plane-fitting
+(that's explicitly out of scope per the plan: "only viable under ~2m,
+where depth noise is below the panel's tilt"). This is a deliberately
+honest fallback, not a stand-in for something better — the "better"
+version needs real panel-orientation information the pipeline doesn't
+currently produce anywhere on hardware. The spinning branch still runs a
+`spin_window_s` (default 0.5s) running mean *of these corrected points*,
+to smooth single-frame range noise. `estimator` in `TargetState` stays
+`0` (`running_mean`) always — the width-refined (`1`) branch from the
+plan's optional refinement is not implemented; it's explicitly gated
+behind its own verification pass ("Must pass the verification gate
+first... If it doesn't pass, keep the running mean and move on"), which
+needs a live sim run against the emulator's known panel normal, not
+something this session could exercise.
+
+`panel_radius_m` (default 0.27, the mean of `panel_radius_x=0.30` and
+`panel_radius_y=0.24`) is a single scalar, not per-panel-face like the
+emulator's `radius_x`/`radius_y` split — `PanelDetection.class_id` encodes
+team + plate digit, not which face is visible, so there's no signal here
+to pick `radius_x` vs `radius_y` from. Approximation, same spirit as
+`PANEL_SIZE`'s own hedge in `cv_target_emulator.py`.
+
+**6-state constant-velocity KF, `R` scaled with range.**
+`meas_noise_base_m + meas_noise_range_coeff * range_m^2` follows the
+plan's "depth error ~z², lateral pixel error ~z" note (dominated by the
+z² term at any real range). `spin_meas_inflation` defaults to `1.0` (no
+inflation) — a `spin_window_s` running mean of ~30 samples is *less*
+noisy than a single raw sample, so inflating `R` for the spinning branch
+by default would be backwards. It exists as a tunable knob for a
+different, real concern: the running mean can lag a rotating orbit (it's
+averaging positions from up to `spin_window_s` in the past against a
+centre that's still translating/spinning), which is a bias more than a
+variance and isn't actually fixed by inflating `R` either — flagged here
+rather than silently defaulted to a number the code doesn't justify.
+Reset (fresh KF, cleared
+spin history, cleared running-mean window) happens only on
+`robot_track_id` change or a `track_max_gap_s` gap — never on a plain
+`class_id` handoff, per the plan.
+
+**`valid` goes true after 2 KF updates, not after a spin period
+converges** — a real engagement can be shorter than a full spin period,
+and the plan is explicit that lead must still be available then. The
+consumer (`point_to_cv_target.py`'s intercept solver) is expected to weigh
+the published `variance`, which stays large immediately after a reset.
 
 ### mcb_relay.py
 
@@ -319,41 +443,67 @@ them on real hardware.
 
 ### point_to_cv_target.py
 
-Bridges the vision pipeline's bbox+depth panel detection to a CVTarget
-message for `mcb_relay` — this is the missing link between
-`roi_depth_query`/`roi_depth_node` and `mcb_relay`'s `cv_target` input,
-since only `sentry_pkg` is allowed to publish the messages that eventually
-reach `dji_serial_bridge`.
+WHERE TO AIM (plan Phase 3): turns `target_tracker`'s `/cv/target_state`
+(odom-frame spin-centre KF estimate) into a **root-frame position** on
+`/cv/target` for `mcb_relay`/sim's `cv_head_aim`, with an optional
+intercept/lead solve. This is a frame and content change from the old
+camera-frame-offset `CVTarget` (see `CVTarget.msg` and
+`ros2_dji_serial_bridge/README.md`'s wire-format history) — `x/y/z` is now
+a position Type-C aims at directly, not a camera-relative vector, and
+that's the semantic change that matters, not the byte count.
 
-Subscribes `panel_topic` (`dji_serial_bridge/msg/PanelDetection`) —
-4 bbox corners + center deprojected to 3-D, depth, confidence, and
-class_id, all in the REP-103 camera body frame (X forward, Y left, Z up),
-default `"/cv/panel_detection"`, published by `roi_depth_query`/
-`roi_depth_node`.
+**Two upstream inputs, split by what they carry.** `target_state_topic`
+(`dji_serial_bridge/msg/TargetState`, default `/cv/target_state`) has
+position/velocity/validity but no confidence field; `panel_topic`
+(`dji_serial_bridge/msg/PanelDetection`, default `/cv/panel_detection`)
+still drives confidence caching, the `target_timeout_s` liveness watchdog,
+and the unchanged `polygon_topic` (`geometry_msgs/PolygonStamped`, the raw
+corners for rviz/foxglove) publish. If `target_state_topic` has never
+published, `/cv/target` reports zero confidence even if `panel_topic` is
+live — this node now depends on `target_tracker` being in the pipeline,
+not just `target_selector`.
 
-Publishes:
-- `polygon_topic` (`geometry_msgs/PolygonStamped`) — the 4 corners,
-  unmodified, same header/frame as the incoming message. Default
-  `"/cv/panel_polygon"`. For rviz/foxglove visualization now; the full
-  polygon shape is also available here for future firing-logic geometric
-  reasoning (panel orientation, size-based range checks) — not used for
-  any decision yet, per the project's CV-first priority.
-- `output_topic` (`dji_serial_bridge/msg/CVTarget`) — camera-frame
-  convention (X right, Y up, Z forward), the panel's `center` +
-  `confidence` only (no velocity/acceleration fields — removed
-  2026-07-28 along with the matching UART wire struct, see
-  `ros2_dji_serial_bridge/README.md`), see `CVTarget.msg`. Default
-  `"/cv/target"`, matching `mcb_relay`'s `cv_target_input_topic` default
-  and consumed both by `mcb_relay` (real hardware) and `sim`'s
-  `cv_head_aim` node (sim).
+**Publishes on a timer at `cv_target_publish_rate_hz` (default 30), not
+per-message.** The tracker runs at detection rate (up to ~60Hz); Type-C's
+PID doesn't need a setpoint that fast (see the plan's wire-budget note in
+`ros2_dji_serial_bridge/README.md`). Each tick re-reads the latest cached
+`TargetState`/confidence rather than reacting to either subscription
+directly.
 
-Frame conversion (REP-103 -> CVTarget convention): `cv.x = -p.y` (right =
--left), `cv.y = p.z` (up = up), `cv.z = p.x` (forward = forward).
+**Three cases per tick**, in `_compute_aim_point()`:
+- No `TargetState` ever received, or the latest TF lookup fails: `None`,
+  caller publishes zero-confidence. TF failure is logged as an `ERROR`
+  (throttled), never silently swallowed — same reasoning as
+  `target_tracker`'s TF lookup.
+- `TargetState.valid == False`: emit the raw `panel` field (unconverged,
+  unfiltered position), `lead_applied=False`, `track_valid=False`. Never
+  extrapolate off an unconverged track (plan Phase 3 step 5) — a stub
+  fire-trigger would otherwise shoot at a guess.
+- `TargetState.valid == True`: emit the KF `centre` transformed into root.
+  If `lead_enabled` (default `False`) is also set, run
+  `point_to_cv_target_core.solve_intercept()` first — a 2-3 iteration
+  fixed-point time-of-flight solve, no gravity/drag/elevation (Type-C owns
+  those; see the plan's Phase 3 step 3). `lead_enabled` is one param flip
+  between "before" and "after" for the Phase 6 hit-rate sweep.
 
-Stale-target watchdog: if no new detection arrives for `target_timeout_s`,
-a single zero-confidence CVTarget is published (so the MCB/gimbal can stop
-tracking a ghost target); publishing resumes cleanly on the next fresh
-detection.
+**tau (total latency) = measured `now - detection_stamp` running mean
+(`point_to_cv_target_core.LatencyStat`, updated on every `TargetState`
+arrival) + `firmware_latency_s` (a placeholder param, needs measuring on
+real hardware).** This running mean is the repo's first real latency
+number — logged, not just used internally.
+
+**Frame conversion is a TF lookup now, not a fixed axis swap.**
+`lookup_transform(root_frame, odom_frame, Time())` (latest available, not
+a future extrapolation) converts the odom-frame KF/panel point into root;
+for the lead solve, a second lookup in the other direction
+(`odom_frame` <- `root_frame`) gives the shooter's current position in
+odom, and `RobotPose.vel_x/vel_y` (subscribed on `robot_pose_topic`,
+default `/pose`) rotated into odom by that same transform's orientation
+gives the shooter's velocity for the fixed-point solve — the sentry itself
+keeps moving during the flight (plan Phase 2's "Filter in odom, emit in
+root" note). Both lookups use "latest available" rather than the
+detection stamp, since we want where the shooter physically is *now*, not
+at detection time.
 
 ### auto.launch.py
 
