@@ -1,8 +1,8 @@
-# sentry_pkg — agent notes
+# sentry_pkg: agent notes
 
 Hardware interface, robot description, and CV target selection for the
 Thornbots Sentry. **Reference docs live in `README.md`** (topics, nodes,
-launch args, `## Notes` design rationale) — read it before changing
+launch args, `## Notes` design rationale). Read it before changing
 behavior. This file is only the operating contract for working here.
 
 Parent conventions in `../CLAUDE.md` apply, notably: **in-code
@@ -23,7 +23,7 @@ profile, both workspace installs, `-u admin` for GUI). Load the
 ../isaac_ros_common/scripts/dexec.sh -d -- ros2 launch sentry_pkg auto.launch.py real_hardware:=false
 ```
 
-`auto.launch.py` is the single entry point — it already includes
+`auto.launch.py` is the single entry point; it already includes
 `sentry_localization`'s launch. Don't launch that package separately.
 
 **This package is shadowed by `/workspaces/ros2_ws`** (`Dockerfile.thornbots`
@@ -33,17 +33,17 @@ terminal, which resolves to the image-baked clone. Before trusting any
 result: `../isaac_ros_common/scripts/dexec.sh -- ros2 pkg prefix sentry_pkg`
 (`/workspaces/isaac_ros-dev/…` = your edit is live).
 
-Stop launch trees with `../isaac_ros_common/scripts/kill_launch.sh <pid>`, never `pkill` — a
+Stop launch trees with `../isaac_ros_common/scripts/kill_launch.sh <pid>`, never `pkill`: a
 half-killed tree leaves duplicate TF publishers that corrupt the next run.
 
 ## Scope
 
 - Owns `/pose` consumption, `odom->root` republish, the URDF, and the
-  `mcb_relay` boundary to `dji_serial_bridge` — no other node may touch
+  `mcb_relay` boundary to `dji_serial_bridge`. No other node may touch
   that bridge's topics.
 - Localization backends (SLAM/AMCL/EKF) belong to `sentry_localization`;
   gz-sim worlds belong to `sim`. Change those there, not here.
-- Its own git repo (`Thornbots/sentry_pkg`) — commits here are separate
+- Its own git repo (`Thornbots/sentry_pkg`), so commits here are separate
   from the workspace.
 
 ## Current priority
