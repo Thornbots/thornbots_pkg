@@ -16,12 +16,12 @@
   <exec_depend>xacro</exec_depend>
   <exec_depend>sllidar_ros2</exec_depend>
   <exec_depend>sentry_localization</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  <depend>rclcpp</depend>
-  <depend>ros_gz_bridge</depend>
-  <depend>ros_gz_image</depend>
-  <depend>ros_gz_sim</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>python3-numpy</depend>
