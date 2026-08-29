@@ -107,7 +107,7 @@ since that's exactly when sim's `/clock` exists to use).
 
 Both forwarded straight through to `sentry_localization`; see
 `sentry_localization/README.md` for the full tables and rationale.
-`localization_mode` (`slam` default / `mapping` / `amcl` / `none`) picks
+`localization_mode` (`amcl` default / `slam` / `mapping` / `none`) picks
 who owns `map->odom`; `use_ekf` (default `false`) independently picks
 whether `odom->root` is EKF-fused, layerable on top of any
 `localization_mode`.
