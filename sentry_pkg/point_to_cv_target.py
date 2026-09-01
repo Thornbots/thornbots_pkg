@@ -37,13 +37,12 @@ class PointToCvTarget(Node):
     """
     WHERE TO AIM: turns target_tracker's /cv/target_state (odom-frame
     spin-centre KF estimate) into a root-frame /cv/target aim point for
-    mcb_relay, applying latency + time-of-flight lead (Phase 3). Confidence
+    mcb_relay, applying latency + time-of-flight lead. Confidence
     and liveness still come from panel_topic directly (target_state carries
     no confidence field) -- see README.md's ### point_to_cv_target.py Notes.
 
     Publishes at cv_target_publish_rate_hz, decoupled from the ~60Hz
-    detection rate -- Type-C's PID doesn't need 60Hz setpoints (plan
-    Phase 3 step 4).
+    detection rate -- Type-C's PID doesn't need 60Hz setpoints.
     """
 
     def __init__(self):
@@ -191,7 +190,7 @@ class PointToCvTarget(Node):
 
         aim_root = self._compute_aim_point()
         if aim_root is None:
-            self.pub.publish(CVTarget(header=out.header))
+            self.pub.publish(out)  # still all-zero
             return
         aim_pos, lead_applied, track_valid = aim_root
 
@@ -231,7 +230,7 @@ class PointToCvTarget(Node):
 
         if not state.valid:
             # Never emit an unconverged extrapolation -- raw panel position,
-            # no lead. See plan Phase 3 step 5.
+            # no lead.
             panel_odom = (state.panel.x, state.panel.y, state.panel.z)
             return _apply(R, T, panel_odom), False, False
 

@@ -23,8 +23,8 @@ def centrality_3d(x, y, z, max_angle_rad):
     """Bearing off the camera's forward (+x) axis, 1.0 at boresight, 0.0 at
     max_angle_rad or beyond. Replaces the old picker's image-plane-distance
     centrality now that panels are deprojected to 3D: this is the post-depth
-    equivalent, not a port of the pixel formula (deliberate, see the plan's
-    Phase 1 section). x<=0 (behind the camera) scores 0 rather than a
+    equivalent, not a port of the pixel formula (deliberate). x<=0 (behind
+    the camera) scores 0 rather than a
     divide-by-zero/undefined atan2 case."""
     if x <= 0.0 or max_angle_rad <= 0.0:
         return 0.0
@@ -121,7 +121,6 @@ class RobotHysteresis:
         self.gate_radius_m = gate_radius_m
         self.track_id = 0  # 0 = no incumbent yet
         self.incumbent_centroid = None
-        self.incumbent_score = None
         self._challenge_streak = 0
         self._next_id = 1
 
@@ -174,4 +173,3 @@ class RobotHysteresis:
 
     def _track(self, cluster):
         self.incumbent_centroid = cluster['centroid']
-        self.incumbent_score = cluster['score']

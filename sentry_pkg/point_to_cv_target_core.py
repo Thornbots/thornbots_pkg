@@ -17,11 +17,11 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
     in). shooter_vel is the sentry's own chassis velocity (RobotPose
     vel_x/vel_y rotated into odom, z=0) -- a small second-order correction
     since the sentry itself keeps moving during the flight; defaults to
-    stationary. See the plan's Phase 2 "Filter in odom, emit in root" note.
+    stationary. Filter in odom, emit in root.
     tau: total pipeline+firmware latency already elapsed/expected (s).
     v_muzzle: projectile speed (m/s).
     iterations: fixed-point iteration count (2-3 converges in practice for
-    these ranges/speeds -- see the plan's Phase 3).
+    these ranges/speeds).
 
     Returns (aim_pos, t_flight): aim_pos is the predicted intercept point
     (target_pos + target_vel*(tau+t_flight)), t_flight is the solved flight
@@ -46,8 +46,7 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
 
 class LatencyStat:
     """Running mean/count of now-detection_stamp latency samples (seconds).
-    The repo's first real latency measurement -- see the plan's Phase 3
-    step 1 and verification item 9."""
+    The repo's first real latency measurement."""
 
     def __init__(self):
         self.count = 0
