@@ -29,11 +29,10 @@ def corrected_centre(panel_center, radius_m):
     got exactly this wrong for off-axis panels). cv_target_emulator.py's
     corners *do* encode real tilt (built from the true canted right_dir/
     up_dir), so a corner-based estimate would work in sim and silently
-    fail differently on hardware -- the sim/hardware divergence the plan's
-    prereq 5 warned about, just via geometry instead of frame_id. Real
-    depth-based plane-fitting for a true normal is out of scope per the
-    plan (only viable under ~2m, where depth noise is below the panel's
-    tilt) -- this radial approximation is the honest fallback, not a
+    fail differently on hardware -- a sim/hardware divergence via geometry
+    instead of frame_id. Real depth-based plane-fitting for a true normal
+    is out of scope (only viable under ~2m, where depth noise is below the
+    panel's tilt) -- this radial approximation is the honest fallback, not a
     placeholder for something better later."""
     norm = np.linalg.norm(panel_center)
     if norm < 1e-9:

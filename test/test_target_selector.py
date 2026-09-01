@@ -1,11 +1,11 @@
 """
 Unit tests for target_selector_core.py's pure scoring/centrality/grouping/
 hysteresis functions, against synthetic inputs -- not a live side-by-side
-against the old detection_picker_node (see the plan's Verification item 2:
-the old picker consumed 2D pre-depth detections and the new selector
-consumes 3D post-depth ones, so "identical picks" isn't well defined
-between them). Imports only target_selector_core (no rclpy, no ROS message
-packages), so this runs on a bare Python 3 + pytest install with no
+against the old detection_picker_node (it consumed 2D pre-depth
+detections and the new selector consumes 3D post-depth ones, so "identical
+picks" isn't well defined between them). Imports only
+target_selector_core (no rclpy, no ROS message packages), so this runs on
+a bare Python 3 + pytest install with no
 workspace build. Run with `python3 -m pytest test/test_target_selector.py`.
 """
 import math
@@ -74,7 +74,7 @@ def test_centrality_monotonic_in_angle():
 
 def test_score_is_additive_not_multiplicative():
     # priority bonus must be a conditional ADD, not conf*bonus or
-    # centrality*bonus -- this is the exact bug class the plan calls out.
+    # centrality*bonus -- see detection_picker_node.cpp:281-284.
     base = compute_score(0.8, 0.5, class_id=0, center_weight=1.0,
                           priority_class_bonus=0.5, priority_class_ids={2, 6})
     with_bonus = compute_score(0.8, 0.5, class_id=2, center_weight=1.0,
