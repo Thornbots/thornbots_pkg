@@ -6,10 +6,8 @@ dji_serial_bridge/msg/TargetState on /cv/target_state for
 point_to_cv_target.py's intercept solver. See README.md's
 ### target_tracker.py Notes for the spin-branch/normal-correction design
 rationale and open items (width-incidence refinement is deferred, gated
-behind the verification harness per the plan).
+behind the verification harness).
 """
-import math
-
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -125,8 +123,8 @@ class TargetTracker(Node):
                 self.odom_frame, camera_frame, query_time,
                 timeout=Duration(seconds=0.05))
         except TransformException as ex:
-            # Loud, not silent -- see plan verification item 11. A missing
-            # camera frame in TF must surface as an error, not a stale or
+            # Loud, not silent. A missing camera frame in TF must surface
+            # as an error, not a stale or
             # phantom TargetState publish.
             self.get_logger().error(
                 f"TF lookup {self.odom_frame}<-{camera_frame}@{query_time.nanoseconds}"
@@ -184,7 +182,7 @@ class TargetTracker(Node):
         out.estimator = estimator
         # Two updates minimum for a meaningful velocity estimate; don't wait
         # for spin-period convergence (a real engagement may be shorter) --
-        # the consumer weighs the KF variance instead. See plan Phase 2.
+        # the consumer weighs the KF variance instead.
         out.valid = self._n_updates >= 2
 
         self.pub.publish(out)

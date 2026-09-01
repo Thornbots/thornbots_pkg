@@ -1,6 +1,5 @@
 import rclpy
 from rclpy.node import Node
-from math import sin, cos
 from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
@@ -79,7 +78,7 @@ class PoseTranslator(Node):
 
         # Chassis is holonomic and does not rotate; head_yaw is gimbal-only
         # heading, not chassis heading, so chassis orientation stays identity.
-        q_chassis = self.euler_to_quaternion(0.0, 0.0, 0.0)
+        q_chassis = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
 
         odom = Odometry()
         odom.header.stamp = stamp
@@ -101,18 +100,6 @@ class PoseTranslator(Node):
         js.name = ['headlink', 'headpitch']
         js.position = [float(msg.head_yaw), float(msg.head_pitch)]
         self.joint_pub.publish(js)
-
-    def euler_to_quaternion(self, roll, pitch, yaw):
-        cy, sy = cos(yaw * 0.5), sin(yaw * 0.5)
-        cp, sp = cos(pitch * 0.5), sin(pitch * 0.5)
-        cr, sr = cos(roll * 0.5), sin(roll * 0.5)
-
-        q = Quaternion()
-        q.w = cr * cp * cy + sr * sp * sy
-        q.x = sr * cp * cy - cr * sp * sy
-        q.y = cr * sp * cy + sr * cp * sy
-        q.z = cr * cp * sy - sr * sp * cy  # fixed: was "* cp" instead of "* cy"
-        return q
 
 def main(args=None):
     rclpy.init(args=args)

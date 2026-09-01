@@ -100,11 +100,12 @@ def generate_launch_description():
 
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         "enable_cv_target_bridge", default_value="true",
-        description="Launch point_to_cv_target to feed the vision "
-                     "pipeline's /cv/panel_detection into /cv/target + "
-                     "/cv/panel_polygon. Independent of real_hardware -- "
-                     "consumed by mcb_relay when real_hardware:=true, and "
-                     "by sim's cv_head_aim node when running against sim."
+        description="Launch point_to_cv_target to turn target_tracker's "
+                     "/cv/target_state into the root-frame /cv/target aim "
+                     "point (plus /cv/panel_polygon off panel_topic). "
+                     "Independent of real_hardware -- consumed by mcb_relay "
+                     "when real_hardware:=true, and by sim's cv_head_aim "
+                     "node when running against sim."
     )
     panel_topic_arg = DeclareLaunchArgument(
         "panel_topic", default_value="/cv/panel_detection",
@@ -115,7 +116,7 @@ def generate_launch_description():
     lead_enabled_arg = DeclareLaunchArgument(
         "lead_enabled", default_value="false",
         description="point_to_cv_target: apply the intercept/lead solve "
-                     "(Phase 3) to /cv/target. false emits the raw "
+                     "to /cv/target. false emits the raw "
                      "target_tracker centre with no prediction -- one "
                      "param flip between before/after."
     )
@@ -135,7 +136,7 @@ def generate_launch_description():
     cv_target_publish_rate_hz_arg = DeclareLaunchArgument(
         "cv_target_publish_rate_hz", default_value="30.0",
         description="point_to_cv_target: /cv/target publish rate, "
-                     "decoupled from the ~60Hz detection rate (plan Phase 3)."
+                     "decoupled from the ~60Hz detection rate."
     )
 
     enable_target_selector_arg = DeclareLaunchArgument(
@@ -210,12 +211,12 @@ def generate_launch_description():
         condition=IfCondition(real_hardware),
     )
 
-    # Converts the vision pipeline's /cv/panel_detection into the CVTarget
-    # published on /cv/target (+ /cv/panel_polygon) -- consumed by mcb_relay
-    # (real_hardware:=true) and/or sim's cv_head_aim node
-    # (real_hardware:=false), so this runs in both modes;
-    # enable_cv_target_bridge lets you disable it if you intend to publish
-    # /cv/target yourself.
+    # Turns target_tracker's /cv/target_state into the root-frame CVTarget
+    # published on /cv/target (and panel_topic's corners into
+    # /cv/panel_polygon) -- consumed by mcb_relay (real_hardware:=true)
+    # and/or sim's cv_head_aim node (real_hardware:=false), so this runs in
+    # both modes; enable_cv_target_bridge lets you disable it if you intend
+    # to publish /cv/target yourself.
     point_to_cv_target_node = Node(
         package="sentry_pkg",
         executable="point_to_cv_target",
