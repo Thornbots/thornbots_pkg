@@ -19,6 +19,10 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*')),
     ],
     install_requires=['setuptools'],
+    # colcon only runs its pytest step when the package declares pytest
+    # here; without it `colcon test` silently reports 0 tests and test/
+    # never runs.
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='ubuntu',
     maintainer_email='baptisbc@rose-hulman.edu',
