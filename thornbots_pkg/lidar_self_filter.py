@@ -1,4 +1,6 @@
 """
+Filter the robot's own head out of the lidar scan.
+
 Blanks out a fixed angular sector of /scan_raw where the robot's own head
 sits in the lidar's FOV (fixed in the lidar's frame; no joint-state sub
 needed), republishing on /scan. Works for sim and real hardware.
@@ -14,6 +16,7 @@ from sensor_msgs.msg import LaserScan
 
 
 class LidarSelfFilter(Node):
+
     def __init__(self):
         super().__init__('lidar_self_filter')
 

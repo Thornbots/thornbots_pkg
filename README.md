@@ -1,4 +1,4 @@
-# sentry_pkg
+# thornbots_pkg
 
 Hardware interface and robot description for the Thornbots ARC 2026
 Sentry robot. Gets `/pose` (real hardware or `sim`) and `/scan` onto the
@@ -68,7 +68,7 @@ the workspace built and sourced:
 
 ```bash
 isaac_ros_common/scripts/dexec.sh -- bash -c \
-  "cd /workspaces/isaac_ros-dev && colcon build --packages-select sentry_pkg sentry_localization && source install/setup.bash"
+  "cd /workspaces/isaac_ros-dev && colcon build --packages-select thornbots_pkg sentry_localization && source install/setup.bash"
 ```
 
 `dexec.sh` already handles env sourcing correctly.
@@ -84,11 +84,11 @@ need to launch that package separately:
 # Against real hardware (default): also launches dji_serial_bridge_node
 # (/pose from the Type-C board's serial link) and sllidar_ros2 (/scan from
 # the RPLIDAR A2M8), and runs on wall-clock time.
-ros2 launch sentry_pkg auto.launch.py
+ros2 launch thornbots_pkg auto.launch.py
 
 # Against sim instead (run `ros2 launch sim sim.launch.py` first; it
 # provides /pose via pose_emulator.py and /scan itself):
-ros2 launch sentry_pkg auto.launch.py real_hardware:=false
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 ```
 
 `real_hardware` also drives `use_sim_time`; there's no separate arg for
@@ -105,9 +105,9 @@ whether `odom->root` is EKF-fused, layerable on top of any
 `localization_mode`.
 
 ```bash
-ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=amcl
-ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
-ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=true
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=amcl
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=true
 ```
 
 ### Other useful args
@@ -116,7 +116,7 @@ ros2 launch sentry_pkg auto.launch.py real_hardware:=false localization_mode:=no
   `sentry_localization`; see its README for what each controls.
 - `lidar_serial_port` / `lidar_baudrate` (defaults `/dev/ttyUSB0` /
   `115200`) are RPLIDAR A2M8 serial settings, only used when
-  `real_hardware:=true`. Owned by `sentry_pkg` since it owns the hardware
+  `real_hardware:=true`. Owned by `thornbots_pkg` since it owns the hardware
   drivers.
 
 Full argument docs live in the module docstrings at the top of
@@ -133,7 +133,7 @@ runs rviz2 itself unless `rviz:=false`. To point one at a hardware run:
 isaac_ros_common/scripts/dexec.sh -- rviz2 -d install/sim/share/sim/rviz/config.rviz
 ```
 
-## Nodes (`sentry_pkg/`)
+## Nodes (`thornbots_pkg/`)
 
 - `pose_translator.py`: `/pose` to `/odom` + `/joint_states`.
 - `odom_tf_broadcaster.py`: `/localization/odom` to `odom->root` TF.
@@ -159,7 +159,7 @@ rclpy, no live topics): `test_target_selector.py` covers
 scoring/centrality/grouping/hysteresis, `test_target_tracker.py` the spin
 detector/KF/radial correction, `test_point_to_cv_target.py` the intercept
 solve and latency stat. Run with `python3 -m pytest test/`, or via `colcon
-test --packages-select sentry_pkg`, which also runs the standard
+test --packages-select thornbots_pkg`, which also runs the standard
 `ament_copyright`/`ament_flake8`/`ament_pep257` checks.
 
 The localization drift/jerk-correction integration suite lives in
@@ -324,7 +324,7 @@ one period and lead must still be available. The consumer weighs the published
 
 ### mcb_relay.py
 
-Only `sentry_pkg` publishes or subscribes directly on
+Only `thornbots_pkg` publishes or subscribes directly on
 `dji_serial_bridge`'s topics; the bridge stays a pure UART/DJI-protocol
 translator with nothing else wired to it. This node reshapes each upstream
 package's output into what `dji_serial_bridge_node` expects.

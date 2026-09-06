@@ -1,4 +1,6 @@
 """
+Unit tests for target_selector_core.py's pure scoring/centrality/grouping.
+
 Unit tests for target_selector_core.py's pure scoring/centrality/grouping/
 hysteresis functions, against synthetic inputs -- not a live side-by-side
 against the old detection_picker_node (it consumed 2D pre-depth
@@ -14,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sentry_pkg.target_selector_core import (  # noqa: E402
+from thornbots_pkg.target_selector_core import (  # noqa: E402
     centrality_3d, cluster_centroid, compute_score, eligible,
     group_panels, is_excluded_by_team, RobotHysteresis,
 )
@@ -76,16 +78,16 @@ def test_score_is_additive_not_multiplicative():
     # priority bonus must be a conditional ADD, not conf*bonus or
     # centrality*bonus -- see detection_picker_node.cpp:281-284.
     base = compute_score(0.8, 0.5, class_id=0, center_weight=1.0,
-                          priority_class_bonus=0.5, priority_class_ids={2, 6})
+                         priority_class_bonus=0.5, priority_class_ids={2, 6})
     with_bonus = compute_score(0.8, 0.5, class_id=2, center_weight=1.0,
-                                priority_class_bonus=0.5, priority_class_ids={2, 6})
+                               priority_class_bonus=0.5, priority_class_ids={2, 6})
     assert with_bonus == base + 0.5
     assert base == 0.8 + 1.0 * 0.5
 
 
 def test_score_priority_bonus_only_for_listed_classes():
     s = compute_score(0.5, 0.5, class_id=3, center_weight=1.0,
-                       priority_class_bonus=0.5, priority_class_ids={2, 6})
+                      priority_class_bonus=0.5, priority_class_ids={2, 6})
     assert s == 1.0  # no bonus applied
 
 

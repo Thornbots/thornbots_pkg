@@ -1,4 +1,6 @@
 """
+Estimate the tracked robot's spin-centre position and velocity.
+
 target_tracker.py -- WHERE IT'S GOING: consumes target_selector's per-frame
 panel pick (/cv/panel_detection), estimates the tracked robot's spin-centre
 position/velocity in the odom frame, and publishes
@@ -8,23 +10,22 @@ point_to_cv_target.py's intercept solver. See README.md's
 rationale and open items (width-incidence refinement is deferred, gated
 behind the verification harness).
 """
+from dji_serial_bridge.msg import PanelDetection, TargetState
 import numpy as np
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
-from rclpy.duration import Duration
 import tf2_ros
 from tf2_ros import TransformException
 
-from dji_serial_bridge.msg import PanelDetection, TargetState
-
-from sentry_pkg.target_tracker_core import (
-    KalmanFilter6D, SpinDetector, corrected_centre,
+from thornbots_pkg.target_tracker_core import (
+    corrected_centre, KalmanFilter6D, SpinDetector,
 )
 
 
 def _quat_to_rot(x, y, z, w):
-    """Standard quaternion->3x3 rotation matrix (Hamilton convention)."""
+    """Convert a quaternion to a 3x3 rotation matrix (Hamilton convention)."""
     return np.array([
         [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
@@ -33,6 +34,7 @@ def _quat_to_rot(x, y, z, w):
 
 
 class TargetTracker(Node):
+
     def __init__(self):
         super().__init__('target_tracker')
 
@@ -90,10 +92,11 @@ class TargetTracker(Node):
         self._n_updates = 0
 
         self.get_logger().info(
-            f"target_tracker ready\n"
-            f"  {self.panel_topic} -> {self.output_topic} (frame={self.odom_frame})\n"
-            f"  pose_latency_s={self.pose_latency_s:.3f} track_max_gap_s={self.track_max_gap_s:.2f}\n"
-            f"  panel_radius_m={self.panel_radius_m:.2f} (approximation, see README.md)"
+            f'target_tracker ready\n'
+            f'  {self.panel_topic} -> {self.output_topic} (frame={self.odom_frame})\n'
+            f'  pose_latency_s={self.pose_latency_s:.3f} '
+            f'track_max_gap_s={self.track_max_gap_s:.2f}\n'
+            f'  panel_radius_m={self.panel_radius_m:.2f} (approximation, see README.md)'
         )
 
     def _reset(self, track_id):
@@ -127,8 +130,8 @@ class TargetTracker(Node):
             # as an error, not a stale or
             # phantom TargetState publish.
             self.get_logger().error(
-                f"TF lookup {self.odom_frame}<-{camera_frame}@{query_time.nanoseconds}"
-                f" failed: {ex}", throttle_duration_sec=1.0)
+                f'TF lookup {self.odom_frame}<-{camera_frame}@{query_time.nanoseconds}'
+                f' failed: {ex}', throttle_duration_sec=1.0)
             return
 
         t = tf.transform.translation

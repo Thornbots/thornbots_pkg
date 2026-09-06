@@ -1,4 +1,6 @@
 """
+Pick the single panel to shoot at from all detections.
+
 target_selector.py — WHAT to shoot: picks one panel per frame out of
 roi_depth_node's /cv/panel_detections (PanelDetectionArray, 3D, all
 detections). Replaces detection_picker_node.cpp, moved downstream of
@@ -18,19 +20,19 @@ changes.
 """
 import math
 
+from dji_serial_bridge.msg import PanelDetection, PanelDetectionArray, RefSysStatus
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-from dji_serial_bridge.msg import PanelDetection, PanelDetectionArray, RefSysStatus
-
-from sentry_pkg.target_selector_core import (
+from thornbots_pkg.target_selector_core import (
     centrality_3d, cluster_centroid, compute_score, eligible,
     group_panels, RobotHysteresis,
 )
 
 
 class TargetSelector(Node):
+
     def __init__(self):
         super().__init__('target_selector')
 
@@ -53,7 +55,7 @@ class TargetSelector(Node):
         self.min_score = float(gp('min_score').value)
         self.center_weight = float(gp('center_weight').value)
         self.priority_class_bonus = float(gp('priority_class_bonus').value)
-        self.priority_class_ids = set(int(c) for c in gp('priority_class_ids').value)
+        self.priority_class_ids = {int(c) for c in gp('priority_class_ids').value}
         self.centrality_max_angle_rad = float(gp('centrality_max_angle_rad').value)
         self.panel_group_radius_m = float(gp('panel_group_radius_m').value)
 
@@ -71,13 +73,13 @@ class TargetSelector(Node):
             RefSysStatus, self.ref_sys_topic, self.on_ref_sys, qos_profile_sensor_data)
 
         self.get_logger().info(
-            f"target_selector ready\n"
-            f"  {panel_array_topic} -> {panel_topic}\n"
-            f"  score = conf + {self.center_weight}*centrality + "
-            f"{self.priority_class_bonus} if class in {sorted(self.priority_class_ids)}"
-            f"  (min_score={self.min_score} gates on raw confidence only)\n"
-            f"  panel_group_radius_m={self.panel_group_radius_m}\n"
-            f"  team source: {self.ref_sys_topic}"
+            f'target_selector ready\n'
+            f'  {panel_array_topic} -> {panel_topic}\n'
+            f'  score = conf + {self.center_weight}*centrality + '
+            f'{self.priority_class_bonus} if class in {sorted(self.priority_class_ids)}'
+            f'  (min_score={self.min_score} gates on raw confidence only)\n'
+            f'  panel_group_radius_m={self.panel_group_radius_m}\n'
+            f'  team source: {self.ref_sys_topic}'
         )
 
     def on_ref_sys(self, msg):
@@ -109,7 +111,7 @@ class TargetSelector(Node):
             if self.is_blue_team is None and msg.detections:
                 self.get_logger().warn(
                     f"No RefSysStatus on '{self.ref_sys_topic}' yet -- "
-                    "team colour unknown, passing all detections through",
+                    'team colour unknown, passing all detections through',
                     throttle_duration_sec=5.0)
             return
 

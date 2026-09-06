@@ -1,11 +1,12 @@
 """
+Unit tests for target_tracker_core.py's normal/spin/Kalman-filter logic.
+
 Unit tests for target_tracker_core.py's pure normal-estimation/spin-
 detection/Kalman-filter logic, against synthetic inputs. Mirrors
 test_target_selector.py -- no rclpy, no ROS message packages, runs on a
 bare Python 3 + pytest install. Run with
 `python3 -m pytest test/test_target_tracker.py`.
 """
-import math
 import os
 import sys
 
@@ -13,7 +14,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sentry_pkg.target_tracker_core import (  # noqa: E402
+from thornbots_pkg.target_tracker_core import (  # noqa: E402
     corrected_centre, KalmanFilter6D, SpinDetector,
 )
 

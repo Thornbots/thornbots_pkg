@@ -1,14 +1,14 @@
-import rclpy
-from rclpy.node import Node
-from rclpy.time import Time
-from rclpy.duration import Duration
-from rclpy.qos import qos_profile_sensor_data
+from dji_serial_bridge.msg import CVTarget, FireCommand, PanelDetection, RobotPose, TargetState
 from geometry_msgs.msg import PolygonStamped
+import rclpy
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
 import tf2_ros
 from tf2_ros import TransformException
-from dji_serial_bridge.msg import CVTarget, FireCommand, PanelDetection, RobotPose, TargetState
 
-from sentry_pkg.point_to_cv_target_core import LatencyStat, solve_intercept
+from thornbots_pkg.point_to_cv_target_core import LatencyStat, solve_intercept
 
 
 def _quat_to_rot(x, y, z, w):
@@ -35,6 +35,8 @@ def _rotate(R, v):
 
 class PointToCvTarget(Node):
     """
+    Turn target_tracker's target state into a root-frame aim point.
+
     WHERE TO AIM: turns target_tracker's /cv/target_state (odom-frame
     spin-centre KF estimate) into a root-frame /cv/target aim point for
     mcb_relay, applying latency + time-of-flight lead. Confidence
@@ -120,14 +122,14 @@ class PointToCvTarget(Node):
         self.latency_stat = LatencyStat()
 
         self.get_logger().info(
-            f"point_to_cv_target ready\n"
-            f"  {self.panel_topic} (confidence/liveness) + {self.target_state_topic} (position)\n"
-            f"  -> {self.output_topic} (CVTarget, ROOT frame, @ {publish_rate_hz:.1f}Hz)\n"
-            f"  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} "
-            f"firmware_latency_s={self.firmware_latency_s}\n"
-            f"  target_timeout_s={self.target_timeout_s:.2f}\n"
-            f"  -> {self.fire_topic} (FireCommand, placeholder trigger @ "
-            f"{self.fire_rate_hz:.2f}Hz when confidence >= {self.fire_confidence_threshold})"
+            f'point_to_cv_target ready\n'
+            f'  {self.panel_topic} (confidence/liveness) + {self.target_state_topic} (position)\n'
+            f'  -> {self.output_topic} (CVTarget, ROOT frame, @ {publish_rate_hz:.1f}Hz)\n'
+            f'  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} '
+            f'firmware_latency_s={self.firmware_latency_s}\n'
+            f'  target_timeout_s={self.target_timeout_s:.2f}\n'
+            f'  -> {self.fire_topic} (FireCommand, placeholder trigger @ '
+            f'{self.fire_rate_hz:.2f}Hz when confidence >= {self.fire_confidence_threshold})'
         )
 
     def on_panel(self, msg):
@@ -177,7 +179,7 @@ class PointToCvTarget(Node):
         self.target_active = False
         self.get_logger().info(
             f"No message on '{self.panel_topic}' for {idle_s:.2f} s - publishing "
-            f"zero-confidence CVTarget and pausing until the next detection arrives."
+            f'zero-confidence CVTarget and pausing until the next detection arrives.'
         )
 
     def on_publish_tick(self):
@@ -202,14 +204,18 @@ class PointToCvTarget(Node):
         self.pub.publish(out)
 
     def _compute_aim_point(self):
-        """Returns (aim_pos_root, lead_applied, track_valid) or None if no
+        """
+        Return the root-frame aim point, or None if none is available yet.
+
+        Returns (aim_pos_root, lead_applied, track_valid) or None if no
         usable position exists yet (no target_state received) or TF fails
-        (logged loudly, never silently) -- caller emits zero-confidence."""
+        (logged loudly, never silently) -- caller emits zero-confidence.
+        """
         state = self.latest_state
         if state is None:
             self.get_logger().warn(
                 f"No message on '{self.target_state_topic}' yet -- "
-                "point_to_cv_target has confidence but no position to emit.",
+                'point_to_cv_target has confidence but no position to emit.',
                 throttle_duration_sec=5.0)
             return None
 
@@ -219,7 +225,7 @@ class PointToCvTarget(Node):
                 timeout=Duration(seconds=0.05))
         except TransformException as ex:
             self.get_logger().error(
-                f"TF lookup {self.root_frame}<-{self.odom_frame} failed: {ex}",
+                f'TF lookup {self.root_frame}<-{self.odom_frame} failed: {ex}',
                 throttle_duration_sec=1.0)
             return None
 
@@ -246,7 +252,7 @@ class PointToCvTarget(Node):
                 timeout=Duration(seconds=0.05))
         except TransformException as ex:
             self.get_logger().error(
-                f"TF lookup {self.odom_frame}<-{self.root_frame} failed: {ex}",
+                f'TF lookup {self.odom_frame}<-{self.root_frame} failed: {ex}',
                 throttle_duration_sec=1.0)
             return None
 
