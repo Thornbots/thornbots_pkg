@@ -1,7 +1,7 @@
-import rclpy
-from rclpy.node import Node
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
 
 
@@ -14,7 +14,7 @@ class OdomTfBroadcaster(Node):
     what odom->root really is) and always publishes the result on
     /localization/odom (nav_msgs/Odometry), regardless of backend. This
     node's only job is turning that into the odom->root TF edge, so
-    sentry_pkg never needs to know which localization_mode is active.
+    thornbots_pkg never needs to know which localization_mode is active.
     """
 
     def __init__(self):

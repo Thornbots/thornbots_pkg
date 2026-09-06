@@ -1,4 +1,4 @@
-# sentry_pkg: agent notes
+# thornbots_pkg: agent notes
 
 Hardware interface, robot description, and CV target selection for the Thornbots
 Sentry. **Reference docs live in `README.md`** (topics, nodes, launch args,
@@ -9,9 +9,9 @@ Sentry. **Reference docs live in `README.md`** (topics, nodes, launch args,
 
 **This package is shadowed by `/workspaces/ros2_ws`** (`Dockerfile.thornbots`
 LAYER `RECLONE_SENTRY` clones it from GitHub). Once it's built locally, an edit
-under `src/sentry_pkg` is live under `dexec.sh` but _not_ in the user's
+under `src/thornbots_pkg` is live under `dexec.sh` but _not_ in the user's
 terminal, which resolves to the image-baked clone. Before trusting any result:
-`../isaac_ros_common/scripts/dexec.sh -- ros2 pkg prefix sentry_pkg`
+`../isaac_ros_common/scripts/dexec.sh -- ros2 pkg prefix thornbots_pkg`
 (`/workspaces/isaac_ros-dev/…` = your edit is live).
 
 Stop launch trees with `../isaac_ros_common/scripts/kill_launch.sh <pid>`, never

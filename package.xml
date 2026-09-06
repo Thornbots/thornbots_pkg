@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>sentry_pkg</name>
+  <name>thornbots_pkg</name>
   <version>0.0.0</version>
   <description>Sentry hardware interface and robot description for ARC 2026</description>
   <maintainer email="baptisbc@rose-hulman.edu">ubuntu</maintainer>

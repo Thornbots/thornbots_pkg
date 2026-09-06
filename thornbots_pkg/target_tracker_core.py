@@ -1,7 +1,9 @@
 """
+Pure numpy logic for target_tracker.py.
+
 target_tracker_core.py -- pure numpy logic for target_tracker.py (no rclpy
 import) so it's unit-testable standalone, mirroring target_selector_core.py.
-See sentry_pkg/README.md's ### target_tracker.py Notes.
+See thornbots_pkg/README.md's ### target_tracker.py Notes.
 """
 import math
 
@@ -9,7 +11,10 @@ import numpy as np
 
 
 def corrected_centre(panel_center, radius_m):
-    """Chassis-centre estimate: push panel_center further along the same
+    """
+    Estimate the chassis centre by projecting panel_center outward.
+
+    Chassis-centre estimate: push panel_center further along the same
     camera-to-panel ray by radius_m, i.e. approximate the chassis centre as
     sitting directly behind the visible panel along the existing line of
     sight. Same frame as panel_center (camera or odom -- direction-only,
@@ -33,7 +38,8 @@ def corrected_centre(panel_center, radius_m):
     instead of frame_id. Real depth-based plane-fitting for a true normal
     is out of scope (only viable under ~2m, where depth noise is below the
     panel's tilt) -- this radial approximation is the honest fallback, not a
-    placeholder for something better later."""
+    placeholder for something better later.
+    """
     norm = np.linalg.norm(panel_center)
     if norm < 1e-9:
         return np.array(panel_center, dtype=float)
@@ -42,7 +48,10 @@ def corrected_centre(panel_center, radius_m):
 
 
 class SpinDetector:
-    """Estimates spin rate from class_id handoff timing (the visible panel
+    """
+    Estimate spin rate from class_id handoff timing.
+
+    Estimates spin rate from class_id handoff timing (the visible panel
     id changing as the robot rotates). Coarse by design: a spinning
     Standard-class robot presents 4 panels 90 degrees apart, so handoffs
     are assumed to occur roughly once per quarter revolution -- this
@@ -50,7 +59,8 @@ class SpinDetector:
     not distinguish spin direction, but it's enough to decide the binary
     spin/no-spin branch, which is the only thing that gates behaviour (see
     target_tracker.py). spin_phase is a coarse re-derivation from elapsed
-    time since the last handoff, not a real phase-locked estimate."""
+    time since the last handoff, not a real phase-locked estimate.
+    """
 
     def __init__(self, handoff_timeout_s, min_handoffs, cv_max):
         self.handoff_timeout_s = handoff_timeout_s
@@ -64,7 +74,7 @@ class SpinDetector:
         self._intervals = []
 
     def update(self, t_sec, class_id):
-        """Returns (spinning: bool, spin_hz: float, spin_phase: float)."""
+        """Return (spinning: bool, spin_hz: float, spin_phase: float)."""
         if self._last_class_id is None:
             self._last_class_id = class_id
             self._last_change_t = t_sec
@@ -101,13 +111,17 @@ class SpinDetector:
 
 
 class KalmanFilter6D:
-    """6-state constant-velocity Kalman filter: [x,y,z,vx,vy,vz], 3-D
+    """
+    Run a 6-state constant-velocity Kalman filter over 3-D position.
+
+    6-state constant-velocity Kalman filter: [x,y,z,vx,vy,vz], 3-D
     position measurements only (H picks out x,y,z). Isotropic per-axis
-    process/measurement noise -- no cross-axis coupling."""
+    process/measurement noise -- no cross-axis coupling.
+    """
 
     def __init__(self, initial_pos, t_sec, pos_var):
         self.state = np.array([initial_pos[0], initial_pos[1], initial_pos[2],
-                                0.0, 0.0, 0.0])
+                               0.0, 0.0, 0.0])
         # Large initial velocity uncertainty -- the first sample carries no
         # velocity information.
         self.P = np.diag([pos_var, pos_var, pos_var, 4.0, 4.0, 4.0])
@@ -123,7 +137,7 @@ class KalmanFilter6D:
         q = process_noise_accel ** 2
         # Standard discrete white-noise-acceleration process noise per axis.
         Q_block = np.array([[dt ** 4 / 4.0, dt ** 3 / 2.0],
-                             [dt ** 3 / 2.0, dt ** 2]]) * q
+                            [dt ** 3 / 2.0, dt ** 2]]) * q
         Q = np.zeros((6, 6))
         for i in range(3):
             idx = [i, i + 3]

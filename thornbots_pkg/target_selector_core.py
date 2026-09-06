@@ -1,17 +1,23 @@
 """
+Pure scoring/centrality/grouping/hysteresis logic for target_selector.py.
+
 target_selector_core.py — pure scoring/centrality/grouping/hysteresis logic
 for target_selector.py, with no rclpy or ROS message imports so it's
 unit-testable standalone (test/test_target_selector.py) without a built
-workspace. See sentry_pkg/README.md's ### target_selector.py Notes for the
+workspace. See thornbots_pkg/README.md's ### target_selector.py Notes for the
 clustering-rule tradeoff and scoring history.
 """
 import math
 
 
 def is_excluded_by_team(class_id, is_blue_team):
-    """True if class_id belongs to our own team (mirrors the old picker's
+    """
+    Report whether class_id belongs to our own team.
+
+    True if class_id belongs to our own team (mirrors the old picker's
     isExcludedByTeam). is_blue_team=None (no RefSysStatus yet) never
-    excludes, so the pipeline runs before the first status arrives."""
+    excludes, so the pipeline runs before the first status arrives.
+    """
     if is_blue_team is None:
         return False
     if is_blue_team:
@@ -20,12 +26,16 @@ def is_excluded_by_team(class_id, is_blue_team):
 
 
 def centrality_3d(x, y, z, max_angle_rad):
-    """Bearing off the camera's forward (+x) axis, 1.0 at boresight, 0.0 at
+    """
+    Score bearing off the camera's forward axis, 1.0 at boresight.
+
+    Bearing off the camera's forward (+x) axis, 1.0 at boresight, 0.0 at
     max_angle_rad or beyond. Replaces the old picker's image-plane-distance
     centrality now that panels are deprojected to 3D: this is the post-depth
     equivalent, not a port of the pixel formula (deliberate). x<=0 (behind
     the camera) scores 0 rather than a
-    divide-by-zero/undefined atan2 case."""
+    divide-by-zero/undefined atan2 case.
+    """
     if x <= 0.0 or max_angle_rad <= 0.0:
         return 0.0
     angle = math.atan2(math.hypot(y, z), x)
@@ -34,11 +44,15 @@ def centrality_3d(x, y, z, max_angle_rad):
 
 
 def compute_score(confidence, centrality, class_id, center_weight,
-                   priority_class_bonus, priority_class_ids):
-    """score = confidence + center_weight*centrality + priority_class_bonus
+                  priority_class_bonus, priority_class_ids):
+    """
+    Compute the panel score from confidence, centrality, and class.
+
+    score = confidence + center_weight*centrality + priority_class_bonus
     (added conditionally, NOT confidence*priority_class_bonus or any other
     multiplicative form -- see detection_picker_node.cpp:281-284, which this
-    ports exactly)."""
+    ports exactly).
+    """
     score = confidence + center_weight * centrality
     if class_id in priority_class_ids:
         score += priority_class_bonus
@@ -46,16 +60,23 @@ def compute_score(confidence, centrality, class_id, center_weight,
 
 
 def eligible(confidence, class_id, is_blue_team, min_score):
-    """min_score gates on raw confidence only (detection_picker_node.cpp:277
+    """
+    Report whether a detection passes the confidence gate.
+
+    min_score gates on raw confidence only (detection_picker_node.cpp:277
     and its comment at :38-39) -- centrality/priority bonus never resurrect
-    a low-confidence detection, they only re-rank ones already eligible."""
+    a low-confidence detection, they only re-rank ones already eligible.
+    """
     if is_excluded_by_team(class_id, is_blue_team):
         return False
     return confidence >= min_score
 
 
 def group_panels(panels, radius_m):
-    """Single-linkage clustering of panels (each a dict with 'x','y','z')
+    """
+    Cluster panels into robots by single-linkage 3D distance.
+
+    Single-linkage clustering of panels (each a dict with 'x','y','z')
     into robots, by 3D distance in the shared camera frame. All panels in
     one PanelDetectionArray share one camera pose, so camera-frame Euclidean
     distance equals true metric distance -- no need to transform to odom.
@@ -105,7 +126,10 @@ def cluster_centroid(panels, indices):
 
 
 class RobotHysteresis:
-    """Robot-level hysteresis (never panel-level -- panels of a spinning
+    """
+    Track a single robot across frames with switch hysteresis.
+
+    Robot-level hysteresis (never panel-level -- panels of a spinning
     robot legitimately vanish every 0.5-1s, so panel stickiness would delay
     every correct handoff). A challenger cluster must beat the incumbent's
     score by switch_margin for switch_hold_frames consecutive frames before
@@ -125,8 +149,11 @@ class RobotHysteresis:
         self._next_id = 1
 
     def update(self, clusters):
-        """clusters: list of dict(centroid=(x,y,z), score=float, key=any).
-        Returns the winning cluster's `key`, or None if clusters is empty."""
+        """
+        Return the winning cluster's key, or None if clusters is empty.
+
+        clusters: list of dict(centroid=(x,y,z), score=float, key=any).
+        """
         if not clusters:
             return None
 

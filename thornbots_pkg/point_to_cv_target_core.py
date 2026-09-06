@@ -1,4 +1,6 @@
 """
+Pure intercept-solve math for point_to_cv_target.py.
+
 point_to_cv_target_core.py -- pure intercept-solve math for
 point_to_cv_target.py (no rclpy import), unit-tested standalone in
 test/test_point_to_cv_target.py. See README.md's
@@ -8,8 +10,11 @@ import math
 
 
 def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
-                     iterations=3, shooter_vel=(0.0, 0.0, 0.0)):
-    """Fixed-point time-of-flight solve, no gravity/drag/elevation (Type-C
+                    iterations=3, shooter_vel=(0.0, 0.0, 0.0)):
+    """
+    Solve for time-of-flight intercept via fixed-point iteration.
+
+    Fixed-point time-of-flight solve, no gravity/drag/elevation (Type-C
     owns those): t <- |p + v*(tau+t) - (shooter + shooter_vel*t)| / v_muzzle.
 
     target_pos, target_vel, shooter_pos, shooter_vel: (x,y,z) tuples, same
@@ -45,8 +50,11 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
 
 
 class LatencyStat:
-    """Running mean/count of now-detection_stamp latency samples (seconds).
-    The repo's first real latency measurement."""
+    """
+    Running mean/count of now-detection_stamp latency samples (seconds).
+
+    The repo's first real latency measurement.
+    """
 
     def __init__(self):
         self.count = 0
