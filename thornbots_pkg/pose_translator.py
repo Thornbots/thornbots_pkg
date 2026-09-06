@@ -1,20 +1,22 @@
-import rclpy
-from rclpy.node import Node
+from dji_serial_bridge.msg import RobotPose
 from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from dji_serial_bridge.msg import RobotPose
 
 
 class PoseTranslator(Node):
     """
+    Turn /pose into /odom and /joint_states.
+
     Turns /pose (dji_serial_bridge/msg/RobotPose, from real hardware or
     sim/pose_emulator.py) into /odom and /joint_states -- raw, uncorrected
     wheel odometry, not the localized odom->root pose. sentry_localization
     consumes /odom and publishes the corrected result on /localization/odom;
     this package's odom_tf_broadcaster turns that back into odom->root TF.
-    See sentry_pkg/README.md for the full pose_translator ->
+    See thornbots_pkg/README.md for the full pose_translator ->
     sentry_localization -> odom_tf_broadcaster pipeline.
     """
 
@@ -101,12 +103,14 @@ class PoseTranslator(Node):
         js.position = [float(msg.head_yaw), float(msg.head_pitch)]
         self.joint_pub.publish(js)
 
+
 def main(args=None):
     rclpy.init(args=args)
     node = PoseTranslator()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

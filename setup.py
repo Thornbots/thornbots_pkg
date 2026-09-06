@@ -1,9 +1,9 @@
-import os
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
-package_name = 'sentry_pkg'
+package_name = 'thornbots_pkg'
 
 setup(
     name=package_name,
@@ -30,13 +30,13 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'pose_translator = sentry_pkg.pose_translator:main',
-            'odom_tf_broadcaster = sentry_pkg.odom_tf_broadcaster:main',
-            'lidar_self_filter = sentry_pkg.lidar_self_filter:main',
-            'mcb_relay = sentry_pkg.mcb_relay:main',
-            'point_to_cv_target = sentry_pkg.point_to_cv_target:main',
-            'target_selector = sentry_pkg.target_selector:main',
-            'target_tracker = sentry_pkg.target_tracker:main',
+            'pose_translator = thornbots_pkg.pose_translator:main',
+            'odom_tf_broadcaster = thornbots_pkg.odom_tf_broadcaster:main',
+            'lidar_self_filter = thornbots_pkg.lidar_self_filter:main',
+            'mcb_relay = thornbots_pkg.mcb_relay:main',
+            'point_to_cv_target = thornbots_pkg.point_to_cv_target:main',
+            'target_selector = thornbots_pkg.target_selector:main',
+            'target_tracker = thornbots_pkg.target_tracker:main',
         ],
     },
 )

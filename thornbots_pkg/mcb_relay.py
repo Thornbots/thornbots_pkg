@@ -1,16 +1,18 @@
 import math
 
+from dji_serial_bridge.msg import CVTarget, FireCommand
+from geometry_msgs.msg import Point
+from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from geometry_msgs.msg import Point
-from nav_msgs.msg import Odometry
-from dji_serial_bridge.msg import CVTarget, FireCommand
 
 
 class McbRelay(Node):
     """
-    Sole relay onto dji_serial_bridge_node's topics -- only sentry_pkg talks
+    Relay all traffic to and from dji_serial_bridge_node.
+
+    Sole relay onto dji_serial_bridge_node's topics -- only thornbots_pkg talks
     to dji_serial_bridge directly. See README.md for design rationale.
 
     relocalize: publishes corrected (x, y) on relocalize_output_topic when
@@ -70,11 +72,11 @@ class McbRelay(Node):
             FireCommand, fire_command_in, self.fire_command_pub.publish, 10)
 
         self.get_logger().info(
-            f"mcb_relay ready\n"
-            f"  {localization_odom_topic} vs {raw_odom_topic} -> {relocalize_out}"
-            f" (threshold={self._error_threshold}m, max_move_speed={self._max_move_speed}m/s)\n"
-            f"  {cv_target_in} -> {cv_target_out}\n"
-            f"  {fire_command_in} -> {fire_command_out}"
+            f'mcb_relay ready\n'
+            f'  {localization_odom_topic} vs {raw_odom_topic} -> {relocalize_out}'
+            f' (threshold={self._error_threshold}m, max_move_speed={self._max_move_speed}m/s)\n'
+            f'  {cv_target_in} -> {cv_target_out}\n'
+            f'  {fire_command_in} -> {fire_command_out}'
         )
 
     def _raw_odom_callback(self, msg):
@@ -100,8 +102,8 @@ class McbRelay(Node):
         point = Point(x=loc_x, y=loc_y, z=0.0)
         self.relocalize_pub.publish(point)
         self.get_logger().info(
-            f"Localization drifted {error:.3f}m from raw odom - sent "
-            f"relocalize correction x={loc_x:.3f} y={loc_y:.3f}",
+            f'Localization drifted {error:.3f}m from raw odom - sent '
+            f'relocalize correction x={loc_x:.3f} y={loc_y:.3f}',
             throttle_duration_sec=1.0,
         )
 
