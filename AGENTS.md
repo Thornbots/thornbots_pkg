@@ -8,9 +8,9 @@ Sentry. **Reference docs live in `README.md`** (topics, nodes, launch args,
 `sentry_localization`'s launch. Don't launch that package separately.
 
 **This package is shadowed by `/workspaces/ros2_ws`** (`Dockerfile.thornbots`
-LAYER `RECLONE_SENTRY` clones it from GitHub). Once it's built locally, an edit
-under `src/thornbots_pkg` is live under `dexec.sh` but _not_ in the user's
-terminal, which resolves to the image-baked clone. Before trusting any result:
+LAYER 5 copies this directory in at build time). Once it's built locally, an
+edit under `src/thornbots_pkg` is live under `dexec.sh` but _not_ in the user's
+terminal, which resolves to the image-baked snapshot. Before trusting any result:
 `../isaac_ros_common/scripts/dexec.sh -- ros2 pkg prefix thornbots_pkg`
 (`/workspaces/isaac_ros-dev/…` = your edit is live).
 
