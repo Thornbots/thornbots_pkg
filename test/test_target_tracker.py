@@ -15,10 +15,8 @@
 """
 Unit tests for target_tracker_core.py's normal/spin/Kalman-filter logic.
 
-Unit tests for target_tracker_core.py's pure normal-estimation/spin-
-detection/Kalman-filter logic, against synthetic inputs. Mirrors
-test_target_selector.py -- no rclpy, no ROS message packages, runs on a
-bare Python 3 + pytest install. Run with
+Synthetic inputs only, mirroring test_target_selector.py -- no rclpy, no
+ROS message packages, runs on a bare Python 3 + pytest install. Run with
 `python3 -m pytest test/test_target_tracker.py`.
 """
 import os

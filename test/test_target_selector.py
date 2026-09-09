@@ -13,16 +13,15 @@
 # limitations under the License.
 
 """
-Unit tests for target_selector_core.py's pure scoring/centrality/grouping.
+Unit tests for target_selector_core.py's scoring/centrality/grouping/hysteresis.
 
-Unit tests for target_selector_core.py's pure scoring/centrality/grouping/
-hysteresis functions, against synthetic inputs -- not a live side-by-side
-against the old detection_picker_node (it consumed 2D pre-depth
-detections and the new selector consumes 3D post-depth ones, so "identical
-picks" isn't well defined between them). Imports only
-target_selector_core (no rclpy, no ROS message packages), so this runs on
-a bare Python 3 + pytest install with no
-workspace build. Run with `python3 -m pytest test/test_target_selector.py`.
+Synthetic inputs only -- not a live side-by-side against the old
+detection_picker_node (it consumed 2D pre-depth detections and the new
+selector consumes 3D post-depth ones, so "identical picks" isn't well
+defined between them). Imports only target_selector_core (no rclpy, no
+ROS message packages), so this runs on a bare Python 3 + pytest install
+with no workspace build. Run with
+`python3 -m pytest test/test_target_selector.py`.
 """
 import math
 import os
