@@ -141,11 +141,9 @@ class KalmanFilter6D:
         self.P = np.diag([pos_var, pos_var, pos_var, 4.0, 4.0, 4.0])
         self._t_sec = t_sec
 
-    def predict(self, t_sec, process_noise_accel):
-        dt = t_sec - self._t_sec
-        self._t_sec = t_sec
-        if dt <= 0.0:
-            return
+    @staticmethod
+    def _transition(dt, process_noise_accel):
+        """Return (F, Q) for a dt-second constant-velocity step."""
         F = np.eye(6)
         F[0, 3] = F[1, 4] = F[2, 5] = dt
         q = process_noise_accel ** 2
@@ -156,8 +154,30 @@ class KalmanFilter6D:
         for i in range(3):
             idx = [i, i + 3]
             Q[np.ix_(idx, idx)] = Q_block
+        return F, Q
+
+    def predict(self, t_sec, process_noise_accel):
+        dt = t_sec - self._t_sec
+        self._t_sec = t_sec
+        if dt <= 0.0:
+            return
+        F, Q = self._transition(dt, process_noise_accel)
         self.state = F @ self.state
         self.P = F @ self.P @ F.T + Q
+
+    def predicted(self, t_sec, process_noise_accel):
+        """
+        Extrapolate to t_sec without mutating the filter.
+
+        Returns (state, variance) at t_sec. Used to report the estimate at
+        a time later than the filter's own -- the spin branch updates at
+        the window's mean time, which lags the newest detection.
+        """
+        dt = t_sec - self._t_sec
+        if dt <= 0.0:
+            return self.state, np.diag(self.P)
+        F, Q = self._transition(dt, process_noise_accel)
+        return F @ self.state, np.diag(F @ self.P @ F.T + Q)
 
     def update(self, meas, pos_var):
         H = np.zeros((3, 6))
@@ -168,7 +188,3 @@ class KalmanFilter6D:
         K = self.P @ H.T @ np.linalg.inv(S)
         self.state = self.state + K @ y
         self.P = (np.eye(6) - K @ H) @ self.P
-
-    @property
-    def variance(self):
-        return np.diag(self.P)

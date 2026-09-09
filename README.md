@@ -308,12 +308,21 @@ The KF is 6-state constant-velocity with `R` scaled by range:
 depth-error model (depth ~z^2, lateral pixel ~z, dominated by z^2 at any
 real range). `spin_meas_inflation` defaults to 1.0, since a running mean of
 ~30 samples is *less* noisy than a single sample and inflating `R` for the
-spinning branch would be backwards. It exists for a different, real concern:
-the running mean lags a rotating orbit, averaging positions up to
-`spin_window_s` old against a centre that is still moving. That is a bias in
-the estimate rather than extra variance, so inflating `R` does not fix it
-either. It is flagged here rather than silently defaulted to a number the
-code cannot justify.
+spinning branch would be backwards. It stays as a knob for the residual
+orbit-averaging bias (a rotating orbit averaged over `spin_window_s` does not
+average to the orbit's centre), which is a bias rather than extra variance,
+so inflating `R` does not really fix it either.
+
+The larger half of that lag is handled directly instead. The window mean is a
+measurement at the window's *mean* time, roughly `spin_window_s / 2` behind
+the newest sample, so it is fed to the KF at that time (`meas_t`), not at the
+detection stamp. Stamping it at the newest sample made the filter read a
+position a quarter second stale and infer a velocity biased low — 0.25 s times
+chassis speed, which the lead solve then extrapolates. Because the filter's
+time base now trails the newest detection, the published `centre`/`velocity`/
+`variance` come from `KalmanFilter6D.predicted(t_sec)`, a non-mutating
+extrapolation to the detection stamp the message is published under, so
+`header.stamp` and the payload agree.
 
 Reset (fresh KF, cleared spin history and window) happens only on a
 `robot_track_id` change or a `track_max_gap_s` gap, never on a plain
@@ -400,9 +409,15 @@ state rather than reacting to a subscription.
 
 Three cases per tick in `_compute_aim_point()`:
 
-- No `TargetState` yet, or the TF lookup fails: return `None` and publish
+- No usable `TargetState`, or the TF lookup fails: return `None` and publish
   zero confidence. TF failure logs an `ERROR` (throttled), same reasoning as
-  `target_tracker`'s lookup.
+  `target_tracker`'s lookup. "Usable" means it exists, is younger than
+  `target_timeout_s`, and its `robot_track_id` matches the newest panel's.
+  That last check matters because liveness and position arrive on different
+  topics: on a target switch the panel carries the new robot immediately
+  while `target_state` still holds the old one (the tracker resets and needs
+  two updates to reconverge), and without the check those frames aim at where
+  the *previous* robot was, at full confidence and `track_valid=True`.
 - `valid == False`: emit the raw `panel` field, `lead_applied=False`,
   `track_valid=False`. It never extrapolates off an unconverged track, since
   a stub fire-trigger would otherwise shoot at a guess.
@@ -412,10 +427,14 @@ Three cases per tick in `_compute_aim_point()`:
   Type-C owns those. `lead_enabled` is one param flip between before and
   after for a hit-rate sweep.
 
-tau is the measured `now - detection_stamp` running mean (`LatencyStat`,
-updated on every `TargetState`) plus `firmware_latency_s`, a placeholder
-that needs measuring on hardware. That running mean is the repo's first real
-latency number, and it's logged rather than only used internally.
+tau is this tick's own `now - state.header.stamp` plus `firmware_latency_s`,
+a placeholder that needs measuring on hardware. It is deliberately *not*
+`LatencyStat.mean`: publishing runs on its own timer over a cached state, so
+by tick time that state is older than it was on arrival by up to a tracker
+period plus the tick phase (measured mean 20 ms, tick 30 ms later, true age
+50 ms) — and the error jitters tick to tick rather than sitting at a constant
+offset. `LatencyStat` stays as the reported diagnostic, the repo's first real
+latency number, logged rather than used in the solve.
 
 Frame conversion goes through a TF lookup rather than a fixed axis swap.
 `lookup_transform(root_frame, odom_frame, Time())` converts the odom-frame
