@@ -262,6 +262,29 @@ degrading silently would let a broken TF tree pass in sim (where
 `robot_state_publisher` always happens to be running) and fail invisibly at
 the competition.
 
+TF *missing* and TF *behind* are different failures, though, and only the
+first is fatal. A detection stamp newer than the newest TF means the camera
+pose is stale by that gap, not wrong, so `_lookup_camera_tf()` retries at
+`Time()` (newest available) and accepts it when the gap is within
+`tf_future_tolerance_s` (0.25s), warning each time; beyond that it drops the
+detection and says how far behind the chain is. The bound matters more than
+the fallback: the induced bearing error is the gap times the head slew rate,
+so a generous tolerance would replace "no output" with confidently wrong
+aim, which is worse on a firing path.
+
+The failure this exists for: relaunching `auto.launch.py` against an
+already-running `sim.launch.py` cold-starts its nodes into a live topic
+stream and they never catch up, leaving TF 0.55-0.83s behind detections and
+the tracker publishing nothing at all (measured 2026-09-09: 0 lookup
+failures when both stacks start together, 17-25 when only `auto` restarts).
+The cause is upstream of this package -- sim's world SDF runs 1kHz physics
+and gz publishes `/clock` every step, so `/clock` lands at ~870Hz and
+`/sim/raw_joint_states` at ~918Hz, and every `use_sim_time` Python node in
+both stacks burns 35-66% of a core servicing it (`odom_tf_broadcaster`
+republishes one transform for 38%). `tf_future_tolerance_s` turns that into
+a legible error rather than fixing it; the fix is throttling those two
+topics in `sim`, and until that lands, start both stacks together.
+
 `SpinDetector` picks the spin/no-spin branch off the timing between
 `class_id` changes, not any single interval: it needs `spin_min_handoffs`
 (3) roughly equal intervals (coefficient of variation under `spin_cv_max`,
