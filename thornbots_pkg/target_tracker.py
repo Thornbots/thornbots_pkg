@@ -66,9 +66,9 @@ class TargetTracker(Node):
         self.declare_parameter('meas_noise_range_coeff', 0.01)  # extra stddev per metre of range
         # 1.0 (no inflation) by default: a spin_window_s running mean of
         # ~30 samples is LESS noisy than a single raw sample, so inflating
-        # R here would be backwards unless hedging against the mean
-        # lagging a rotating orbit -- a real but unquantified effect, left
-        # as a tunable knob rather than a default guess. See README.md.
+        # R here would be backwards. Kept as a knob for the residual
+        # orbit-averaging bias (the mean's time lag is corrected via
+        # meas_t below) -- unquantified, so no default guess. See README.md.
         self.declare_parameter('spin_meas_inflation', 1.0)
         self.declare_parameter('process_noise_accel', 2.0)  # m/s^2, drives KF Q
 
@@ -169,19 +169,27 @@ class TargetTracker(Node):
             self._window = [w for w in self._window if t_sec - w[0] <= self.spin_window_s]
             xs = np.array([w[1:] for w in self._window])
             meas = xs.mean(axis=0)
+            # The mean of a spin_window_s window is a measurement at the
+            # window's MEAN time, ~window/2 behind the newest sample.
+            # Feeding it in at t_sec would make the KF read a lagging
+            # position and infer a velocity biased low (0.25s x chassis
+            # speed on the default window); the state is extrapolated back
+            # up to t_sec at publish time.
+            meas_t = float(np.mean([w[0] for w in self._window]))
             meas_inflation = self.spin_meas_inflation
         else:
             self._window = []
             meas = centre_odom
+            meas_t = t_sec
             meas_inflation = 1.0
 
         base_stddev = self.meas_noise_base_m + self.meas_noise_range_coeff * range_m * range_m
         pos_var = (base_stddev * meas_inflation) ** 2
 
         if self._kf is None:
-            self._kf = KalmanFilter6D(meas, t_sec, pos_var)
+            self._kf = KalmanFilter6D(meas, meas_t, pos_var)
         else:
-            self._kf.predict(t_sec, self.process_noise_accel)
+            self._kf.predict(meas_t, self.process_noise_accel)
             self._kf.update(meas, pos_var)
         self._n_updates += 1
 
@@ -189,10 +197,13 @@ class TargetTracker(Node):
         out.header.stamp = msg.header.stamp
         out.header.frame_id = self.odom_frame
         out.robot_track_id = msg.robot_track_id
-        cx, cy, cz, vx, vy, vz = self._kf.state
+        # Report at the detection stamp we publish under, which the spin
+        # branch's filter time lags -- see the meas_t comment above.
+        state, variance = self._kf.predicted(t_sec, self.process_noise_accel)
+        cx, cy, cz, vx, vy, vz = state
         out.centre.x, out.centre.y, out.centre.z = float(cx), float(cy), float(cz)
         out.velocity.x, out.velocity.y, out.velocity.z = float(vx), float(vy), float(vz)
-        out.variance = [float(v) for v in self._kf.variance]
+        out.variance = [float(v) for v in variance]
         out.panel.x, out.panel.y, out.panel.z = panel_odom.tolist()
         out.spin_hz = float(spin_hz)
         out.spin_phase = float(spin_phase)

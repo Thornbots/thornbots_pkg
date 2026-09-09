@@ -130,6 +130,7 @@ class PointToCvTarget(Node):
         self.have_confidence = False
         self.target_active = False
         self.last_panel_wall_time = self.get_clock().now()
+        self.latest_track_id = 0  # robot_track_id of the newest panel
 
         self.latest_state = None  # last TargetState received
         self.chassis_vel_root = (0.0, 0.0, 0.0)  # from RobotPose, root-frame
@@ -153,6 +154,7 @@ class PointToCvTarget(Node):
 
         self.last_panel_wall_time = self.get_clock().now()
         self.target_active = True
+        self.latest_track_id = msg.robot_track_id
 
         polygon = PolygonStamped()
         polygon.header = msg.header
@@ -166,6 +168,13 @@ class PointToCvTarget(Node):
         latency_s = (now - detection_time).nanoseconds / 1e9
         if latency_s >= 0.0:
             self.latency_stat.add(latency_s)
+            # Diagnostic only -- the lead solve uses each tick's own state
+            # age instead, which is larger and varies. See README.md.
+            self.get_logger().info(
+                f'detection->target_state latency: {latency_s * 1e3:.1f} ms now, '
+                f'{self.latency_stat.mean * 1e3:.1f} ms mean over '
+                f'{self.latency_stat.count} samples',
+                throttle_duration_sec=10.0)
 
     def on_robot_pose(self, msg):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
@@ -222,8 +231,9 @@ class PointToCvTarget(Node):
         Return the root-frame aim point, or None if none is available yet.
 
         Returns (aim_pos_root, lead_applied, track_valid) or None if no
-        usable position exists yet (no target_state received) or TF fails
-        (logged loudly, never silently) -- caller emits zero-confidence.
+        usable position exists yet (no target_state received, or it is
+        stale, or from the previous robot) or TF fails (logged loudly, never
+        silently) -- caller emits zero-confidence.
         """
         state = self.latest_state
         if state is None:
@@ -231,6 +241,28 @@ class PointToCvTarget(Node):
                 f"No message on '{self.target_state_topic}' yet -- "
                 'point_to_cv_target has confidence but no position to emit.',
                 throttle_duration_sec=5.0)
+            return None
+
+        now = self.get_clock().now()
+        state_age_s = (now - Time.from_msg(state.header.stamp)).nanoseconds / 1e9
+
+        # Liveness comes from panel_topic, position from target_state_topic,
+        # and they can disagree: on a target switch the panel carries the new
+        # robot immediately while target_state still holds the old one (the
+        # tracker resets and needs two updates to reconverge). Emitting then
+        # would aim at where the previous robot was, at full confidence.
+        if state.robot_track_id != self.latest_track_id:
+            self.get_logger().warn(
+                f'target_state track {state.robot_track_id} != panel track '
+                f'{self.latest_track_id} -- waiting for the tracker to catch up.',
+                throttle_duration_sec=1.0)
+            return None
+
+        if state_age_s > self.target_timeout_s:
+            self.get_logger().warn(
+                f"Newest '{self.target_state_topic}' is {state_age_s:.2f} s old "
+                f'(> target_timeout_s={self.target_timeout_s:.2f}) -- not aiming on it.',
+                throttle_duration_sec=1.0)
             return None
 
         try:
@@ -276,7 +308,11 @@ class PointToCvTarget(Node):
         shooter_pos_odom = (st.x, st.y, st.z)
         shooter_vel_odom = _rotate(shooter_R, self.chassis_vel_root)
 
-        tau = self.latency_stat.mean + self.firmware_latency_s
+        # Age of THIS state at THIS tick, not latency_stat.mean: publishing
+        # runs on its own timer over a cached state, so by tick time the
+        # state is older than it was on arrival by up to a tracker period
+        # plus the tick phase. latency_stat stays the reported diagnostic.
+        tau = state_age_s + self.firmware_latency_s
         aim_odom, _t_flight = solve_intercept(
             centre_odom, vel_odom, shooter_pos_odom, tau, self.v_muzzle,
             iterations=self.tof_iterations, shooter_vel=shooter_vel_odom)

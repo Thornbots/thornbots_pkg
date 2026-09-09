@@ -125,3 +125,67 @@ def test_kf_stationary_stays_near_zero_velocity():
         kf.predict(t, process_noise_accel=0.2)
         kf.update([1.0, 2.0, 0.5], pos_var=0.01)
     assert np.allclose(kf.state[3:], [0.0, 0.0, 0.0], atol=0.1)
+
+
+def test_kf_predicted_extrapolates_without_mutating():
+    kf = KalmanFilter6D([0.0, 0.0, 0.0], t_sec=0.0, pos_var=0.01)
+    v = np.array([2.0, 0.0, 0.0])
+    t = 0.0
+    for _ in range(50):
+        t += 0.05
+        kf.predict(t, process_noise_accel=0.5)
+        kf.update(v * t, pos_var=0.01)
+
+    before = kf.state.copy()
+    state, variance = kf.predicted(t + 0.25, process_noise_accel=0.5)
+    # Extrapolated a quarter second along the tracked velocity...
+    assert np.allclose(state[:3], before[:3] + before[3:] * 0.25)
+    # ...with more position uncertainty than at the filter's own time...
+    assert (variance[:3] > np.diag(kf.P)[:3]).all()
+    # ...and the filter itself untouched.
+    assert np.allclose(kf.state, before)
+
+
+def test_kf_predicted_at_or_before_filter_time_is_current_state():
+    kf = KalmanFilter6D([1.0, 2.0, 3.0], t_sec=10.0, pos_var=0.01)
+    state, variance = kf.predicted(9.5, process_noise_accel=0.5)
+    assert np.allclose(state, kf.state)
+    assert np.allclose(variance, np.diag(kf.P))
+
+
+def test_lagged_measurement_time_recovers_true_velocity():
+    # The spin branch feeds a windowed MEAN, whose effective time is the
+    # window's mean time, ~window/2 behind the newest sample. Stamping it
+    # at the newest sample instead biases the velocity low; stamping it
+    # correctly recovers it.
+    v = np.array([1.5, 0.0, 0.0])
+    window_s = 0.5
+    dt = 1.0 / 60.0
+
+    def run(stamp_at_newest):
+        kf = None
+        window = []
+        t = 0.0
+        for _ in range(240):
+            t += dt
+            window.append((t, *(v * t)))
+            window = [w for w in window if t - w[0] <= window_s]
+            meas = np.array([w[1:] for w in window]).mean(axis=0)
+            meas_t = t if stamp_at_newest else float(np.mean([w[0] for w in window]))
+            if kf is None:
+                kf = KalmanFilter6D(meas, meas_t, pos_var=0.01)
+            else:
+                kf.predict(meas_t, process_noise_accel=0.5)
+                kf.update(meas, pos_var=0.01)
+        return kf, t
+
+    kf_wrong, t_end = run(stamp_at_newest=True)
+    kf_right, _ = run(stamp_at_newest=False)
+
+    assert np.allclose(kf_right.state[3:], v, atol=0.05)
+    # Position at the newest sample's time, once extrapolated forward.
+    state, _ = kf_right.predicted(t_end, process_noise_accel=0.5)
+    assert np.allclose(state[:3], v * t_end, atol=0.05)
+    # The mis-stamped filter lags in position by roughly half the window.
+    lag_m = (v * t_end)[0] - kf_wrong.state[0]
+    assert lag_m > 0.5 * window_s * v[0] * 0.5
