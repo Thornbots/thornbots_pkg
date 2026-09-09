@@ -19,6 +19,7 @@ Synthetic inputs only, mirroring test_target_selector.py -- no rclpy, no
 ROS message packages, runs on a bare Python 3 + pytest install. Run with
 `python3 -m pytest test/test_target_tracker.py`.
 """
+import math
 import os
 import sys
 
@@ -89,6 +90,67 @@ def test_irregular_handoffs_not_spinning():
     assert not spinning
 
 
+def _spin_up(interval_s, n_handoffs=8, timeout_s=3.0):
+    """
+    Drive a clean spin at one handoff every interval_s.
+
+    Returns (detector, last_update_result, last_handoff_t, last_class_id).
+    Feed last_class_id back in to probe a later time without registering a
+    fresh handoff -- a different id would reset the phase to 0.
+
+    n_handoffs is deliberately 8, not 9. At the 0.25s interval the phase
+    tests use, that puts the final handoff at 1.75s against a 1.0s period,
+    so absolute time and time-since-handoff are not congruent mod one
+    revolution. With 9 the final handoff lands at 2.0s, the two differ by
+    exactly two revolutions, the phase modulo hides the difference, and a
+    spin_phase computed from t_sec instead of since_last passes.
+    """
+    s = SpinDetector(handoff_timeout_s=timeout_s, min_handoffs=3, cv_max=0.35)
+    out = (False, 0.0, 0.0)
+    last_t, last_cid = 0.0, 0
+    for i in range(n_handoffs):
+        last_t, last_cid = i * interval_s, i % 4
+        out = s.update(last_t, class_id=last_cid)
+    return s, out, last_t, last_cid
+
+
+def test_spin_hz_follows_the_four_panels_per_revolution_factor():
+    # The one spin_hz assertion was at a single rate (0.25s -> 1.0Hz),
+    # where the 4-panels/rev factor, the reciprocal, and the mean are all
+    # numerically tangled. Two more rates an octave apart on either side
+    # pin spin_hz == 1/(4*interval) as a relation: a factor of 2 or a
+    # dropped 4 fails at least one of them.
+    for interval, expected_hz in ((0.5, 0.5), (0.25, 1.0), (0.125, 2.0)):
+        _, (spinning, hz, _), _, _ = _spin_up(interval)
+        assert spinning, interval
+        assert abs(hz - expected_hz) < 0.01 * expected_hz, (interval, hz)
+
+
+def test_spin_phase_is_zero_at_handoff_and_advances_with_elapsed_time():
+    # spin_phase was unpacked and discarded in all four spin tests, so it
+    # could have been any expression at all. It is a coarse
+    # time-since-handoff re-derivation (not phase-locked), and this pins
+    # exactly that much: 0 at the handoff, 2*pi*elapsed/period after it.
+    s, (spinning, hz, phase), last_t, cid = _spin_up(0.25)
+    assert spinning
+    assert phase == 0.0  # the last update WAS a handoff
+
+    period_s = 1.0 / hz
+    for elapsed in (0.125, 0.5, 0.9):
+        _, _, phase = s.update(last_t + elapsed, class_id=cid)
+        assert math.isclose(phase, 2.0 * math.pi * elapsed / period_s,
+                            rel_tol=1e-6), elapsed
+
+
+def test_spin_phase_stays_within_one_revolution():
+    # The modulo is load-bearing: a consumer treating spin_phase as a
+    # bearing must never see a value outside [0, 2*pi).
+    s, _, last_t, cid = _spin_up(0.25, timeout_s=10.0)
+    for elapsed in (0.9, 1.4, 2.6, 5.1):
+        _, _, phase = s.update(last_t + elapsed, class_id=cid)
+        assert 0.0 <= phase < 2.0 * math.pi, (elapsed, phase)
+
+
 def test_stale_handoff_times_out():
     s = SpinDetector(handoff_timeout_s=0.5, min_handoffs=2, cv_max=0.35)
     s.update(0.0, 0)
@@ -149,6 +211,28 @@ def test_kf_predicted_at_or_before_filter_time_is_current_state():
     state, variance = kf.predicted(9.5, process_noise_accel=0.5)
     assert np.allclose(state, kf.state)
     assert np.allclose(variance, np.diag(kf.P))
+
+
+def test_kf_predicted_does_not_alias_the_filter_state():
+    """
+    Pin that predicted() hands back copies on the dt <= 0 shortcut.
+
+    The dt > 0 path builds new arrays via F @ ..., so it can't alias; the
+    shortcut returned self.state and a np.diag view of self.P directly,
+    and a caller writing into either corrupted the filter in place. The
+    allclose test above can't see it -- it compares the returned array to
+    the very array it aliases, which is true by construction.
+    """
+    kf = KalmanFilter6D([1.0, 2.0, 3.0], t_sec=10.0, pos_var=0.01)
+    before_state = kf.state.copy()
+    before_var = np.diag(kf.P).copy()
+
+    state, variance = kf.predicted(9.5, process_noise_accel=0.5)
+    state += 100.0
+    variance += 100.0
+
+    assert np.allclose(kf.state, before_state)
+    assert np.allclose(np.diag(kf.P), before_var)
 
 
 def test_lagged_measurement_time_recovers_true_velocity():

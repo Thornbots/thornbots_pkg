@@ -38,34 +38,62 @@ CONVERGED_REL_TOL = 1e-9
 # 0.1m armor panel, so a real aiming error can't hide under it.
 ITER3_AIM_TOL_M = 0.02
 
-# (target_pos, target_vel, tau), spanning crossing / receding / closing /
-# oblique motion at ARCC ranges and speeds. Shooter is at the origin
-# throughout -- moving it is CV_TEST_GAPS.md's gap 2, not this one.
+ORIGIN = (0.0, 0.0, 0.0)
+
+# (target_pos, target_vel, tau, shooter_pos, shooter_vel), spanning crossing /
+# receding / closing / oblique motion at ARCC ranges and speeds. The last four
+# rows put the shooter off the origin, including behind and above the target,
+# so a solve that ignored shooter_pos (or folded it in with the wrong sign)
+# can't pass.
+#
+# Every row is a STATIONARY shooter today. _analytic_flight_time already
+# handles a moving one (w = v - shooter_vel), so closing gap 2's second half
+# when the moving-robot test lands is adding rows here with a non-zero last
+# column -- no new math, no changes to the four tests below.
 GEOMETRIES = [
-    ((4.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.0),
-    ((4.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.12),
-    ((8.0, 0.0, 0.0), (0.0, 4.0, 0.0), 0.0),
-    ((8.0, 0.0, 0.0), (4.0, 0.0, 0.0), 0.0),    # receding head-on
-    ((8.0, 0.0, 0.0), (-4.0, 0.0, 0.0), 0.0),   # closing head-on
-    ((2.0, 0.0, 1.5), (0.0, 2.0, 0.0), 0.08),   # elevated target
-    ((3.0, 4.0, 0.0), (1.0, -3.0, 0.5), 0.12),  # oblique, 3-D velocity
+    ((4.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.0, ORIGIN, ORIGIN),
+    ((4.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.12, ORIGIN, ORIGIN),
+    ((8.0, 0.0, 0.0), (0.0, 4.0, 0.0), 0.0, ORIGIN, ORIGIN),
+    ((8.0, 0.0, 0.0), (4.0, 0.0, 0.0), 0.0, ORIGIN, ORIGIN),   # receding head-on
+    ((8.0, 0.0, 0.0), (-4.0, 0.0, 0.0), 0.0, ORIGIN, ORIGIN),  # closing head-on
+    ((2.0, 0.0, 1.5), (0.0, 2.0, 0.0), 0.08, ORIGIN, ORIGIN),  # elevated target
+    ((3.0, 4.0, 0.0), (1.0, -3.0, 0.5), 0.12, ORIGIN, ORIGIN),  # oblique
+    # Shooter off-origin: same crossing geometry as row 1, shifted whole.
+    ((6.0, 1.0, 0.0), (0.0, 2.0, 0.0), 0.0, (2.0, 1.0, 0.0), ORIGIN),
+    # Shooter behind the target in +x: the range is 3m, not 11m, so a solve
+    # that dropped shooter_pos would overshoot the flight time ~3.7x.
+    ((8.0, 0.0, 0.0), (0.0, 3.0, 0.0), 0.1, (11.0, 0.0, 0.0), ORIGIN),
+    # Turret above a low target -- exercises the z offset on its own.
+    ((5.0, 0.0, 0.2), (0.0, 2.5, 0.0), 0.06, (0.0, 0.0, 1.2), ORIGIN),
+    # Fully oblique: shooter off-axis in all three, 3-D target velocity.
+    ((3.0, 4.0, 0.5), (1.0, -3.0, 0.5), 0.12, (-1.0, 1.5, 0.9), ORIGIN),
 ]
 
+# No row above moves the shooter, so the chassis-velocity correction's
+# CORRECTNESS is still untested; test_shooter_velocity_is_wired_into_the_solve
+# only pins that the parameter reaches the math at all. See
+# sim/CV_TEST_GAPS.md gap 2 -- deliberately open until the moving-robot test
+# exists, not an oversight.
 
-def _analytic_flight_time(target_pos, target_vel, tau, v_muzzle):
+
+def _analytic_flight_time(target_pos, target_vel, tau, v_muzzle,
+                          shooter_pos=(0.0, 0.0, 0.0),
+                          shooter_vel=(0.0, 0.0, 0.0)):
     """
     Solve the same intercept in closed form, as truth for the iterative solve.
 
-    With the shooter at the origin the intercept condition
-    |p + v*(tau + t)| = v_muzzle*t is a quadratic in t:
-    (|v|^2 - v_muzzle^2) t^2 + 2 (d.v) t + |d|^2 = 0, where d = p + v*tau.
+    The intercept condition |p + v*(tau + t) - (s + sv*t)| = v_muzzle*t is
+    a quadratic in t: (|w|^2 - v_muzzle^2) t^2 + 2 (d.w) t + |d|^2 = 0,
+    where d = p + v*tau - s and w = v - sv is the closing velocity.
     Returns the smallest positive root (the first time the shot can
     arrive); the linear branch covers a target closing at exactly
-    v_muzzle.
+    v_muzzle. The shooter_vel term is carried here so a moving-shooter row
+    in GEOMETRIES needs no new math, but no row exercises it yet.
     """
-    d = [target_pos[i] + target_vel[i] * tau for i in range(3)]
-    a = sum(x * x for x in target_vel) - v_muzzle ** 2
-    b = 2.0 * sum(d[i] * target_vel[i] for i in range(3))
+    d = [target_pos[i] + target_vel[i] * tau - shooter_pos[i] for i in range(3)]
+    w = [target_vel[i] - shooter_vel[i] for i in range(3)]
+    a = sum(x * x for x in w) - v_muzzle ** 2
+    b = 2.0 * sum(d[i] * w[i] for i in range(3))
     c = sum(x * x for x in d)
     if abs(a) < 1e-15:
         return -c / b
@@ -82,45 +110,88 @@ def test_intercept_condition_holds():
     # exactly v_muzzle*t_flight away from the shooter, so the projectile
     # and the target arrive together. Everything else in this file is a
     # consequence of this plus the returned aim expression.
-    for target_pos, target_vel, tau in GEOMETRIES:
-        aim, t = solve_intercept(target_pos, target_vel, (0.0, 0.0, 0.0),
-                                 tau=tau, v_muzzle=V_MUZZLE)
-        assert math.isclose(math.dist(aim, (0.0, 0.0, 0.0)), V_MUZZLE * t,
-                            rel_tol=ITER3_REL_TOL), (target_pos, target_vel, tau)
+    for target_pos, target_vel, tau, shooter, shooter_vel in GEOMETRIES:
+        aim, t = solve_intercept(target_pos, target_vel, shooter,
+                                 tau=tau, v_muzzle=V_MUZZLE,
+                                 shooter_vel=shooter_vel)
+        # The shooter has moved by shooter_vel*t by the time the shot lands.
+        muzzle_at_impact = [shooter[i] + shooter_vel[i] * t for i in range(3)]
+        assert math.isclose(math.dist(aim, muzzle_at_impact), V_MUZZLE * t,
+                            rel_tol=ITER3_REL_TOL), (
+            target_pos, target_vel, tau, shooter, shooter_vel)
 
 
 def test_flight_time_matches_closed_form():
-    for target_pos, target_vel, tau in GEOMETRIES:
-        _, t = solve_intercept(target_pos, target_vel, (0.0, 0.0, 0.0),
-                               tau=tau, v_muzzle=V_MUZZLE)
-        expected = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE)
+    for target_pos, target_vel, tau, shooter, shooter_vel in GEOMETRIES:
+        _, t = solve_intercept(target_pos, target_vel, shooter,
+                               tau=tau, v_muzzle=V_MUZZLE,
+                               shooter_vel=shooter_vel)
+        expected = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE,
+                                         shooter, shooter_vel)
         assert math.isclose(t, expected, rel_tol=ITER3_REL_TOL), (
-            target_pos, target_vel, tau)
+            target_pos, target_vel, tau, shooter, shooter_vel)
 
 
 def test_aim_point_matches_closed_form_componentwise():
     # Per-axis, not just |aim|: dropping the z lead moves the norm by well
     # under ITER3_REL_TOL on a low target while putting the shot 15cm high.
-    for target_pos, target_vel, tau in GEOMETRIES:
-        aim, _ = solve_intercept(target_pos, target_vel, (0.0, 0.0, 0.0),
-                                 tau=tau, v_muzzle=V_MUZZLE)
-        t = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE)
+    for target_pos, target_vel, tau, shooter, shooter_vel in GEOMETRIES:
+        aim, _ = solve_intercept(target_pos, target_vel, shooter,
+                                 tau=tau, v_muzzle=V_MUZZLE,
+                                 shooter_vel=shooter_vel)
+        t = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE,
+                                  shooter, shooter_vel)
         for axis in range(3):
             expected = target_pos[axis] + target_vel[axis] * (tau + t)
             assert math.isclose(aim[axis], expected, abs_tol=ITER3_AIM_TOL_M), (
-                target_pos, target_vel, tau, axis)
+                target_pos, target_vel, tau, shooter, shooter_vel, axis)
 
 
 def test_iterating_to_convergence_reaches_the_closed_form():
     # Pins the docstring's "2-3 converges in practice" as a measurement:
     # the fixed point is the closed-form root, and the default count is
     # a truncation of it rather than a different answer.
-    for target_pos, target_vel, tau in GEOMETRIES:
-        _, t = solve_intercept(target_pos, target_vel, (0.0, 0.0, 0.0),
-                               tau=tau, v_muzzle=V_MUZZLE, iterations=40)
-        expected = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE)
+    for target_pos, target_vel, tau, shooter, shooter_vel in GEOMETRIES:
+        _, t = solve_intercept(target_pos, target_vel, shooter,
+                               tau=tau, v_muzzle=V_MUZZLE, iterations=40,
+                               shooter_vel=shooter_vel)
+        expected = _analytic_flight_time(target_pos, target_vel, tau, V_MUZZLE,
+                                         shooter, shooter_vel)
         assert math.isclose(t, expected, rel_tol=CONVERGED_REL_TOL), (
-            target_pos, target_vel, tau)
+            target_pos, target_vel, tau, shooter, shooter_vel)
+
+
+def test_shooter_offset_is_not_ignored():
+    # Same target and velocity, shooter moved 4m closer along the line of
+    # sight. Guards the specific failure the origin-only table couldn't
+    # see: shooter_pos silently dropped, or added instead of subtracted.
+    far, _ = solve_intercept((8.0, 0.0, 0.0), (0.0, 2.0, 0.0), ORIGIN,
+                             tau=0.0, v_muzzle=V_MUZZLE)
+    near, _ = solve_intercept((8.0, 0.0, 0.0), (0.0, 2.0, 0.0), (4.0, 0.0, 0.0),
+                              tau=0.0, v_muzzle=V_MUZZLE)
+    # Half the range, so half the flight time, so half the crossing lead.
+    assert math.isclose(near[1], far[1] / 2.0, rel_tol=ITER3_REL_TOL)
+    assert near[1] > 0.0
+
+
+def test_shooter_velocity_is_wired_into_the_solve():
+    """
+    Pin that shooter_vel reaches the math, without checking the correction.
+
+    A moving shooter must not produce the stationary answer -- that is
+    what deleting the parameter would look like. This asserts only that
+    the two differ and that the sign is the intuitive one (chasing the
+    target shortens the closing distance, so the shot arrives sooner).
+    Whether the magnitude is *right* is untested; see gap 2.
+    """
+    target_pos, target_vel, tau = (8.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.05
+    stationary, t_stationary = solve_intercept(
+        target_pos, target_vel, ORIGIN, tau=tau, v_muzzle=V_MUZZLE)
+    chasing, t_chasing = solve_intercept(
+        target_pos, target_vel, ORIGIN, tau=tau, v_muzzle=V_MUZZLE,
+        shooter_vel=(5.0, 0.0, 0.0))
+    assert t_chasing < t_stationary
+    assert chasing[1] < stationary[1]
 
 
 def test_stationary_target_no_lead():
