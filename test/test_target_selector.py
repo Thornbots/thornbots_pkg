@@ -98,6 +98,24 @@ def test_score_is_additive_not_multiplicative():
     assert base == 0.8 + 1.0 * 0.5
 
 
+def test_score_center_weight_scales_only_the_centrality_term():
+    # Both existing cases used center_weight=1.0, where confidence and
+    # centrality are interchangeable and the weight is invisible. At 0.3
+    # applying it to confidence (or to the sum, or to the bonus) all give
+    # different numbers than applying it to centrality alone.
+    s = compute_score(0.8, 0.5, class_id=0, center_weight=0.3,
+                      priority_class_bonus=0.5, priority_class_ids={2, 6})
+    assert math.isclose(s, 0.8 + 0.3 * 0.5)
+    # A weight of 0 must drop centrality entirely, not the confidence.
+    s_zero = compute_score(0.8, 0.5, class_id=0, center_weight=0.0,
+                           priority_class_bonus=0.5, priority_class_ids={2, 6})
+    assert math.isclose(s_zero, 0.8)
+    # ...and the bonus is unweighted: it adds in full at any center_weight.
+    s_bonus = compute_score(0.8, 0.5, class_id=2, center_weight=0.3,
+                            priority_class_bonus=0.5, priority_class_ids={2, 6})
+    assert math.isclose(s_bonus, s + 0.5)
+
+
 def test_score_priority_bonus_only_for_listed_classes():
     s = compute_score(0.5, 0.5, class_id=3, center_weight=1.0,
                       priority_class_bonus=0.5, priority_class_ids={2, 6})
@@ -142,6 +160,40 @@ def test_group_panels_two_far_apart_robots_stay_separate():
     assert len(clusters) == 2
 
 
+def test_group_panels_links_at_exactly_the_radius_and_not_beyond():
+    # The old cases sat at 0.384m and 3.0m against a 0.4m radius -- nothing
+    # near the boundary, so a radius/diameter mixup was invisible. These
+    # straddle it.
+    #
+    # The separations are a 3-4-5 triple scaled by 0.08, so the distance is
+    # *exactly* 0.4 in binary floating point (0.24^2 + 0.32^2 == 0.16, and
+    # sqrt of that is 0.4 with no residual). A naive 2.0-to-2.4 pair does
+    # not work here: it lands a half-ulp short of 0.4, so it links under
+    # both `<` and `<=` and pins nothing about the comparison itself.
+    at_radius = [{'x': 0.0, 'y': 0.0, 'z': 0.0}, {'x': 0.24, 'y': 0.32, 'z': 0.0}]
+    assert len(group_panels(at_radius, radius_m=0.4)) == 1
+
+    beyond = [{'x': 0.0, 'y': 0.0, 'z': 0.0}, {'x': 0.25, 'y': 0.33, 'z': 0.0}]
+    assert len(group_panels(beyond, radius_m=0.4)) == 2
+
+
+def test_group_panels_merges_two_robots_with_close_nearest_panels():
+    # Pins the tradeoff the docstring calls out, so it stays a known cost
+    # of single-linkage rather than a surprise: two distinct robots 0.3m
+    # apart at their nearest panels come back as ONE cluster. If this ever
+    # needs to stop being true, single-linkage is what has to change.
+    robot_a = [{'x': 2.0, 'y': 0.0, 'z': 0.0}, {'x': 1.7, 'y': 0.24, 'z': 0.0}]
+    robot_b = [{'x': 2.3, 'y': 0.0, 'z': 0.0}, {'x': 2.6, 'y': 0.24, 'z': 0.0}]
+    clusters = group_panels(robot_a + robot_b, radius_m=0.4)
+    assert len(clusters) == 1
+    assert sorted(clusters[0]) == [0, 1, 2, 3]
+
+    # Transitivity is the mechanism: the chain only spans the gap because
+    # of the 0.3m bridge. Widen it past the radius and they separate.
+    robot_b_far = [{'x': 2.5, 'y': 0.0, 'z': 0.0}, {'x': 2.8, 'y': 0.24, 'z': 0.0}]
+    assert len(group_panels(robot_a + robot_b_far, radius_m=0.4)) == 2
+
+
 def test_cluster_centroid_is_mean_position():
     panels = [{'x': 0.0, 'y': 0.0, 'z': 0.0}, {'x': 2.0, 'y': 0.0, 'z': 0.0}]
     cx, cy, cz = cluster_centroid(panels, [0, 1])
@@ -184,6 +236,30 @@ def test_hysteresis_switches_after_sustained_stronger_challenger():
             {'key': 'b', 'centroid': (2.0, 5.0, 0.0), 'score': 2.0},
         ])
     assert winner == 'b'
+    assert h.track_id == first_id + 1
+
+
+def test_hysteresis_streak_resets_when_challenger_margin_lapses():
+    # The flicker-resistance path: a challenger must clear switch_margin on
+    # CONSECUTIVE frames. One sub-margin frame in the middle sends the
+    # streak back to 0, so the earlier frames don't count toward the next
+    # switch. Without the reset the switch would land on frame 4 below.
+    h = RobotHysteresis(switch_margin=0.3, switch_hold_frames=3)
+    h.update([{'key': 'a', 'centroid': (2.0, 0.0, 0.0), 'score': 1.0}])
+    first_id = h.track_id
+
+    def frame(challenger_score):
+        return h.update([
+            {'key': 'a', 'centroid': (2.0, 0.0, 0.0), 'score': 1.0},
+            {'key': 'b', 'centroid': (2.0, 5.0, 0.0), 'score': challenger_score},
+        ])
+
+    assert frame(2.0) == 'a'    # streak 1
+    assert frame(1.1) == 'a'    # ahead but under margin -> streak back to 0
+    assert frame(2.0) == 'a'    # streak 1 again
+    assert frame(2.0) == 'a'    # streak 2 -- would have been the switch
+    assert h.track_id == first_id
+    assert frame(2.0) == 'b'    # streak 3 -> switch
     assert h.track_id == first_id + 1
 
 

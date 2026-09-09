@@ -172,10 +172,13 @@ class KalmanFilter6D:
         Returns (state, variance) at t_sec. Used to report the estimate at
         a time later than the filter's own -- the spin branch updates at
         the window's mean time, which lags the newest detection.
+
+        Always returns fresh arrays, including on the dt <= 0 shortcut: a
+        caller mutating the result must not reach into the filter's state.
         """
         dt = t_sec - self._t_sec
         if dt <= 0.0:
-            return self.state, np.diag(self.P)
+            return self.state.copy(), np.diag(self.P).copy()
         F, Q = self._transition(dt, process_noise_accel)
         return F @ self.state, np.diag(F @ self.P @ F.T + Q)
 
