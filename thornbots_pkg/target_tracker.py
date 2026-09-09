@@ -57,6 +57,11 @@ class TargetTracker(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
         self.declare_parameter('track_max_gap_s', 0.5)
+        self.declare_parameter('tf_timeout_s', 0.05)
+        # How far the TF chain may lag the detection stamp before a
+        # detection is dropped rather than matched to the newest camera
+        # pose. See README.md.
+        self.declare_parameter('tf_future_tolerance_s', 0.25)
         self.declare_parameter('panel_radius_m', 0.27)  # mean of panel_radius_x/y
         self.declare_parameter('spin_handoff_timeout_s', 1.5)
         self.declare_parameter('spin_min_handoffs', 3)
@@ -78,6 +83,8 @@ class TargetTracker(Node):
         self.odom_frame = gp('odom_frame').value
         self.pose_latency_s = float(gp('pose_latency_s').value)
         self.track_max_gap_s = float(gp('track_max_gap_s').value)
+        self.tf_timeout_s = float(gp('tf_timeout_s').value)
+        self.tf_future_tolerance_s = float(gp('tf_future_tolerance_s').value)
         self.panel_radius_m = float(gp('panel_radius_m').value)
         self.spin_handoff_timeout_s = float(gp('spin_handoff_timeout_s').value)
         self.spin_min_handoffs = int(gp('spin_min_handoffs').value)
@@ -121,6 +128,54 @@ class TargetTracker(Node):
         self._window = []
         self._n_updates = 0
 
+    def _lookup_camera_tf(self, camera_frame, query_time):
+        """
+        Look up odom<-camera at query_time, or the newest TF within tolerance.
+
+        Returns None (logged, never silent) if TF is missing outright or
+        lags further than tf_future_tolerance_s -- see README.md for why
+        the fallback exists.
+        """
+        try:
+            return self.tf_buffer.lookup_transform(
+                self.odom_frame, camera_frame, query_time,
+                timeout=Duration(seconds=self.tf_timeout_s))
+        except TransformException as ex:
+            first_ex = ex
+
+        # A detection stamp newer than the newest TF is normal when the TF
+        # chain runs behind (a cold-started node on a loaded box, or sim's
+        # high-rate /clock); the camera pose is then stale by that gap
+        # rather than wrong. Accept it up to tf_future_tolerance_s, which
+        # bounds the induced bearing error by gap x head slew rate, instead
+        # of dropping every detection and publishing nothing at all.
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.odom_frame, camera_frame, Time(),
+                timeout=Duration(seconds=self.tf_timeout_s))
+        except TransformException:
+            self.get_logger().error(
+                f'TF lookup {self.odom_frame}<-{camera_frame}@'
+                f'{query_time.nanoseconds} failed: {first_ex}',
+                throttle_duration_sec=1.0)
+            return None
+
+        gap_s = (query_time - Time.from_msg(tf.header.stamp)).nanoseconds / 1e9
+        if gap_s > self.tf_future_tolerance_s:
+            self.get_logger().error(
+                f'TF {self.odom_frame}<-{camera_frame} is {gap_s:.3f} s behind the '
+                f'detection stamp (> tf_future_tolerance_s='
+                f'{self.tf_future_tolerance_s:.2f}) -- dropping. The TF chain is '
+                f'not keeping up: {first_ex}',
+                throttle_duration_sec=1.0)
+            return None
+
+        self.get_logger().warn(
+            f'TF {self.odom_frame}<-{camera_frame} is {gap_s:.3f} s behind the '
+            f'detection stamp -- using the newest available camera pose.',
+            throttle_duration_sec=5.0)
+        return tf
+
     def on_panel(self, msg: PanelDetection):
         stamp = Time.from_msg(msg.header.stamp)
 
@@ -135,17 +190,8 @@ class TargetTracker(Node):
 
         camera_frame = msg.header.frame_id or 'camera'
         query_time = stamp + Duration(seconds=self.pose_latency_s)
-        try:
-            tf = self.tf_buffer.lookup_transform(
-                self.odom_frame, camera_frame, query_time,
-                timeout=Duration(seconds=0.05))
-        except TransformException as ex:
-            # Loud, not silent. A missing camera frame in TF must surface
-            # as an error, not a stale or
-            # phantom TargetState publish.
-            self.get_logger().error(
-                f'TF lookup {self.odom_frame}<-{camera_frame}@{query_time.nanoseconds}'
-                f' failed: {ex}', throttle_duration_sec=1.0)
+        tf = self._lookup_camera_tf(camera_frame, query_time)
+        if tf is None:
             return
 
         t = tf.transform.translation
