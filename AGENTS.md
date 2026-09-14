@@ -4,6 +4,17 @@ Hardware interface, robot description, and CV target selection for the Thornbots
 Sentry. **Reference docs live in `README.md`** (topics, nodes, launch args,
 `## Notes` design rationale). Read it before changing behavior.
 
+`README.md` commands are written for a human in a container terminal. You run
+them from the host through `../isaac_ros_common/scripts/dexec.sh` (load the
+`isaac-ros-docker` skill first), which sources both workspaces for you:
+
+```bash
+../isaac_ros_common/scripts/dexec.sh -- colcon build --symlink-install \
+  --packages-select thornbots_pkg sentry_localization
+../isaac_ros_common/scripts/dexec.sh -d -- ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
+../isaac_ros_common/scripts/dexec.sh -d -- rviz2 -d install/sim/share/sim/rviz/config.rviz
+```
+
 `auto.launch.py` is the single entry point; it already includes
 `sentry_localization`'s launch. Don't launch that package separately.
 
