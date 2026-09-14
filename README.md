@@ -41,13 +41,19 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 
 ## Build and launch
 
-Run inside the Isaac ROS container (see the `isaac-ros-docker` skill). Use
-`dexec.sh` rather than a bare `docker exec`; it sources the environment.
+In a container terminal:
 
 ```bash
-isaac_ros_common/scripts/dexec.sh -- bash -c \
-  "cd /workspaces/isaac_ros-dev && colcon build --packages-select thornbots_pkg sentry_localization && source install/setup.bash"
+cd /workspaces/isaac_ros-dev
+colcon build --symlink-install --packages-select thornbots_pkg sentry_localization
+source install/setup.bash
 ```
+
+Source `install/setup.bash` in every new terminal. The image also bakes a copy
+of this package into `/workspaces/ros2_ws`, and a fresh shell only sources
+that one, so without it you run the image's old code instead of your edit.
+`ros2 pkg prefix thornbots_pkg` should print a `/workspaces/isaac_ros-dev/`
+path.
 
 `auto.launch.py` is the only entry point and includes `sentry_localization`'s
 launch itself.
@@ -80,12 +86,12 @@ the RPLIDAR A2M8 on hardware. The docstring at the top of
 This package has no rviz config; `sim` does. For a hardware run:
 
 ```bash
-isaac_ros_common/scripts/dexec.sh -- rviz2 -d install/sim/share/sim/rviz/config.rviz
+rviz2 -d install/sim/share/sim/rviz/config.rviz
 ```
 
-Stop a launch tree with `isaac_ros_common/scripts/kill_launch.sh <pid>`, not
-`pkill`. A half-killed tree leaves duplicate TF publishers that make the next
-run jitter.
+Stop a launch with Ctrl+C and wait for every node to exit before relaunching;
+don't `pkill` individual nodes. Leftover nodes keep publishing TF and make the
+next run jitter. `ps aux | grep ros` should come back empty.
 
 ## Testing
 
