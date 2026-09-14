@@ -41,15 +41,20 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 
 ## Build and launch
 
-In a container terminal:
+In a container terminal, build:
 
 ```bash
 cd /workspaces/isaac_ros-dev
 colcon build --symlink-install --packages-select thornbots_pkg sentry_localization
-source install/setup.bash
 ```
 
-Source `install/setup.bash` in every new terminal. The image also bakes a copy
+In every new terminal:
+
+```bash
+source /workspaces/isaac_ros-dev/install/setup.bash
+```
+
+The image also bakes a copy
 of this package into `/workspaces/ros2_ws`, and a fresh shell only sources
 that one, so without it you run the image's old code instead of your edit.
 `ros2 pkg prefix thornbots_pkg` should print a `/workspaces/isaac_ros-dev/`
