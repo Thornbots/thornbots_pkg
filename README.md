@@ -15,9 +15,9 @@ root-frame `CVTarget`. Localization backends are in
 | `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/sentry/fire_command` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/fire_command` |
-| `target_selector` | `/cv/panel_detections` | `/cv/panel_detection` (one pick) |
+| `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick) |
 | `target_tracker` | `/cv/panel_detection` | `/cv/target_state` (`TargetState`, odom frame) |
-| `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection` | `/cv/target` (`CVTarget`, root frame), `/cv/panel_polygon` |
+| `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection`, `/pose` | `/cv/target` (`CVTarget`, root frame), `/cv/panel_polygon`, `/sentry/fire_command` |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -28,7 +28,7 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 ```
 /pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
                           \-> /joint_states --[robot_state_publisher]--> rest of TF tree
-/scan ------------------------------> sentry_localization (map->odom TF owned by slam_toolbox/amcl there)
+/scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->odom TF owned by slam_toolbox/amcl there)
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/panel_detection --[target_tracker]--> /cv/target_state
@@ -48,17 +48,16 @@ cd /workspaces/isaac_ros-dev
 colcon build --symlink-install --packages-select thornbots_pkg sentry_localization
 ```
 
-In every new terminal:
+In every new terminal, source the overlay:
 
 ```bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 ```
 
-The image also bakes a copy
-of this package into `/workspaces/ros2_ws`, and a fresh shell only sources
-that one, so without it you run the image's old code instead of your edit.
-`ros2 pkg prefix thornbots_pkg` should print a `/workspaces/isaac_ros-dev/`
-path.
+The image bakes its own copy of this package into `/workspaces/ros2_ws`, and a
+fresh shell sources only that one. Skip the line above and you run the image's
+old code instead of your edit. `ros2 pkg prefix thornbots_pkg` should print a
+`/workspaces/isaac_ros-dev/` path.
 
 `auto.launch.py` is the only entry point and includes `sentry_localization`'s
 launch itself.
@@ -88,24 +87,33 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:
 the RPLIDAR A2M8 on hardware. The docstring at the top of
 `launch/auto.launch.py` documents every arg.
 
-This package has no rviz config; `sim` does. For a hardware run:
+This package has no rviz config; `sim` does, and `sim.launch.py` opens rviz2
+itself. For a hardware run, build `sim` too and then:
 
 ```bash
-rviz2 -d install/sim/share/sim/rviz/config.rviz
+rviz2 -d $(ros2 pkg prefix sim)/share/sim/rviz/config.rviz
 ```
 
 Stop a launch with Ctrl+C and wait for every node to exit before relaunching;
 don't `pkill` individual nodes. Leftover nodes keep publishing TF and make the
-next run jitter. `ps aux | grep ros` should come back empty.
+next run jitter. `pgrep -af -- --ros-args` lists every running node and should
+come back empty (sim's nodes show up too while `sim.launch.py` runs).
 
 ## Testing
 
-`python3 -m pytest test/` runs the `*_core.py` unit tests on synthetic input:
-`test_target_selector.py` (scoring, centrality, grouping, hysteresis),
-`test_target_tracker.py` (spin detector, KF, radial correction),
-`test_point_to_cv_target.py` (intercept solve, latency stat).
-`colcon test --packages-select thornbots_pkg` adds the ament copyright, flake8
-and pep257 checks.
+The unit tests exercise the `*_core.py` halves on synthetic input and need no
+running graph:
+
+```bash
+cd /workspaces/isaac_ros-dev/src/thornbots_pkg
+python3 -m pytest test/test_target_selector.py test/test_target_tracker.py test/test_point_to_cv_target.py
+```
+
+`test_target_selector.py` covers scoring, centrality, grouping and hysteresis;
+`test_target_tracker.py` the spin detector, KF and radial correction;
+`test_point_to_cv_target.py` the intercept solve and latency stat. `pytest test/`
+also picks up the ament copyright, flake8 and pep257 checks, which
+`colcon test --packages-select thornbots_pkg` runs too.
 
 The localization drift suite is
 `sim/test/localization/run_localization_drift_tests.py`, which launches
@@ -124,6 +132,11 @@ source. Unset fields (z, roll, pitch, and yaw, since the holonomic chassis
 never reports orientation) stay 0; `odom0_config` in `ekf.yaml` excludes them.
 
 ### target_selector.py
+
+Team colour comes from `RefSysStatus.is_on_blue_team`: on blue it drops class
+IDs 0-3, on red 4-7. Until the first `RefSysStatus` arrives (always, in sim
+without a referee) it passes every detection through, so it can pick an allied
+robot.
 
 Scoring is ported from the old C++ `detection_picker_node`: confidence +
 `center_weight`*centrality + `priority_class_bonus` for `priority_class_ids`,
@@ -230,11 +243,11 @@ The bridge stays a pure UART/DJI translator; this node reshapes upstream output
 for it. `relocalize` compares `/localization/odom` (published in every
 `localization_mode` and `use_ekf` combination) with the MCB's raw `/odom`,
 using no TF and no backend assumptions. When they differ by more than
-`error_threshold_meters` (0.05) and raw speed is under `max_move_speed` (0.05) (so the
-correction is still current when the MCB applies it), it publishes the
-localized `(x, y)` as a `Point` on `~/relocalize`. The bridge packs that into
-a `RelocalizePayload` and the MCB resets its odometry origin. `cv_target` and
-`fire_command` are straight republishes.
+`error_threshold_meters` (0.05) and raw speed is under `max_move_speed`
+(0.05 m/s, so the correction is still current when the MCB applies it), it
+publishes the localized `(x, y)` as a `Point` on `~/relocalize`. The bridge
+packs that into a `RelocalizePayload` and the MCB resets its odometry origin.
+`cv_target` and `fire_command` are straight republishes.
 
 ### lidar_self_filter.py
 
