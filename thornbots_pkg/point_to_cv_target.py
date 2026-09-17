@@ -75,7 +75,7 @@ class PointToCvTarget(Node):
         self.declare_parameter('fire_rate_hz', 2.0)
         self.declare_parameter('root_frame', 'root')
         self.declare_parameter('odom_frame', 'odom')
-        self.declare_parameter('lead_enabled', False)
+        self.declare_parameter('lead_enabled', True)
         self.declare_parameter('firmware_latency_s', 0.0)
         self.declare_parameter('v_muzzle', 25.0)
         self.declare_parameter('tof_iterations', 3)

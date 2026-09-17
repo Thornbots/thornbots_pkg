@@ -130,7 +130,7 @@ def generate_launch_description():
         'point_to_cv_target.'
     )
     lead_enabled_arg = DeclareLaunchArgument(
-        'lead_enabled', default_value='false',
+        'lead_enabled', default_value='true',
         description='point_to_cv_target: apply the intercept/lead solve '
         'to /cv/target. false emits the raw '
         'target_tracker centre with no prediction -- one '
