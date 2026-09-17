@@ -293,6 +293,12 @@ tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
   `lead_enabled`. The solve is a 2-3 iteration time-of-flight fixed point with
   no gravity, drag or elevation (Type-C handles those).
 
+`lead_enabled` defaults to true. On 2026-09-17's headless shot-hit sweep it cut
+mean miss distance at 1, 2 and 4 m/s (0.23 to 0.14m, 0.55 to 0.46m, 1.23 to
+1.01m) and scored more hits at 0.5 m/s in both runs (4/18 vs 0/11, 2/11 vs
+1/18). Moving hit rates stay low, because the aim point is the chassis centre and
+nothing times shots to the spin. See `sim/CV_TEST_GAPS.md`.
+
 The solve's tau is this tick's `now - state.header.stamp` plus
 `firmware_latency_s` (0.0, unmeasured). It skips `LatencyStat.mean` because
 cached state ages between arrival and tick, by up to a tracker period plus
