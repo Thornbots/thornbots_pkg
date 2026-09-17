@@ -63,6 +63,55 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
     return aim_pos, t
 
 
+def plan_shot(state, other_r, horizon_s, shooter_pos, v_muzzle, spinning,
+              tick_s, lead=True, iterations=3, shooter_vel=(0.0, 0.0, 0.0)):
+    """
+    Choose an aim point and fire delay against target_tracker's armor model.
+
+    state: [xc, yc, zc, vx, vy, vz, yaw, w, r] in odom at its stamp;
+    horizon_s: stamp to muzzle exit for a shot fired now. Not spinning: lead
+    the tracked panel, fire now. Spinning: lead a point on the
+    centre->shooter line half a tick ahead, fire after the delay (< tick_s)
+    that lands on the next quarter-turn alignment, else None. lead=False
+    aims at the current estimate. Returns (aim_pos, delay_s or None).
+    """
+    xc, yc, zc, vx, vy, vz, yaw, w, r = (float(v) for v in state)
+    if not lead:
+        horizon_s, tick_s = 0.0, 0.0
+    ahead = horizon_s + (tick_s / 2.0 if spinning else 0.0)
+    cx, cy, cz = xc + vx * ahead, yc + vy * ahead, zc + vz * ahead
+    yaw_h = yaw + w * ahead
+    if spinning:
+        bearing = math.atan2(shooter_pos[1] - cy, shooter_pos[0] - cx)
+        rf = 0.5 * (r + other_r)
+        pos = (cx + rf * math.cos(bearing), cy + rf * math.sin(bearing), cz)
+        vel = (vx, vy, vz)
+    else:
+        # The tracked panel, not the best-facing one: without spin, yaw and
+        # radius are unobservable and drift, so only the seen panel is solid.
+        pos = (cx + r * math.cos(yaw_h), cy + r * math.sin(yaw_h), cz)
+        vel = (vx - r * w * math.sin(yaw_h), vy + r * w * math.cos(yaw_h), vz)
+
+    if not lead:
+        return pos, 0.0
+    aim, t_flight = solve_intercept(pos, vel, shooter_pos, 0.0, v_muzzle,
+                                    iterations=iterations, shooter_vel=shooter_vel)
+    if not spinning:
+        return aim, 0.0
+    if abs(w) < 1e-6:
+        return aim, None
+
+    # Quarter-turn phase of the panels against the shooter bearing at the
+    # impact of a shot fired now; a hit wants it at 0.
+    t_impact = horizon_s + t_flight
+    ix, iy = xc + vx * t_impact, yc + vy * t_impact
+    bearing_i = math.atan2(shooter_pos[1] - iy, shooter_pos[0] - ix)
+    phase = (yaw + w * t_impact - bearing_i) % (math.pi / 2.0)
+    to_go = (math.pi / 2.0 - phase) % (math.pi / 2.0) if w > 0.0 else phase
+    delay = to_go / abs(w)
+    return aim, (delay if delay < tick_s else None)
+
+
 class LatencyStat:
     """
     Running mean/count of now-detection_stamp latency samples (seconds).

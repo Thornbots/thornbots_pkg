@@ -53,13 +53,10 @@ front-run firing logic unless asked.
   `real_hardware` already switches `pose_emulator` against the real Type-C
   driver. Until it lands, `sim.launch.py spawn_target:=true` plus a hand-run
   `point_to_cv_target` works standalone.
-- **Real firing logic is not built** — no HP/heat/power gating, no timing.
-  `point_to_cv_target` has a placeholder fire trigger (`fire_rate_hz`,
-  defaulting to on) gated on `target_active`, cached confidence, and the last
-  publish tick producing an aim point. An
-  aim/lead controller does exist (`target_tracker.py` plus
-  `point_to_cv_target`'s `lead_enabled` intercept solve). Out of scope until CV
-  is done, per the priority above.
+- **Firing logic is partial.** `point_to_cv_target` aims and fires per
+  publish tick, at most `fire_rate_hz`, and times shots against a spinning
+  target with `FireCommand.delay_ms`. No HP/heat/power gating, and
+  `FireCommand` isn't on the UART wire yet, so the timing only works in sim.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.

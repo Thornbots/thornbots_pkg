@@ -21,7 +21,7 @@ from rclpy.time import Time
 import tf2_ros
 from tf2_ros import TransformException
 
-from thornbots_pkg.point_to_cv_target_core import LatencyStat, solve_intercept
+from thornbots_pkg.point_to_cv_target_core import LatencyStat, plan_shot
 
 
 def _quat_to_rot(x, y, z, w):
@@ -50,14 +50,12 @@ class PointToCvTarget(Node):
     """
     Turn target_tracker's target state into a root-frame aim point.
 
-    WHERE TO AIM: turns target_tracker's /cv/target_state (odom-frame
-    spin-centre KF estimate) into a root-frame /cv/target aim point for
-    mcb_relay, applying latency + time-of-flight lead. Confidence
-    and liveness still come from panel_topic directly (target_state carries
-    no confidence field) -- see README.md's ### point_to_cv_target.py Notes.
-
-    Publishes at cv_target_publish_rate_hz, decoupled from the ~60Hz
-    detection rate -- Type-C's PID doesn't need 60Hz setpoints.
+    /cv/target_state (armor model, odom) -> /cv/target (root-frame aim point)
+    and /sentry/fire_command, via point_to_cv_target_core.plan_shot. Each
+    cv_target_publish_rate_hz tick aims, and fires (at most fire_rate_hz)
+    with the delay that times a spinning target's panel to the shot.
+    Confidence and liveness come from panel_topic. See README.md's
+    ### point_to_cv_target.py Notes.
     """
 
     def __init__(self):
@@ -80,6 +78,10 @@ class PointToCvTarget(Node):
         self.declare_parameter('v_muzzle', 25.0)
         self.declare_parameter('tof_iterations', 3)
         self.declare_parameter('cv_target_publish_rate_hz', 30.0)
+        # Spin mode (centre aim + timed fire) above enter, back to panel
+        # aim below exit, in |yaw_rate| rad/s.
+        self.declare_parameter('spin_enter_rad_s', 3.0)
+        self.declare_parameter('spin_exit_rad_s', 2.0)
 
         gp = self.get_parameter
         self.panel_topic = gp('panel_topic').value
@@ -99,6 +101,9 @@ class PointToCvTarget(Node):
         self.v_muzzle = float(gp('v_muzzle').value)
         self.tof_iterations = int(gp('tof_iterations').value)
         publish_rate_hz = float(gp('cv_target_publish_rate_hz').value)
+        self.tick_s = 1.0 / publish_rate_hz
+        self.spin_enter_rad_s = float(gp('spin_enter_rad_s').value)
+        self.spin_exit_rad_s = float(gp('spin_exit_rad_s').value)
 
         self.tf_buffer = tf2_ros.Buffer()
         # /tf shares this node's executor, so every lookup below is
@@ -124,13 +129,12 @@ class PointToCvTarget(Node):
         self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.on_publish_tick)
 
         self.fire_pub = self.create_publisher(FireCommand, self.fire_topic, 10)
-        if self.fire_rate_hz > 0.0:
-            self.fire_timer = self.create_timer(1.0 / self.fire_rate_hz, self.maybe_fire)
+        self.last_fire_time = None
+        self.spinning = False
 
         self.latest_confidence = 1.0
         self.have_confidence = False
         self.target_active = False
-        self.aim_ok = False  # last publish tick emitted a real aim point; gates maybe_fire
         self.last_panel_wall_time = self.get_clock().now()
         self.latest_track_id = 0  # robot_track_id of the newest panel
 
@@ -145,8 +149,8 @@ class PointToCvTarget(Node):
             f'  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} '
             f'firmware_latency_s={self.firmware_latency_s}\n'
             f'  target_timeout_s={self.target_timeout_s:.2f}\n'
-            f'  -> {self.fire_topic} (FireCommand, placeholder trigger @ '
-            f'{self.fire_rate_hz:.2f}Hz when confidence >= {self.fire_confidence_threshold})'
+            f'  -> {self.fire_topic} (FireCommand, <= {self.fire_rate_hz:.2f}Hz, spin-timed '
+            f'above {self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold})'
         )
 
     def on_panel(self, msg):
@@ -181,17 +185,22 @@ class PointToCvTarget(Node):
     def on_robot_pose(self, msg):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
 
-    def maybe_fire(self):
-        if not self.target_active or not self.aim_ok:
+    def maybe_fire(self, delay_s):
+        """Publish a FireCommand after delay_s, if rate and confidence allow."""
+        if delay_s is None or self.fire_rate_hz <= 0.0:
             return
         confidence = self.latest_confidence if self.have_confidence else self.default_confidence
         if confidence < self.fire_confidence_threshold:
             return
-
+        now = self.get_clock().now()
+        if (self.last_fire_time is not None
+                and (now - self.last_fire_time).nanoseconds / 1e9 < 1.0 / self.fire_rate_hz):
+            return
+        self.last_fire_time = now
         cmd = FireCommand()
-        cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.header.stamp = now.to_msg()
         cmd.fire = True
-        cmd.delay_ms = 0
+        cmd.delay_ms = int(round(delay_s * 1000.0))
         self.fire_pub.publish(cmd)
 
     def check_timeout(self):
@@ -211,7 +220,6 @@ class PointToCvTarget(Node):
         out = CVTarget()
         out.header.stamp = self.get_clock().now().to_msg()
 
-        self.aim_ok = False
         if not self.target_active:
             self.pub.publish(out)  # all-zero: confidence=0, flags clear
             return
@@ -220,7 +228,7 @@ class PointToCvTarget(Node):
         if aim_root is None:
             self.pub.publish(out)  # still all-zero
             return
-        aim_pos, lead_applied, track_valid = aim_root
+        aim_pos, lead_applied, track_valid, fire_delay_s = aim_root
 
         out.x, out.y, out.z = (float(v) for v in aim_pos)
         out.confidence = float(
@@ -228,13 +236,14 @@ class PointToCvTarget(Node):
         out.lead_applied = lead_applied
         out.track_valid = track_valid
         self.pub.publish(out)
-        self.aim_ok = True
+        self.maybe_fire(fire_delay_s)
 
     def _compute_aim_point(self):
         """
         Return the root-frame aim point, or None if none is available yet.
 
-        Returns (aim_pos_root, lead_applied, track_valid) or None if no
+        Returns (aim_pos_root, lead_applied, track_valid, fire_delay_s or
+        None) or None if no
         usable position exists yet (no target_state received, or it is
         stale, or from the previous robot) or TF fails (logged loudly, never
         silently) -- caller emits zero-confidence.
@@ -286,14 +295,9 @@ class PointToCvTarget(Node):
         if not state.valid:
             # Never emit an unconverged extrapolation -- raw panel position,
             # no lead.
+            self.spinning = False
             panel_odom = (state.panel.x, state.panel.y, state.panel.z)
-            return _apply(R, T, panel_odom), False, False
-
-        centre_odom = (state.centre.x, state.centre.y, state.centre.z)
-        if not self.lead_enabled:
-            return _apply(R, T, centre_odom), False, True
-
-        vel_odom = (state.velocity.x, state.velocity.y, state.velocity.z)
+            return _apply(R, T, panel_odom), False, False, 0.0
 
         try:
             tf_shooter = self.tf_buffer.lookup_transform(
@@ -310,16 +314,20 @@ class PointToCvTarget(Node):
         shooter_pos_odom = (st.x, st.y, st.z)
         shooter_vel_odom = _rotate(shooter_R, self.chassis_vel_root)
 
+        threshold = self.spin_exit_rad_s if self.spinning else self.spin_enter_rad_s
+        self.spinning = abs(state.yaw_rate) > threshold
+        armor = (state.centre.x, state.centre.y, state.centre.z,
+                 state.velocity.x, state.velocity.y, state.velocity.z,
+                 state.yaw, state.yaw_rate, state.radius)
         # Age of THIS state at THIS tick, not latency_stat.mean: publishing
-        # runs on its own timer over a cached state, so by tick time the
-        # state is older than it was on arrival by up to a tracker period
-        # plus the tick phase. latency_stat stays the reported diagnostic.
-        tau = state_age_s + self.firmware_latency_s
-        aim_odom, _t_flight = solve_intercept(
-            centre_odom, vel_odom, shooter_pos_odom, tau, self.v_muzzle,
+        # runs on its own timer over a cached state. See README.md.
+        horizon_s = state_age_s + self.firmware_latency_s
+        aim_odom, fire_delay_s = plan_shot(
+            armor, state.other_radius, horizon_s, shooter_pos_odom, self.v_muzzle,
+            self.spinning, self.tick_s, lead=self.lead_enabled,
             iterations=self.tof_iterations, shooter_vel=shooter_vel_odom)
 
-        return _apply(R, T, aim_odom), True, True
+        return _apply(R, T, aim_odom), self.lead_enabled, True, fire_delay_s
 
 
 def main(args=None):

@@ -191,7 +191,7 @@ def generate_launch_description():
     enable_target_tracker_arg = DeclareLaunchArgument(
         'enable_target_tracker', default_value='true',
         description='Launch target_tracker to publish /cv/target_state '
-        '(spin-centre KF estimate in odom) from panel_topic. '
+        '(armor-model EKF in odom) from /cv/robot_panels. '
         'Independent of real_hardware, same as '
         'enable_target_selector.'
     )
@@ -293,9 +293,9 @@ def generate_launch_description():
         }],
     )
 
-    # Estimates the tracked robot's spin-centre in odom from panel_topic --
+    # Tracks the selected robot's armor model in odom from /cv/robot_panels --
     # downstream of target_selector, upstream of point_to_cv_target's
-    # intercept solve. Own enable toggle for the same reason as
+    # shot planner. Own enable toggle for the same reason as
     # target_selector: run_shot_hit_tests.py's robot_tf launch needs its own
     # standalone copy without auto.launch.py launching a second one.
     target_tracker_node = Node(
@@ -306,7 +306,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_target_tracker')),
         parameters=[{
             'use_sim_time': use_sim_time,
-            'panel_topic': LaunchConfiguration('panel_topic'),
+            'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
             'odom_frame': LaunchConfiguration('odom_frame'),
             'tf_future_tolerance_s': ParameterValue(

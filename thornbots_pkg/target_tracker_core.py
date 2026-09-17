@@ -13,181 +13,286 @@
 # limitations under the License.
 
 """
-Pure numpy logic for target_tracker.py.
+Pure numpy armor-model EKF for target_tracker.py (no rclpy import).
 
-target_tracker_core.py -- pure numpy logic for target_tracker.py (no rclpy
-import) so it's unit-testable standalone, mirroring target_selector_core.py.
-See thornbots_pkg/README.md's ### target_tracker.py Notes.
+State [xc, yc, zc, vx, vy, vz, yaw, w, r]: chassis centre and velocity in
+odom, the yaw of the tracked panel's outward normal, spin rate (rad/s), and
+that panel's centre-to-panel radius. Measurement is one panel position;
+h = centre + r * (cos yaw, sin yaw, 0). The other panel pair's radius is
+kept outside the state and swapped in on an odd handoff. See README.md's
+### target_tracker.py Notes.
 """
 import math
 
 import numpy as np
 
+N_STATE = 9
 
-def corrected_centre(panel_center, radius_m):
+
+def _as_cov(pos_var):
+    """Accept a scalar variance (isotropic) or a 3x3 covariance."""
+    return np.eye(3) * pos_var if np.ndim(pos_var) == 0 else np.asarray(pos_var)
+
+
+def ray_covariance(panel_pos, camera_pos, depth_std, lateral_std):
     """
-    Estimate the chassis centre by projecting panel_center outward.
+    Measurement covariance: depth_std along the camera->panel ray, lateral_std across it.
 
-    Chassis-centre estimate: push panel_center further along the same
-    camera-to-panel ray by radius_m, i.e. approximate the chassis centre as
-    sitting directly behind the visible panel along the existing line of
-    sight. Same frame as panel_center (camera or odom -- direction-only,
-    doesn't care).
-
-    This is deliberately NOT derived from PanelDetection.corners. Corners
-    look like they'd give a real plane normal via one cross product, but
-    they don't: roi_depth_node.cpp's deprojectDetection() deprojects all 4
-    corners at one shared mean_depth_m (the "planar assumption" its own
-    comment names), which makes every real detection's quad exactly
-    fronto-parallel to the camera by construction -- the cross product of
-    two edge vectors in that plane is always exactly the camera's boresight
-    axis, carrying zero information about the panel's true tilt, and for
-    an off-boresight panel that's a materially different (and wrong)
-    direction than "back toward the camera along this panel's own bearing"
-    (an earlier version of this function used the corner cross product and
-    got exactly this wrong for off-axis panels). cv_target_emulator.py's
-    corners *do* encode real tilt (built from the true canted right_dir/
-    up_dir), so a corner-based estimate would work in sim and silently
-    fail differently on hardware -- a sim/hardware divergence via geometry
-    instead of frame_id. Real depth-based plane-fitting for a true normal
-    is out of scope (only viable under ~2m, where depth noise is below the
-    panel's tilt) -- this radial approximation is the honest fallback, not a
-    placeholder for something better later.
+    Depth error grows with range squared while bearing error stays near one
+    pixel, so an isotropic R buries a spinning panel's sideways arc.
     """
-    norm = np.linalg.norm(panel_center)
-    if norm < 1e-9:
-        return np.array(panel_center, dtype=float)
-    direction = np.array(panel_center) / norm
-    return panel_center + radius_m * direction
+    ray = np.asarray(panel_pos, dtype=float) - np.asarray(camera_pos, dtype=float)
+    u = ray / (np.linalg.norm(ray) + 1e-9)
+    return lateral_std ** 2 * np.eye(3) + (depth_std ** 2 - lateral_std ** 2) * np.outer(u, u)
 
 
-class SpinDetector:
+QUARTER_TURN = math.pi / 2.0
+BACK_FACING_COS = -0.3  # association skips panels facing further away than this
+
+
+def panel_positions(state, other_r):
+    """Return [(k, yaw_k, position)] for all 4 panels, k=0 the tracked one."""
+    xc, yc, zc = state[0], state[1], state[2]
+    yaw, r = state[6], state[8]
+    out = []
+    for k in range(4):
+        yaw_k = yaw + k * QUARTER_TURN
+        r_k = r if k % 2 == 0 else other_r
+        out.append((k, yaw_k, np.array([xc + r_k * math.cos(yaw_k),
+                                        yc + r_k * math.sin(yaw_k), zc])))
+    return out
+
+
+class ArmorEKF:
     """
-    Estimate spin rate from class_id handoff timing.
+    Constant-velocity centre plus constant-rate spin, position-only updates.
 
-    Estimates spin rate from class_id handoff timing (the visible panel
-    id changing as the robot rotates). Coarse by design: a spinning
-    Standard-class robot presents 4 panels 90 degrees apart, so handoffs
-    are assumed to occur roughly once per quarter revolution -- this
-    conflates true handoff period with quarter-revolution period and does
-    not distinguish spin direction, but it's enough to decide the binary
-    spin/no-spin branch, which is the only thing that gates behaviour (see
-    target_tracker.py). spin_phase is a coarse re-derivation from elapsed
-    time since the last handoff, not a real phase-locked estimate.
+    q_accel (m/s^2) and q_yaw_accel (rad/s^2) drive white-noise-acceleration
+    process noise; q_radius (m/sqrt(s)) lets r drift. r is clamped to
+    [r_min, r_max] after every update.
     """
 
-    def __init__(self, handoff_timeout_s, min_handoffs, cv_max):
-        self.handoff_timeout_s = handoff_timeout_s
-        self.min_handoffs = min_handoffs
-        self.cv_max = cv_max
-        self.reset()
+    def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius,
+                 q_accel, q_yaw_accel, q_radius, r_min=0.18, r_max=0.45,
+                 spin_prior=0.0, spin_prior_std=8.0):
+        self.q_accel = q_accel
+        self.q_yaw_accel = q_yaw_accel
+        self.q_radius = q_radius
+        self.r_min = r_min
+        self.r_max = r_max
+        self.state = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, radius])
+        self.other_r = radius
+        self.P = np.eye(N_STATE)
+        self.t_sec = t_sec
+        self.n_outliers = 0
+        self.last_nis = 0.0
+        self.spin_prior = spin_prior
+        self.spin_prior_std = spin_prior_std
+        self.initial_radius = radius
+        self.reacquire(panel_pos, camera_pos, t_sec, pos_var, keep_spin=False)
 
-    def reset(self):
-        self._last_class_id = None
-        self._last_change_t = None
-        self._intervals = []
+    def reacquire(self, panel_pos, camera_pos, t_sec, pos_var, keep_spin=True):
+        pos_var = _as_cov(pos_var)
+        """
+        Re-seed centre, velocity and yaw from one panel, assumed to face the camera.
 
-    def update(self, t_sec, class_id):
-        """Return (spinning: bool, spin_hz: float, spin_phase: float)."""
-        if self._last_class_id is None:
-            self._last_class_id = class_id
-            self._last_change_t = t_sec
-            return False, 0.0, 0.0
+        keep_spin keeps w and both radii (with their variance), since a
+        target that jinks rarely changes its spin in the same instant.
+        """
+        r = self.state[8]
+        yaw = math.atan2(camera_pos[1] - panel_pos[1], camera_pos[0] - panel_pos[0])
+        w, w_var, r_var = self.state[7], self.P[7, 7], self.P[8, 8]
+        if not keep_spin:
+            w, w_var, r_var = self.spin_prior, self.spin_prior_std ** 2, 0.05 ** 2
+        self.state = np.array([
+            panel_pos[0] - r * math.cos(yaw), panel_pos[1] - r * math.sin(yaw),
+            panel_pos[2], 0.0, 0.0, 0.0, yaw, w, r])
+        self.P = np.diag([0.0, 0.0, 0.0, 4.0, 4.0, 0.25, 0.5 ** 2, w_var, r_var])
+        self.P[:3, :3] = pos_var + np.diag([0.01, 0.01, 0.0])
+        self.t_sec = t_sec
+        self.n_outliers = 0
 
-        if class_id != self._last_class_id:
-            interval = t_sec - self._last_change_t
-            if interval > 0.0:
-                self._intervals.append(interval)
-                self._intervals = self._intervals[-8:]
-            self._last_class_id = class_id
-            self._last_change_t = t_sec
-
-        since_last = t_sec - self._last_change_t
-        if since_last > self.handoff_timeout_s:
-            self._intervals = []
-            return False, 0.0, 0.0
-
-        if len(self._intervals) < self.min_handoffs:
-            return False, 0.0, 0.0
-
-        mean_interval = sum(self._intervals) / len(self._intervals)
-        if mean_interval <= 0.0:
-            return False, 0.0, 0.0
-        variance = sum((i - mean_interval) ** 2 for i in self._intervals) / len(self._intervals)
-        cv = math.sqrt(variance) / mean_interval
-        if cv > self.cv_max:
-            return False, 0.0, 0.0
-
-        period_s = 4.0 * mean_interval  # 4 panels/revolution, see class docstring
-        spin_hz = 1.0 / period_s
-        spin_phase = (2.0 * math.pi * (since_last / period_s)) % (2.0 * math.pi)
-        return True, spin_hz, spin_phase
-
-
-class KalmanFilter6D:
-    """
-    Run a 6-state constant-velocity Kalman filter over 3-D position.
-
-    6-state constant-velocity Kalman filter: [x,y,z,vx,vy,vz], 3-D
-    position measurements only (H picks out x,y,z). Isotropic per-axis
-    process/measurement noise -- no cross-axis coupling.
-    """
-
-    def __init__(self, initial_pos, t_sec, pos_var):
-        self.state = np.array([initial_pos[0], initial_pos[1], initial_pos[2],
-                               0.0, 0.0, 0.0])
-        # Large initial velocity uncertainty -- the first sample carries no
-        # velocity information.
-        self.P = np.diag([pos_var, pos_var, pos_var, 4.0, 4.0, 4.0])
-        self._t_sec = t_sec
-
-    @staticmethod
-    def _transition(dt, process_noise_accel):
-        """Return (F, Q) for a dt-second constant-velocity step."""
-        F = np.eye(6)
+    def _transition(self, dt):
+        F = np.eye(N_STATE)
         F[0, 3] = F[1, 4] = F[2, 5] = dt
-        q = process_noise_accel ** 2
-        # Standard discrete white-noise-acceleration process noise per axis.
-        Q_block = np.array([[dt ** 4 / 4.0, dt ** 3 / 2.0],
-                            [dt ** 3 / 2.0, dt ** 2]]) * q
-        Q = np.zeros((6, 6))
+        F[6, 7] = dt
+        Q = np.zeros((N_STATE, N_STATE))
+        block = np.array([[dt ** 4 / 4.0, dt ** 3 / 2.0],
+                          [dt ** 3 / 2.0, dt ** 2]])
         for i in range(3):
-            idx = [i, i + 3]
-            Q[np.ix_(idx, idx)] = Q_block
+            Q[np.ix_([i, i + 3], [i, i + 3])] = block * self.q_accel ** 2
+        Q[np.ix_([6, 7], [6, 7])] = block * self.q_yaw_accel ** 2
+        Q[8, 8] = dt * self.q_radius ** 2
         return F, Q
 
-    def predict(self, t_sec, process_noise_accel):
-        dt = t_sec - self._t_sec
-        self._t_sec = t_sec
+    def predicted(self, t_sec):
+        """Return (state, P) extrapolated to t_sec, without mutating the filter."""
+        dt = t_sec - self.t_sec
         if dt <= 0.0:
-            return
-        F, Q = self._transition(dt, process_noise_accel)
-        self.state = F @ self.state
-        self.P = F @ self.P @ F.T + Q
+            return self.state.copy(), self.P.copy()
+        F, Q = self._transition(dt)
+        return F @ self.state, F @ self.P @ F.T + Q
 
-    def predicted(self, t_sec, process_noise_accel):
+    def predict(self, t_sec):
+        self.state, self.P = self.predicted(t_sec)
+        self.t_sec = max(self.t_sec, t_sec)
+
+    def associate(self, panel_pos, camera_pos):
         """
-        Extrapolate to t_sec without mutating the filter.
+        Re-label the state onto the panel nearest panel_pos; return (k, distance).
 
-        Returns (state, variance) at t_sec. Used to report the estimate at
-        a time later than the filter's own -- the spin branch updates at
-        the window's mean time, which lags the newest detection.
-
-        Always returns fresh arrays, including on the dt <= 0 shortcut: a
-        caller mutating the result must not reach into the filter's state.
+        Panels facing more than ~107 deg away from the camera are skipped.
+        A cut at 90 deg flipped edge-on panels in and out with a 10cm camera
+        shift and mis-assigned handoffs for seconds (see README.md). k != 0
+        is a handoff: yaw steps by k quarter turns, and an odd k swaps r with
+        other_r. Call after predict(), before update().
         """
-        dt = t_sec - self._t_sec
-        if dt <= 0.0:
-            return self.state.copy(), np.diag(self.P).copy()
-        F, Q = self._transition(dt, process_noise_accel)
-        return F @ self.state, np.diag(F @ self.P @ F.T + Q)
+        best = None
+        for k, yaw_k, pos in panel_positions(self.state, self.other_r):
+            to_cam = math.atan2(camera_pos[1] - pos[1], camera_pos[0] - pos[0])
+            if math.cos(yaw_k - to_cam) <= BACK_FACING_COS:
+                continue
+            d = float(np.linalg.norm(pos - np.asarray(panel_pos)))
+            if best is None or d < best[1]:
+                best = (k, d)
+        if best is None:
+            return None, float('inf')
+        k = best[0]
+        if k:
+            self.state[6] += k * QUARTER_TURN
+            if k % 2:
+                self.state[8], self.other_r = self.other_r, self.state[8]
+        return best
 
-    def update(self, meas, pos_var):
-        H = np.zeros((3, 6))
+    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3):
+        """
+        Predict, associate and update on one detection; return 'update', 'outlier' or 'reacquire'.
+
+        gate_nis is the chi-square(3) bound on the normalised innovation
+        (16.3 = 99.9%). Outliers are skipped; max_outliers in a row re-seed
+        the position via reacquire(), keeping the spin estimate.
+        """
+        self.predict(t_sec)
+        self.associate(panel_pos, camera_pos)
+        self.last_nis = self.nis(panel_pos, pos_var)
+        if self.last_nis > gate_nis:
+            self.n_outliers += 1
+            if self.n_outliers < max_outliers:
+                return 'outlier'
+            self.reacquire(panel_pos, camera_pos, t_sec, pos_var)
+            return 'reacquire'
+        self.n_outliers = 0
+        self.update(panel_pos, pos_var)
+        return 'update'
+
+    def _h_and_jacobian(self):
+        xc, yc, zc = self.state[0], self.state[1], self.state[2]
+        yaw, r = self.state[6], self.state[8]
+        c, s = math.cos(yaw), math.sin(yaw)
+        h = np.array([xc + r * c, yc + r * s, zc])
+        H = np.zeros((3, N_STATE))
         H[0, 0] = H[1, 1] = H[2, 2] = 1.0
-        R = np.eye(3) * pos_var
-        y = np.array(meas) - H @ self.state
+        H[0, 6], H[0, 8] = -r * s, c
+        H[1, 6], H[1, 8] = r * c, s
+        return h, H
+
+    def nis(self, panel_pos, pos_var):
+        h, H = self._h_and_jacobian()
+        y = np.asarray(panel_pos) - h
+        S = H @ self.P @ H.T + _as_cov(pos_var)
+        return float(y @ np.linalg.solve(S, y))
+
+    def update(self, panel_pos, pos_var):
+        h, H = self._h_and_jacobian()
+        R = _as_cov(pos_var)
         S = H @ self.P @ H.T + R
         K = self.P @ H.T @ np.linalg.inv(S)
-        self.state = self.state + K @ y
-        self.P = (np.eye(6) - K @ H) @ self.P
+        self.state = self.state + K @ (np.asarray(panel_pos) - h)
+        IKH = np.eye(N_STATE) - K @ H
+        self.P = IKH @ self.P @ IKH.T + K @ R @ K.T  # Joseph form
+        self.state[8] = min(max(self.state[8], self.r_min), self.r_max)
+
+
+class ArmorTracker:
+    """
+    Bank of ArmorEKFs seeded at different spin rates; the lowest-NIS one leads.
+
+    One EKF started at w=0 locks into a wrong spin (often w~0 with a
+    collapsed radius) if its first second of data is poor, e.g. while the
+    head slews in. Every hypothesis sees every panel; score is an EWMA of
+    its NIS (alpha). A hypothesis scoring worse than the leader by
+    reseed_margin for reseed_after_s is re-seeded from the leader's centre
+    and yaw, with its own spin prior and fresh radii. See README.md.
+    """
+
+    def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
+                 q_yaw_accel, q_radius, spin_priors=(0.0, 7.0, -7.0, 13.0, -13.0),
+                 prior_std=3.0, alpha=0.03, reseed_margin=3.0, reseed_after_s=1.0,
+                 switch_margin=1.0, switch_after_s=0.5):
+        self.filters = [ArmorEKF(panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
+                                 q_yaw_accel, q_radius, spin_prior=w, spin_prior_std=prior_std)
+                        for w in spin_priors]
+        self.scores = [3.0] * len(self.filters)  # NIS mean for 3 dof
+        self.worse_since = [None] * len(self.filters)
+        self.alpha = alpha
+        self.reseed_margin = reseed_margin
+        self.reseed_after_s = reseed_after_s
+        self.lead = 0
+        self.switch_margin = switch_margin
+        self.switch_after_s = switch_after_s
+        self._challenger = None  # (index, since t_sec)
+
+    @property
+    def best(self):
+        return self.filters[self.lead]
+
+    @property
+    def state(self):
+        return self.best.state
+
+    @property
+    def other_r(self):
+        return self.best.other_r
+
+    def predicted(self, t_sec):
+        return self.best.predicted(t_sec)
+
+    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3):
+        """Advance every hypothesis on one panel; return the leading filter's status."""
+        statuses = []
+        for i, f in enumerate(self.filters):
+            statuses.append(f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers))
+            nis = min(f.last_nis, gate_nis)  # one wild sample shouldn't sink a filter
+            self.scores[i] += self.alpha * (nis - self.scores[i])
+        # The lead changes only after a challenger beats it by switch_margin
+        # for switch_after_s: a noise burst briefly favours a collapsed-radius
+        # wrong-sign hypothesis, which is least sensitive to it.
+        best_i = int(np.argmin(self.scores))
+        lead_score = self.scores[self.lead]
+        if best_i == self.lead or self.scores[best_i] > lead_score - self.switch_margin:
+            self._challenger = None
+        elif self._challenger is None or self._challenger[0] != best_i:
+            self._challenger = (best_i, t_sec)
+        elif t_sec - self._challenger[1] >= self.switch_after_s:
+            self.lead, self._challenger = best_i, None
+        best, best_score = self.best, self.scores[self.lead]
+        for i, f in enumerate(self.filters):
+            if (i == self.lead or (self._challenger and self._challenger[0] == i)
+                    or self.scores[i] < best_score + self.reseed_margin):
+                self.worse_since[i] = None
+                continue
+            if self.worse_since[i] is None:
+                self.worse_since[i] = t_sec
+            elif t_sec - self.worse_since[i] >= self.reseed_after_s:
+                f.state = best.state.copy()
+                f.state[7] = f.spin_prior
+                f.state[8] = f.other_r = f.initial_radius
+                f.P = best.P.copy()
+                f.P[7, :] = f.P[:, 7] = 0.0
+                f.P[7, 7] = f.spin_prior_std ** 2
+                f.P[8, :] = f.P[:, 8] = 0.0
+                f.P[8, 8] = 0.05 ** 2
+                f.t_sec = best.t_sec
+                self.scores[i] = best_score + self.reseed_margin / 2.0
+                self.worse_since[i] = None
+        return statuses[self.lead]
