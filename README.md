@@ -188,13 +188,14 @@ accepts it within `tf_future_tolerance_s` (0.25), warning each time. Past that
 it drops the detection and logs the gap. Bearing error is gap times head slew
 rate, so a loose tolerance would trade no output for confident bad aim.
 
-That tolerance exists because restarting `auto.launch.py` against a running
-`sim.launch.py` leaves TF 0.55-0.83s behind detections and the tracker silent
-(2026-09-09: 0 lookup failures starting both together, 17-25 restarting only
-`auto`). Sim's world runs 1kHz physics, so `/clock` arrives at ~870Hz and
-`/sim/raw_joint_states` at ~918Hz, and each `use_sim_time` Python node spends
-35-66% of a core on them (`odom_tf_broadcaster` 38%). The fix is throttling
-those topics in `sim`. Until then, start both stacks together.
+Every TF lookup in `target_tracker` and `point_to_cv_target` is
+non-blocking. `/tf` is serviced by the same executor as the detection
+callback, and `Buffer.lookup_transform(timeout=...)` sleeps in a wall-clock
+loop, so a 50ms wait per ~60Hz detection starved `/tf`. The buffer then fell
+0.6-1.7s behind detections that TF itself was ~60ms ahead of, and the tracker
+dropped nearly everything (2026-09-17, measured against a separate listener
+on the same run). Humble's `TransformListener(spin_thread=True)` doesn't help:
+it adds the whole node to a second executor rather than isolating `/tf`.
 
 `SpinDetector` calls a target spinning after `spin_min_handoffs` (3) `class_id`
 changes at roughly equal intervals (coefficient of variation under
@@ -303,6 +304,7 @@ lead, the reverse lookup gives shooter position in odom, and
 `RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
 latest transform, since the solve needs where the shooter is now.
 
-`fire_rate_hz` (2.0) drives a placeholder fire trigger gated only on
-`target_active` and cached confidence. It ignores the aim solve, so it can fire
-after a failed TF lookup. Real firing logic is not built.
+`fire_rate_hz` (2.0) drives a placeholder fire trigger gated on
+`target_active`, cached confidence, and the last publish tick having emitted an
+aim point (`aim_ok`), so a failed TF lookup or stale state holds fire. Real
+firing logic (HP, heat, power, timing) is not built.
