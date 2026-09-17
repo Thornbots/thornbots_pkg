@@ -15,8 +15,8 @@ root-frame `CVTarget`. Localization backends are in
 | `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/sentry/fire_command` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/fire_command` |
-| `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick) |
-| `target_tracker` | `/cv/panel_detection` | `/cv/target_state` (`TargetState`, odom frame) |
+| `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/robot_panels` (that robot's panels) |
+| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model) |
 | `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection`, `/pose` | `/cv/target` (`CVTarget`, root frame), `/cv/panel_polygon`, `/sentry/fire_command` |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
@@ -31,8 +31,9 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 /scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->odom TF owned by slam_toolbox/amcl there)
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
-/cv/panel_detections --[target_selector]--> /cv/panel_detection --[target_tracker]--> /cv/target_state
-/cv/target_state (position) + /cv/panel_detection (confidence, liveness, corners) --[point_to_cv_target]--\
+/cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
+                                        \-> /cv/panel_detection (one pick)
+/cv/target_state (armor model) + /cv/panel_detection (confidence, liveness, corners) --[point_to_cv_target]--\
                                                                     /cv/panel_polygon (rviz/foxglove) <---/
                                                                     /cv/target (root frame) <-------------/
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
@@ -147,13 +148,18 @@ depth, so `centrality_3d()` uses bearing off the camera's +X axis: 1.0 at
 boresight, 0.0 at `centrality_max_angle_rad` (45 degrees, about half the ~87
 degree HFOV). Points behind the camera (`x<=0`) score 0.
 
-Grouping is single-linkage at `panel_group_radius_m` (0.4). Adjacent panels
+Grouping is single-linkage at `panel_group_radius_m` (0.5). Adjacent panels
 on one robot are `hypot(0.30, 0.24) = 0.384m` apart (opposite pairs
-0.48-0.60m), so 0.4m links neighbours and transitivity reaches all four.
-Two robots whose nearest panels are within 0.4m will merge; nobody has fixed
-that. Centroid linkage would instead split one spinning robot as its centroid
+0.48-0.60m, never visible together). It was 0.4, and with 3cm detection noise
+that split 43% of two-panel frames into two robots in sim (2026-09-17), which
+starved the tracker of the second panel. Two robots whose nearest panels are
+within 0.5m will merge; nobody has fixed that. Centroid linkage would instead split one spinning robot as its centroid
 wanders. Clustering runs in camera frame, which is metric because every panel
 in a `PanelDetectionArray` shares one camera pose.
+
+Every panel of the winning robot also goes out on `/cv/robot_panels`,
+winner first, for `target_tracker`. The per-frame pick flips between two
+visible panels, and one panel per frame drops the armor model's spin lock.
 
 Hysteresis is per robot, since a spinning robot's panels vanish every
 0.5-1s (145 degree exposure cone, 1-2Hz spin) and panel stickiness would
@@ -197,46 +203,48 @@ dropped nearly everything (2026-09-17, measured against a separate listener
 on the same run). Humble's `TransformListener(spin_thread=True)` doesn't help:
 it adds the whole node to a second executor rather than isolating `/tf`.
 
-`SpinDetector` calls a target spinning after `spin_min_handoffs` (3) `class_id`
-changes at roughly equal intervals (coefficient of variation under
-`spin_cv_max`, 0.35), and drops back after `spin_handoff_timeout_s` (1.5s)
-without one. `spin_hz` assumes one handoff per quarter turn and can't tell
-direction; that is coarse, but only the spin/no-spin branch depends on it.
-`spin_phase` is re-derived from time since handoff and nothing reads it.
+The target is a 4-panel armor model, the standard RoboMaster anti-spin
+tracker (rm_auto_aim's) reduced to position-only detections. On hardware
+`class_id` is the robot's team and plate, the same on all four panels, so spin
+can't come from handoffs; it has to come from geometry. The old `SpinDetector`
+counted `class_id` changes and only worked because the emulator faked them.
 
-The spinning branch takes a running mean of panel positions, corrected for the
-exposure-cone bias toward the camera. It ignores `PanelDetection.corners`.
-`roi_depth_node.cpp`'s `deprojectDetection()` deprojects all four corners at
-one `mean_depth_m`, so every real quad is fronto-parallel and a corner cross
-product always returns the boresight axis. `cv_target_emulator.py`'s corners
-do carry tilt, so a corner-based normal would pass in sim and be wrong on
-hardware, a divergence a sim hit-rate can't catch.
+`ArmorEKF` state is centre, centre velocity, the tracked panel's normal yaw,
+spin rate `w` and that panel's radius, with the other pair's radius kept
+aside. A panel measures `centre + r * (cos yaw, sin yaw, 0)`. Each detection
+first associates to the nearest of the four predicted panels, skipping those
+facing more than ~107 degrees from the camera; `k != 0` is a handoff, stepping
+yaw by quarter turns and swapping radii on odd `k`. A cut at exactly 90 degrees
+mis-assigned edge-on panels whenever the camera moved 10cm and held a wrong
+spin for seconds. `PanelDetection.corners` stay unused:
+`roi_depth_node.cpp`'s `deprojectDetection()` puts all four at one
+`mean_depth_m`, so real corners carry no panel tilt.
 
-`corrected_centre()` pushes the panel position out along its own camera ray by
-`panel_radius_m` (0.27, mean of 0.30 and 0.24; `class_id` doesn't say which
-face is visible). Plane fitting only works under ~2m, and the hardware
-pipeline produces no panel orientation, so this stays. `estimator` is always
-`0` (`running_mean`). The width-refined `1` branch is unimplemented and must
-beat the running mean against the emulator's known panel normal before it
-replaces it.
+Noise: `R` stddev is `meas_noise_base_m + meas_noise_range_coeff * range_m^2`
+(depth error grows with z^2). `process_noise_accel` (2.0 m/s^2) drives the
+centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
+`process_noise_radius` (0.02) the radius, which clamps to 0.18-0.45m. These
+came from an offline sweep against an emulator-shaped target; the higher yaw
+noise let a jinking target's translation leak into `w`. Without spin, yaw and
+radius are unobservable and drift, but the seen panel's position stays solid,
+which is what `point_to_cv_target` aims at then.
 
-The KF is 6-state constant velocity with range-scaled `R`:
-`meas_noise_base_m + meas_noise_range_coeff * range_m^2` (depth error grows
-with z^2). `spin_meas_inflation` is 1.0, because a ~30-sample mean is less
-noisy than one sample. The orbit-averaging error it might address is a bias,
-which inflating `R` doesn't fix.
+Innovation gating: a normalised innovation over `gate_nis` (16.3, 99.9% for 3
+dof) is skipped, and `max_outliers` (3) in a row re-seed centre, velocity and
+yaw from the panel while keeping `w` and the radii. Sim's `target_driver`
+reverses instantly at each end of its path, which otherwise wrecked `w`.
 
-The window mean describes the window's mean time, about `spin_window_s / 2`
-before the newest sample, so the KF gets it at that time (`meas_t`). Stamping
-it at the newest sample biased velocity low by 0.25s times chassis speed,
-which the lead solve then extrapolated. Published `centre`, `velocity` and
-`variance` come from `KalmanFilter6D.predicted(t_sec)`, a non-mutating
-extrapolation to the detection stamp, so `header.stamp` matches the payload.
+`ArmorTracker` runs five `ArmorEKF`s seeded at `w` = 0, +-7, +-13 rad/s
+(1-2Hz both ways) on every panel and publishes the one with the lowest EWMA of
+normalised innovation. A single filter fed 15cm noise for its first second,
+as when sim's head slews in from rest, locked onto a wrong spin for good on 6
+of 10 seeds; the bank recovered on 9. A hypothesis trailing the leader by 3
+for 1s is re-seeded from the leader's centre and yaw with its own spin prior.
 
-The filter resets only on a `robot_track_id` change or a `track_max_gap_s`
-gap, never on a `class_id` handoff. `valid` goes true after 2 updates, because
-an engagement can be shorter than one spin period. Consumers should weigh
-`variance`, which stays large after a reset.
+The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
+`valid` goes true after 2 updates, because an engagement can be shorter than
+one spin period; consumers should weigh `variance` and `yaw_rate_variance`.
+Published state is `ArmorTracker.predicted(t_sec)` at the detection stamp.
 
 ### mcb_relay.py
 
@@ -289,15 +297,30 @@ tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
   the node aims at the old robot at full confidence with `track_valid=True`.
 - `valid == False`: raw `panel` position, `lead_applied=False`,
   `track_valid=False`. No extrapolation off an unconverged track.
-- `valid == True`: KF `centre` in root, after `solve_intercept()` if
-  `lead_enabled`. The solve is a 2-3 iteration time-of-flight fixed point with
-  no gravity, drag or elevation (Type-C handles those).
+- `valid == True`: `plan_shot()`'s aim point in root. See below.
 
-`lead_enabled` defaults to true. On 2026-09-17's headless shot-hit sweep it cut
-mean miss distance at 1, 2 and 4 m/s (0.23 to 0.14m, 0.55 to 0.46m, 1.23 to
-1.01m) and scored more hits at 0.5 m/s in both runs (4/18 vs 0/11, 2/11 vs
-1/18). Moving hit rates stay low, because the aim point is the chassis centre and
-nothing times shots to the spin. See `sim/CV_TEST_GAPS.md`.
+`plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
+mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
+
+- Panel mode leads the tracked panel (centre velocity plus its tangential
+  `r*w`) with `solve_intercept()` and fires now. A slow target's yaw and radius
+  drift, so the seen panel beats the best-facing predicted one.
+- Spin mode leads a point on the centre-to-shooter line, radius the mean of
+  both pairs, half a tick ahead. That line is steady, so the gimbal can hold it
+  while panels sweep past. It fires with `FireCommand.delay_ms` set so a panel
+  normal points along that line at impact, if that alignment falls within one
+  publish tick (33ms); otherwise it waits for a later tick. Standard
+  "centre aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
+  would lag it.
+
+`solve_intercept()` is the time-of-flight fixed point, 2-3 iterations, with no
+gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
+aims at the current estimate and fires untimed, the control for the shot-hit
+bench.
+
+`delay_ms` is ROS-internal: `FireCommand` isn't on the wire yet (see
+`ros2_dji_serial_bridge/UART_PROTOCOL.md`), so hardware timing needs the
+fire decision to reach the MCB first.
 
 The solve's tau is this tick's `now - state.header.stamp` plus
 `firmware_latency_s` (0.0, unmeasured). It skips `LatencyStat.mean` because
@@ -310,7 +333,6 @@ lead, the reverse lookup gives shooter position in odom, and
 `RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
 latest transform, since the solve needs where the shooter is now.
 
-`fire_rate_hz` (2.0) drives a placeholder fire trigger gated on
-`target_active`, cached confidence, and the last publish tick having emitted an
-aim point (`aim_ok`), so a failed TF lookup or stale state holds fire. Real
-firing logic (HP, heat, power, timing) is not built.
+Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
+only above `fire_confidence_threshold`, so a failed TF lookup or stale state
+holds fire. HP, heat and power gating are not built.

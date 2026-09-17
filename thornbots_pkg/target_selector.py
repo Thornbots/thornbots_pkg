@@ -29,8 +29,8 @@ test/test_target_selector.py. This module wires ROS I/O around it.
 Pipeline: /cv/panel_detections -> team filter -> per-frame score/pick
 per candidate robot cluster -> robot-level hysteresis -> best panel of
 the winning cluster republished on /cv/panel_detection (PanelDetection,
-singular) -- unchanged shape/topic so point_to_cv_target.py needs no
-changes.
+singular), and all of that robot's panels, winner first, on
+/cv/robot_panels (PanelDetectionArray) for target_tracker.
 """
 import math
 
@@ -52,19 +52,21 @@ class TargetSelector(Node):
 
         self.declare_parameter('panel_array_topic', '/cv/panel_detections')
         self.declare_parameter('panel_topic', '/cv/panel_detection')
+        self.declare_parameter('robot_panels_topic', '/cv/robot_panels')
         self.declare_parameter('ref_sys_topic', '/dji_serial_bridge/ref_sys')
         self.declare_parameter('min_score', 0.0)
         self.declare_parameter('center_weight', 1.0)
         self.declare_parameter('priority_class_bonus', 0.5)
         self.declare_parameter('priority_class_ids', [2, 6])
         self.declare_parameter('centrality_max_angle_rad', math.radians(45.0))
-        self.declare_parameter('panel_group_radius_m', 0.4)
+        self.declare_parameter('panel_group_radius_m', 0.5)
         self.declare_parameter('switch_margin', 0.3)
         self.declare_parameter('switch_hold_frames', 5)
 
         gp = self.get_parameter
         panel_array_topic = gp('panel_array_topic').value
         panel_topic = gp('panel_topic').value
+        robot_panels_topic = gp('robot_panels_topic').value
         self.ref_sys_topic = gp('ref_sys_topic').value
         self.min_score = float(gp('min_score').value)
         self.center_weight = float(gp('center_weight').value)
@@ -80,6 +82,8 @@ class TargetSelector(Node):
         self.is_blue_team = None  # None until first RefSysStatus
 
         self.pub = self.create_publisher(PanelDetection, panel_topic, 10)
+        self.robot_panels_pub = self.create_publisher(
+            PanelDetectionArray, robot_panels_topic, 10)
         self.array_sub = self.create_subscription(
             PanelDetectionArray, panel_array_topic, self.on_array, 10)
         # Matches dji_serial_bridge_node's ~/ref_sys SensorDataQoS publisher.
@@ -88,7 +92,7 @@ class TargetSelector(Node):
 
         self.get_logger().info(
             f'target_selector ready\n'
-            f'  {panel_array_topic} -> {panel_topic}\n'
+            f'  {panel_array_topic} -> {panel_topic}, {robot_panels_topic}\n'
             f'  score = conf + {self.center_weight}*centrality + '
             f'{self.priority_class_bonus} if class in {sorted(self.priority_class_ids)}'
             f'  (min_score={self.min_score} gates on raw confidence only)\n'
@@ -131,6 +135,7 @@ class TargetSelector(Node):
 
         clusters = group_panels(candidates, self.panel_group_radius_m)
         cluster_infos = []
+        members = {}
         for indices in clusters:
             centroid = cluster_centroid(candidates, indices)
             # Best panel within this cluster, per-frame, no stickiness.
@@ -140,6 +145,7 @@ class TargetSelector(Node):
                 'centroid': centroid,
                 'score': candidates[best_idx]['score'],
             })
+            members[best_idx] = indices
 
         winner_key = self.hysteresis.update(cluster_infos)
         if winner_key is None:
@@ -148,6 +154,19 @@ class TargetSelector(Node):
         winner = candidates[winner_key]['det']
         winner.robot_track_id = self.hysteresis.track_id
         self.pub.publish(winner)
+
+        # Every panel of the winning robot, winner first: target_tracker's
+        # armor model needs them all, since one per-frame pick flips between
+        # two visible panels and breaks the spin estimate. See README.md.
+        robot = PanelDetectionArray()
+        robot.header = msg.header
+        robot.detections = [winner]
+        for i in members[winner_key]:
+            if i != winner_key:
+                det = candidates[i]['det']
+                det.robot_track_id = winner.robot_track_id
+                robot.detections.append(det)
+        self.robot_panels_pub.publish(robot)
 
 
 def main(args=None):

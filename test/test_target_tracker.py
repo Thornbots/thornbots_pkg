@@ -13,11 +13,10 @@
 # limitations under the License.
 
 """
-Unit tests for target_tracker_core.py's normal/spin/Kalman-filter logic.
+Unit tests for target_tracker_core.py's armor-model EKF.
 
-Synthetic inputs only, mirroring test_target_selector.py -- no rclpy, no
-ROS message packages, runs on a bare Python 3 + pytest install. Run with
-`python3 -m pytest test/test_target_tracker.py`.
+Synthetic 4-panel targets only (radii 0.30/0.24, the emulator's layout), no
+rclpy. Run with `python3 -m pytest test/test_target_tracker.py`.
 """
 import math
 import os
@@ -28,246 +27,186 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.target_tracker_core import (  # noqa: E402
-    corrected_centre, KalmanFilter6D, SpinDetector,
+    ArmorEKF, ArmorTracker, panel_positions, ray_covariance,
 )
 
-
-# ── corrected_centre ──────────────────────────────────────────────────────
-
-def test_corrected_centre_extends_along_boresight():
-    panel = np.array([4.0, 0.0, 0.0])
-    c = corrected_centre(panel, 0.3)
-    assert np.allclose(c, [4.3, 0.0, 0.0])
+CAMERA = np.array([0.0, 0.0, 0.4])
+RX, RY = 0.30, 0.24
+NOISE_M = 0.03
+DT = 1.0 / 60.0
 
 
-def test_corrected_centre_extends_along_off_axis_bearing():
-    # Off-boresight panel: correction must follow the panel's own bearing
-    # from the camera, not a fixed axis -- this is exactly what the
-    # corner-cross-product approach got wrong (see target_tracker_core.py's
-    # docstring).
-    panel = np.array([3.0, 4.0, 0.0])  # range 5, bearing (0.6, 0.8, 0)
-    c = corrected_centre(panel, 0.5)
-    expected = panel + 0.5 * np.array([0.6, 0.8, 0.0])
-    assert np.allclose(c, expected)
+def _true_panels(centre, yaw):
+    return [(centre + (RX if k % 2 == 0 else RY)
+             * np.array([math.cos(yaw + k * math.pi / 2.0),
+                         math.sin(yaw + k * math.pi / 2.0), 0.0]),
+             yaw + k * math.pi / 2.0) for k in range(4)]
 
 
-def test_corrected_centre_degenerate_at_origin():
-    c = corrected_centre(np.array([0.0, 0.0, 0.0]), 0.3)
-    assert np.allclose(c, [0.0, 0.0, 0.0])
+def _seen_panel(centre, yaw):
+    """Most head-on panel within 75 degrees of the camera, like the emulator."""
+    best = None
+    for pos, yaw_k in _true_panels(centre, yaw):
+        to_cam = CAMERA - pos
+        cos_view = (math.cos(yaw_k) * to_cam[0] + math.sin(yaw_k) * to_cam[1]) \
+            / np.linalg.norm(to_cam[:2])
+        if cos_view > math.cos(math.radians(75.0)) and (best is None or cos_view > best[0]):
+            best = (cos_view, pos)
+    return None if best is None else best[1]
 
 
-# ── SpinDetector ──────────────────────────────────────────────────────────
-
-def test_no_handoffs_reports_not_spinning():
-    s = SpinDetector(handoff_timeout_s=1.5, min_handoffs=3, cv_max=0.35)
-    spinning, hz, phase = s.update(0.0, class_id=2)
-    assert not spinning
-    for t in np.arange(0.1, 2.0, 0.1):
-        spinning, hz, phase = s.update(float(t), class_id=2)
-    assert not spinning
-    assert hz == 0.0
-
-
-def test_regular_handoffs_detected_as_spinning():
-    s = SpinDetector(handoff_timeout_s=1.5, min_handoffs=3, cv_max=0.35)
-    # 4 panels, handoff every 0.25s -> spin period ~1s -> spin_hz ~1.0
-    class_ids = [0, 1, 2, 3, 0, 1, 2, 3, 0]
-    spinning = False
-    hz = 0.0
-    for i, cid in enumerate(class_ids):
-        t = i * 0.25
-        spinning, hz, phase = s.update(t, cid)
-    assert spinning
-    assert abs(hz - 1.0) < 0.1
+def _run(velocity, spin_rad_s, seconds, seed=0, noise=NOISE_M, start=(3.0, 0.0, 0.3),
+         cls=ArmorEKF, bad_start_s=0.0, yaw0=0.3):
+    """Feed a noisy constant-velocity spinning target; return (filter, truth centre, truth yaw)."""
+    rng = np.random.default_rng(seed)
+    ekf = None
+    centre, yaw = np.array(start), 0.3
+    for i in range(int(seconds / DT)):
+        t = i * DT
+        centre = np.array(start) + np.array(velocity) * t
+        yaw = yaw0 + spin_rad_s * t
+        seen = _seen_panel(centre, yaw)
+        if seen is None:
+            continue
+        meas = seen + rng.normal(0.0, noise if t >= bad_start_s else 0.15, 3)
+        if ekf is None:
+            ekf = cls(meas, CAMERA, t, 0.05 ** 2, 0.27, 2.0, 5.0, 0.02)
+        else:
+            ekf.step(meas, CAMERA, t, 0.05 ** 2)
+    return ekf, centre, yaw
 
 
-def test_irregular_handoffs_not_spinning():
-    s = SpinDetector(handoff_timeout_s=5.0, min_handoffs=3, cv_max=0.35)
-    class_ids_times = [(0, 0), (1, 0.1), (2, 0.9), (3, 1.0), (0, 2.5)]
-    spinning = True
-    for cid, t in class_ids_times:
-        spinning, hz, phase = s.update(t, cid)
-    assert not spinning
+def test_stationary_target_estimates_centre_and_no_spin():
+    ekf, centre, _ = _run((0.0, 0.0, 0.0), 0.0, 3.0)
+    # Only the seen panel is observable, so check it rather than the centre.
+    panel = ekf.state[:3] + ekf.state[8] * np.array(
+        [math.cos(ekf.state[6]), math.sin(ekf.state[6]), 0.0])
+    assert np.linalg.norm(panel - _seen_panel(centre, 0.3)) < 0.03
+    assert abs(ekf.state[7]) < 1.0
 
 
-def _spin_up(interval_s, n_handoffs=8, timeout_s=3.0):
-    """
-    Drive a clean spin at one handoff every interval_s.
-
-    Returns (detector, last_update_result, last_handoff_t, last_class_id).
-    Feed last_class_id back in to probe a later time without registering a
-    fresh handoff -- a different id would reset the phase to 0.
-
-    n_handoffs is deliberately 8, not 9. At the 0.25s interval the phase
-    tests use, that puts the final handoff at 1.75s against a 1.0s period,
-    so absolute time and time-since-handoff are not congruent mod one
-    revolution. With 9 the final handoff lands at 2.0s, the two differ by
-    exactly two revolutions, the phase modulo hides the difference, and a
-    spin_phase computed from t_sec instead of since_last passes.
-    """
-    s = SpinDetector(handoff_timeout_s=timeout_s, min_handoffs=3, cv_max=0.35)
-    out = (False, 0.0, 0.0)
-    last_t, last_cid = 0.0, 0
-    for i in range(n_handoffs):
-        last_t, last_cid = i * interval_s, i % 4
-        out = s.update(last_t, class_id=last_cid)
-    return s, out, last_t, last_cid
+def test_spin_in_place_recovers_rate_centre_and_both_radii():
+    w = 2.0 * math.pi * 1.5
+    ekf, centre, _ = _run((0.0, 0.0, 0.0), w, 4.0)
+    assert abs(ekf.state[7] - w) < 0.1 * w
+    assert np.linalg.norm(ekf.state[:2] - centre[:2]) < 0.05
+    radii = sorted([ekf.state[8], ekf.other_r])
+    assert abs(radii[0] - RY) < 0.04 and abs(radii[1] - RX) < 0.04
 
 
-def test_spin_hz_follows_the_four_panels_per_revolution_factor():
-    # The one spin_hz assertion was at a single rate (0.25s -> 1.0Hz),
-    # where the 4-panels/rev factor, the reciprocal, and the mean are all
-    # numerically tangled. Two more rates an octave apart on either side
-    # pin spin_hz == 1/(4*interval) as a relation: a factor of 2 or a
-    # dropped 4 fails at least one of them.
-    for interval, expected_hz in ((0.5, 0.5), (0.25, 1.0), (0.125, 2.0)):
-        _, (spinning, hz, _), _, _ = _spin_up(interval)
-        assert spinning, interval
-        assert abs(hz - expected_hz) < 0.01 * expected_hz, (interval, hz)
+def test_spin_direction_is_signed():
+    ekf, _, _ = _run((0.0, 0.0, 0.0), -2.0 * math.pi, 4.0)
+    assert ekf.state[7] < -0.9 * 2.0 * math.pi
 
 
-def test_spin_phase_is_zero_at_handoff_and_advances_with_elapsed_time():
-    # spin_phase was unpacked and discarded in all four spin tests, so it
-    # could have been any expression at all. It is a coarse
-    # time-since-handoff re-derivation (not phase-locked), and this pins
-    # exactly that much: 0 at the handoff, 2*pi*elapsed/period after it.
-    s, (spinning, hz, phase), last_t, cid = _spin_up(0.25)
-    assert spinning
-    assert phase == 0.0  # the last update WAS a handoff
-
-    period_s = 1.0 / hz
-    for elapsed in (0.125, 0.5, 0.9):
-        _, _, phase = s.update(last_t + elapsed, class_id=cid)
-        assert math.isclose(phase, 2.0 * math.pi * elapsed / period_s,
-                            rel_tol=1e-6), elapsed
+def test_spinning_while_translating_recovers_velocity_and_rate():
+    w = 2.0 * math.pi * 1.5
+    ekf, centre, _ = _run((0.0, 1.0, 0.0), w, 3.0, start=(3.0, -1.5, 0.3))
+    assert abs(ekf.state[7] - w) < 0.15 * w
+    assert abs(ekf.state[4] - 1.0) < 0.3
+    assert np.linalg.norm(ekf.state[:2] - centre[:2]) < 0.1
 
 
-def test_spin_phase_stays_within_one_revolution():
-    # The modulo is load-bearing: a consumer treating spin_phase as a
-    # bearing must never see a value outside [0, 2*pi).
-    s, _, last_t, cid = _spin_up(0.25, timeout_s=10.0)
-    for elapsed in (0.9, 1.4, 2.6, 5.1):
-        _, _, phase = s.update(last_t + elapsed, class_id=cid)
-        assert 0.0 <= phase < 2.0 * math.pi, (elapsed, phase)
+def test_handoff_steps_yaw_a_quarter_turn_and_swaps_radius():
+    # Panel at (2.7, 0) faces the camera at yaw pi; turn the chassis 50 deg
+    # clockwise so the k=1 panel (yaw pi + 40 deg) is the more head-on one.
+    ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
+    ekf.other_r = 0.24
+    ekf.state[6] -= math.radians(50.0)
+    yaw_before = ekf.state[6]
+    k1_pos = panel_positions(ekf.state, ekf.other_r)[1][2]
+    k, distance = ekf.associate(k1_pos, CAMERA)
+    assert k == 1 and distance < 1e-9
+    assert math.isclose(ekf.state[6], yaw_before + math.pi / 2.0)
+    assert ekf.state[8] == 0.24 and ekf.other_r == 0.30
 
 
-def test_stale_handoff_times_out():
-    s = SpinDetector(handoff_timeout_s=0.5, min_handoffs=2, cv_max=0.35)
-    s.update(0.0, 0)
-    s.update(0.2, 1)
-    s.update(0.4, 2)
-    spinning, hz, phase = s.update(0.6, 2)
-    assert spinning  # not yet timed out relative to last change at 0.4
-    spinning, hz, phase = s.update(1.0, 2)
-    assert not spinning  # 0.6s since last change > 0.5s timeout
+def test_back_panel_is_never_associated():
+    ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
+    back = panel_positions(ekf.state, ekf.other_r)[2][2]
+    k, _ = ekf.associate(back, CAMERA)
+    assert k != 2
 
 
-# ── KalmanFilter6D ────────────────────────────────────────────────────────
-
-def test_kf_tracks_constant_velocity():
-    kf = KalmanFilter6D([0.0, 0.0, 0.0], t_sec=0.0, pos_var=0.01)
-    v = np.array([2.0, 0.0, 0.0])
-    t = 0.0
-    for _ in range(50):
-        t += 0.05
-        pos = v * t
-        kf.predict(t, process_noise_accel=0.5)
-        kf.update(pos, pos_var=0.01)
-    assert np.allclose(kf.state[:3], v * t, atol=0.1)
-    assert np.allclose(kf.state[3:], v, atol=0.3)
-
-
-def test_kf_stationary_stays_near_zero_velocity():
-    kf = KalmanFilter6D([1.0, 2.0, 0.5], t_sec=0.0, pos_var=0.01)
-    t = 0.0
-    for _ in range(30):
-        t += 0.05
-        kf.predict(t, process_noise_accel=0.2)
-        kf.update([1.0, 2.0, 0.5], pos_var=0.01)
-    assert np.allclose(kf.state[3:], [0.0, 0.0, 0.0], atol=0.1)
+def test_predicted_does_not_mutate_or_alias():
+    ekf, _, _ = _run((0.0, 1.0, 0.0), 6.0, 1.0)
+    before, P_before, t_before = ekf.state.copy(), ekf.P.copy(), ekf.t_sec
+    state, P = ekf.predicted(ekf.t_sec + 0.2)
+    assert state[1] > before[1] and state[6] > before[6]
+    state[:] = 0.0
+    P[:] = 0.0
+    same_t, same_P = ekf.predicted(ekf.t_sec)
+    same_t[:] = 0.0
+    same_P[:] = 0.0
+    assert np.array_equal(ekf.state, before) and np.array_equal(ekf.P, P_before)
+    assert ekf.t_sec == t_before
 
 
-def test_kf_predicted_extrapolates_without_mutating():
-    kf = KalmanFilter6D([0.0, 0.0, 0.0], t_sec=0.0, pos_var=0.01)
-    v = np.array([2.0, 0.0, 0.0])
-    t = 0.0
-    for _ in range(50):
-        t += 0.05
-        kf.predict(t, process_noise_accel=0.5)
-        kf.update(v * t, pos_var=0.01)
-
-    before = kf.state.copy()
-    state, variance = kf.predicted(t + 0.25, process_noise_accel=0.5)
-    # Extrapolated a quarter second along the tracked velocity...
-    assert np.allclose(state[:3], before[:3] + before[3:] * 0.25)
-    # ...with more position uncertainty than at the filter's own time...
-    assert (variance[:3] > np.diag(kf.P)[:3]).all()
-    # ...and the filter itself untouched.
-    assert np.allclose(kf.state, before)
+def test_jink_reacquires_position_and_keeps_spin():
+    w = 2.0 * math.pi * 1.5
+    ekf, _, _ = _run((0.0, 0.0, 0.0), w, 3.0)
+    t = ekf.t_sec
+    jumped = np.array([3.0, 0.8, 0.3]) + np.array([-RX, 0.0, 0.0])
+    results = [ekf.step(jumped, CAMERA, t + (i + 1) * DT, 0.05 ** 2) for i in range(3)]
+    assert results == ['outlier', 'outlier', 'reacquire']
+    assert abs(ekf.state[1] - 0.8) < 0.1
+    assert abs(ekf.state[7] - w) < 0.1 * w
 
 
-def test_kf_predicted_at_or_before_filter_time_is_current_state():
-    kf = KalmanFilter6D([1.0, 2.0, 3.0], t_sec=10.0, pos_var=0.01)
-    state, variance = kf.predicted(9.5, process_noise_accel=0.5)
-    assert np.allclose(state, kf.state)
-    assert np.allclose(variance, np.diag(kf.P))
+def test_radius_is_clamped():
+    ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.27, 2.0, 5.0, 0.02)
+    ekf.update((1.0, 0.0, 0.3), 1e-6)
+    assert ekf.r_min <= ekf.state[8] <= ekf.r_max
 
 
-def test_kf_predicted_does_not_alias_the_filter_state():
-    """
-    Pin that predicted() hands back copies on the dt <= 0 shortcut.
-
-    The dt > 0 path builds new arrays via F @ ..., so it can't alias; the
-    shortcut returned self.state and a np.diag view of self.P directly,
-    and a caller writing into either corrupted the filter in place. The
-    allclose test above can't see it -- it compares the returned array to
-    the very array it aliases, which is true by construction.
-    """
-    kf = KalmanFilter6D([1.0, 2.0, 3.0], t_sec=10.0, pos_var=0.01)
-    before_state = kf.state.copy()
-    before_var = np.diag(kf.P).copy()
-
-    state, variance = kf.predicted(9.5, process_noise_accel=0.5)
-    state += 100.0
-    variance += 100.0
-
-    assert np.allclose(kf.state, before_state)
-    assert np.allclose(np.diag(kf.P), before_var)
+def test_tracker_bank_recovers_the_spin_after_a_bad_first_second():
+    # A lone EKF fed 15cm noise for the first second (the head slewing in,
+    # in sim) locks onto a wrong spin for good on most seeds; the bank must
+    # find the true rate on nearly all of them.
+    w = 2.0 * math.pi * 1.5
+    single = bank = 0
+    for seed in range(8):
+        kwargs = {'seed': seed, 'bad_start_s': 1.0, 'yaw0': seed * 0.37}
+        single += abs(_run((0.0, 0.0, 0.0), w, 6.0, **kwargs)[0].state[7] - w) < 0.1 * w
+        bank += abs(_run((0.0, 0.0, 0.0), w, 6.0, cls=ArmorTracker, **kwargs)[0].state[7] - w) \
+            < 0.1 * w
+    assert bank >= 7
+    assert bank > single
 
 
-def test_lagged_measurement_time_recovers_true_velocity():
-    # The spin branch feeds a windowed MEAN, whose effective time is the
-    # window's mean time, ~window/2 behind the newest sample. Stamping it
-    # at the newest sample instead biases the velocity low; stamping it
-    # correctly recovers it.
-    v = np.array([1.5, 0.0, 0.0])
-    window_s = 0.5
-    dt = 1.0 / 60.0
+def test_tracker_bank_leads_with_the_right_spin_sign():
+    tracker, _, _ = _run((0.0, 0.0, 0.0), -2.0 * math.pi * 1.5, 4.0, cls=ArmorTracker)
+    assert tracker.state[7] < -0.9 * 2.0 * math.pi * 1.5
 
-    def run(stamp_at_newest):
-        kf = None
-        window = []
-        t = 0.0
-        for _ in range(240):
-            t += dt
-            window.append((t, *(v * t)))
-            window = [w for w in window if t - w[0] <= window_s]
-            meas = np.array([w[1:] for w in window]).mean(axis=0)
-            meas_t = t if stamp_at_newest else float(np.mean([w[0] for w in window]))
-            if kf is None:
-                kf = KalmanFilter6D(meas, meas_t, pos_var=0.01)
+
+def test_ray_covariance_is_depth_along_the_ray_and_lateral_across():
+    cov = ray_covariance((3.0, 4.0, 0.4), CAMERA, depth_std=0.1, lateral_std=0.02)
+    ray = np.array([3.0, 4.0, 0.0]) / 5.0
+    across = np.array([-4.0, 3.0, 0.0]) / 5.0
+    assert math.isclose(ray @ cov @ ray, 0.01, rel_tol=1e-9)
+    assert math.isclose(across @ cov @ across, 0.0004, rel_tol=1e-9)
+    assert math.isclose(cov[2, 2], 0.0004, rel_tol=1e-9)
+
+
+def test_tracker_bank_locks_spin_under_heavy_depth_noise_with_ray_covariance():
+    # 12cm depth noise, 3cm lateral: the sim's range model at 3m. An
+    # isotropic 12cm R let w=0 explain the sweep; the ray covariance must not.
+    w = 2.0 * math.pi * 2.0
+    locked = 0
+    for seed in range(8):
+        rng = np.random.default_rng(seed)
+        tracker = None
+        for i in range(int(5.0 / DT)):
+            t = i * DT
+            seen = _seen_panel(np.array([3.0, 0.0, 0.3]), seed * 0.4 + w * t)
+            if seen is None:
+                continue
+            u = (seen - CAMERA) / np.linalg.norm(seen - CAMERA)
+            meas = seen + rng.normal(0.0, 0.03, 3) + u * rng.normal(0.0, 0.12)
+            cov = ray_covariance(meas, CAMERA, 0.12, 0.04)
+            if tracker is None:
+                tracker = ArmorTracker(meas, CAMERA, t, cov, 0.27, 2.0, 5.0, 0.02)
             else:
-                kf.predict(meas_t, process_noise_accel=0.5)
-                kf.update(meas, pos_var=0.01)
-        return kf, t
-
-    kf_wrong, t_end = run(stamp_at_newest=True)
-    kf_right, _ = run(stamp_at_newest=False)
-
-    assert np.allclose(kf_right.state[3:], v, atol=0.05)
-    # Position at the newest sample's time, once extrapolated forward.
-    state, _ = kf_right.predicted(t_end, process_noise_accel=0.5)
-    assert np.allclose(state[:3], v * t_end, atol=0.05)
-    # The mis-stamped filter lags in position by roughly half the window.
-    lag_m = (v * t_end)[0] - kf_wrong.state[0]
-    assert lag_m > 0.5 * window_s * v[0] * 0.5
+                tracker.step(meas, CAMERA, t, cov)
+        locked += abs(tracker.state[7] - w) < 0.1 * w
+    assert locked >= 7

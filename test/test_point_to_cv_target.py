@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Unit tests for point_to_cv_target_core.py's pure intercept-solve math.
+Unit tests for point_to_cv_target_core.py's intercept solve and shot planner.
 
 No rclpy, no ROS message packages. Run with
 `python3 -m pytest test/test_point_to_cv_target.py`.
@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.point_to_cv_target_core import (  # noqa: E402
-    LatencyStat, solve_intercept,
+    LatencyStat, plan_shot, solve_intercept,
 )
 
 V_MUZZLE = 25.0
@@ -250,3 +250,82 @@ def test_latency_stat_running_mean():
         stat.add(sample)
     assert stat.count == 3
     assert math.isclose(stat.mean, 0.06, rel_tol=1e-6)
+
+
+# ── plan_shot ─────────────────────────────────────────────────────────────
+
+SHOOTER = (0.0, 0.0, 0.4)
+TICK_S = 1.0 / 30.0
+
+
+def _armor(centre=(3.0, 0.0, 0.3), vel=(0.0, 0.0, 0.0), yaw=math.pi, w=0.0, r=0.30):
+    return (*centre, *vel, yaw, w, r)
+
+
+def _flight(aim):
+    return math.dist(aim, SHOOTER) / V_MUZZLE
+
+
+def test_plan_non_spinning_stationary_aims_at_the_tracked_panel_now():
+    aim, delay = plan_shot(_armor(), 0.24, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+    assert delay == 0.0
+    assert math.dist(aim, (2.7, 0.0, 0.3)) < 1e-9
+
+
+def test_plan_non_spinning_crossing_panel_meets_the_intercept_condition():
+    horizon = 0.12
+    aim, _ = plan_shot(_armor(vel=(0.0, 2.0, 0.0)), 0.24, horizon, SHOOTER,
+                       V_MUZZLE, False, TICK_S, iterations=50)
+    t = _analytic_flight_time((2.7, 0.0, 0.3), (0.0, 2.0, 0.0), horizon, V_MUZZLE,
+                              shooter_pos=SHOOTER)
+    assert math.isclose(aim[1], 2.0 * (horizon + t), rel_tol=1e-6)
+    assert math.isclose(math.dist(aim, SHOOTER), V_MUZZLE * t, rel_tol=1e-6)
+
+
+def test_plan_non_spinning_leads_the_tangential_panel_velocity():
+    # Panel facing the shooter on a slowly turning chassis moves sideways at
+    # r*w even with a still centre.
+    aim, _ = plan_shot(_armor(w=1.0), 0.24, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+    assert aim[1] < -0.02  # yaw pi, w > 0: the panel sweeps toward -y
+
+
+def _alignment_error(state, other_r, horizon, delay):
+    aim, _ = plan_shot(state, other_r, horizon, SHOOTER, V_MUZZLE, True, TICK_S)
+    xc, yc, _, _, _, _, yaw, w, _ = state
+    t_impact = horizon + _flight(aim) + delay
+    bearing = math.atan2(SHOOTER[1] - yc, SHOOTER[0] - xc)
+    phase = (yaw + w * t_impact - bearing) % (math.pi / 2.0)
+    return min(phase, math.pi / 2.0 - phase)
+
+
+def test_plan_spinning_delay_lands_a_panel_square_to_the_shooter():
+    w = 2.0 * math.pi * 1.5
+    fired = 0
+    for i in range(40):
+        yaw = math.pi + i * (math.pi / 2.0) / 40.0
+        for spin in (w, -w):
+            state = _armor(yaw=yaw, w=spin)
+            _, delay = plan_shot(state, 0.24, 0.08, SHOOTER, V_MUZZLE, True, TICK_S)
+            if delay is None:
+                continue
+            fired += 1
+            assert 0.0 <= delay < TICK_S
+            assert _alignment_error(state, 0.24, 0.08, delay) < 0.02  # rad; flight-time residual
+    # A tick-long window catches tick*|w| of each quarter turn, both directions.
+    expected = 2 * 40 * (TICK_S * w) / (math.pi / 2.0)
+    assert abs(fired - expected) <= 4
+
+
+def test_plan_spinning_aims_on_the_centre_to_shooter_line():
+    aim, _ = plan_shot(_armor(centre=(3.0, 1.0, 0.3), w=9.0), 0.24, 0.1, SHOOTER,
+                       V_MUZZLE, True, TICK_S)
+    to_shooter = math.atan2(SHOOTER[1] - 1.0, SHOOTER[0] - 3.0)
+    assert math.isclose(math.atan2(aim[1] - 1.0, aim[0] - 3.0), to_shooter, abs_tol=1e-9)
+    assert math.isclose(math.hypot(aim[0] - 3.0, aim[1] - 1.0), 0.27, abs_tol=1e-9)
+
+
+def test_plan_without_lead_aims_at_the_current_estimate_and_fires_now():
+    state = _armor(vel=(0.0, 4.0, 0.0), w=9.0)
+    aim, delay = plan_shot(state, 0.24, 0.3, SHOOTER, V_MUZZLE, True, TICK_S, lead=False)
+    assert delay == 0.0
+    assert abs(aim[1]) < 1e-9

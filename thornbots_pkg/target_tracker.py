@@ -13,18 +13,14 @@
 # limitations under the License.
 
 """
-Estimate the tracked robot's spin-centre position and velocity.
+Track the selected robot as a spinning 4-panel armor model.
 
-target_tracker.py -- WHERE IT'S GOING: consumes target_selector's per-frame
-panel pick (/cv/panel_detection), estimates the tracked robot's spin-centre
-position/velocity in the odom frame, and publishes
-dji_serial_bridge/msg/TargetState on /cv/target_state for
-point_to_cv_target.py's intercept solver. See README.md's
-### target_tracker.py Notes for the spin-branch/normal-correction design
-rationale and open items (width-incidence refinement is deferred, gated
-behind the verification harness).
+/cv/robot_panels (target_selector's robot, winner first) -> /cv/target_state
+(TargetState, odom): chassis centre, velocity, panel yaw, spin rate and
+both panel radii, from target_tracker_core.ArmorTracker. Consumed by
+point_to_cv_target.py. See README.md's ### target_tracker.py Notes.
 """
-from dji_serial_bridge.msg import PanelDetection, TargetState
+from dji_serial_bridge.msg import PanelDetectionArray, TargetState
 import numpy as np
 import rclpy
 from rclpy.duration import Duration
@@ -33,9 +29,7 @@ from rclpy.time import Time
 import tf2_ros
 from tf2_ros import TransformException
 
-from thornbots_pkg.target_tracker_core import (
-    corrected_centre, KalmanFilter6D, SpinDetector,
-)
+from thornbots_pkg.target_tracker_core import ArmorTracker, ray_covariance
 
 
 def _quat_to_rot(x, y, z, w):
@@ -52,7 +46,7 @@ class TargetTracker(Node):
     def __init__(self):
         super().__init__('target_tracker')
 
-        self.declare_parameter('panel_topic', '/cv/panel_detection')
+        self.declare_parameter('robot_panels_topic', '/cv/robot_panels')
         self.declare_parameter('output_topic', '/cv/target_state')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
@@ -61,37 +55,35 @@ class TargetTracker(Node):
         # detection is dropped rather than matched to the newest camera
         # pose. See README.md.
         self.declare_parameter('tf_future_tolerance_s', 0.25)
-        self.declare_parameter('panel_radius_m', 0.27)  # mean of panel_radius_x/y
-        self.declare_parameter('spin_handoff_timeout_s', 1.5)
-        self.declare_parameter('spin_min_handoffs', 3)
-        self.declare_parameter('spin_cv_max', 0.35)  # coefficient of variation gate
-        self.declare_parameter('spin_window_s', 0.5)  # running-mean window while spinning
+        self.declare_parameter('panel_radius_m', 0.27)  # initial radius, both panel pairs
         self.declare_parameter('meas_noise_base_m', 0.03)
         self.declare_parameter('meas_noise_range_coeff', 0.01)  # stddev += coeff * range_m^2
-        # 1.0 (no inflation) by default: a spin_window_s running mean of
-        # ~30 samples is LESS noisy than a single raw sample, so inflating
-        # R here would be backwards. Kept as a knob for the residual
-        # orbit-averaging bias (the mean's time lag is corrected via
-        # meas_t below) -- unquantified, so no default guess. See README.md.
-        self.declare_parameter('spin_meas_inflation', 1.0)
-        self.declare_parameter('process_noise_accel', 2.0)  # m/s^2, drives KF Q
+        # Across the camera ray; depth noise above applies along it only.
+        self.declare_parameter('meas_noise_lateral_m', 0.04)
+        self.declare_parameter('process_noise_accel', 2.0)  # m/s^2, centre
+        self.declare_parameter('process_noise_yaw_accel', 5.0)  # rad/s^2, spin rate drift
+        self.declare_parameter('process_noise_radius', 0.02)  # m/sqrt(s)
+        # chi-square(3) innovation gate; this many outliers in a row re-seed
+        # the position and keep the spin estimate. See README.md.
+        self.declare_parameter('gate_nis', 16.3)
+        self.declare_parameter('max_outliers', 3)
 
         gp = self.get_parameter
-        self.panel_topic = gp('panel_topic').value
+        self.robot_panels_topic = gp('robot_panels_topic').value
         self.output_topic = gp('output_topic').value
         self.odom_frame = gp('odom_frame').value
         self.pose_latency_s = float(gp('pose_latency_s').value)
         self.track_max_gap_s = float(gp('track_max_gap_s').value)
         self.tf_future_tolerance_s = float(gp('tf_future_tolerance_s').value)
         self.panel_radius_m = float(gp('panel_radius_m').value)
-        self.spin_handoff_timeout_s = float(gp('spin_handoff_timeout_s').value)
-        self.spin_min_handoffs = int(gp('spin_min_handoffs').value)
-        self.spin_cv_max = float(gp('spin_cv_max').value)
-        self.spin_window_s = float(gp('spin_window_s').value)
         self.meas_noise_base_m = float(gp('meas_noise_base_m').value)
         self.meas_noise_range_coeff = float(gp('meas_noise_range_coeff').value)
-        self.spin_meas_inflation = float(gp('spin_meas_inflation').value)
+        self.meas_noise_lateral_m = float(gp('meas_noise_lateral_m').value)
         self.process_noise_accel = float(gp('process_noise_accel').value)
+        self.process_noise_yaw_accel = float(gp('process_noise_yaw_accel').value)
+        self.process_noise_radius = float(gp('process_noise_radius').value)
+        self.gate_nis = float(gp('gate_nis').value)
+        self.max_outliers = int(gp('max_outliers').value)
 
         self.tf_buffer = tf2_ros.Buffer()
         # /tf shares this node's executor, so every lookup below is
@@ -100,21 +92,16 @@ class TargetTracker(Node):
 
         self.pub = self.create_publisher(TargetState, self.output_topic, 10)
         self.sub = self.create_subscription(
-            PanelDetection, self.panel_topic, self.on_panel, 10)
+            PanelDetectionArray, self.robot_panels_topic, self.on_robot_panels, 10)
 
         self._track_id = None
-        self._kf = None
+        self._ekf = None
         self._last_stamp = None  # rclpy.time.Time of last accepted detection
-        self._spin = SpinDetector(
-            handoff_timeout_s=self.spin_handoff_timeout_s,
-            min_handoffs=self.spin_min_handoffs,
-            cv_max=self.spin_cv_max)
-        self._window = []  # [(t_sec, x, y, z)] while spinning, for the running mean
         self._n_updates = 0
 
         self.get_logger().info(
             f'target_tracker ready\n'
-            f'  {self.panel_topic} -> {self.output_topic} (frame={self.odom_frame})\n'
+            f'  {self.robot_panels_topic} -> {self.output_topic} (frame={self.odom_frame})\n'
             f'  pose_latency_s={self.pose_latency_s:.3f} '
             f'track_max_gap_s={self.track_max_gap_s:.2f}\n'
             f'  panel_radius_m={self.panel_radius_m:.2f} (approximation, see README.md)'
@@ -122,10 +109,8 @@ class TargetTracker(Node):
 
     def _reset(self, track_id):
         self._track_id = track_id
-        self._kf = None
+        self._ekf = None
         self._last_stamp = None
-        self._spin.reset()
-        self._window = []
         self._n_updates = 0
 
     def _lookup_camera_tf(self, camera_frame, query_time):
@@ -174,15 +159,18 @@ class TargetTracker(Node):
             throttle_duration_sec=5.0)
         return tf
 
-    def on_panel(self, msg: PanelDetection):
+    def on_robot_panels(self, msg: PanelDetectionArray):
+        if not msg.detections:
+            return
+        first = msg.detections[0]
         stamp = Time.from_msg(msg.header.stamp)
 
         max_gap_ns = int(self.track_max_gap_s * 1e9)
         if (self._track_id is None
-                or msg.robot_track_id != self._track_id
+                or first.robot_track_id != self._track_id
                 or (self._last_stamp is not None
                     and (stamp - self._last_stamp).nanoseconds > max_gap_ns)):
-            self._reset(msg.robot_track_id)
+            self._reset(first.robot_track_id)
 
         self._last_stamp = stamp
 
@@ -197,64 +185,44 @@ class TargetTracker(Node):
         R = _quat_to_rot(q.x, q.y, q.z, q.w)
         T = np.array([t.x, t.y, t.z])
 
-        panel_cam = np.array([msg.center.x, msg.center.y, msg.center.z])
-        panel_odom = R @ panel_cam + T
-
-        range_m = float(np.linalg.norm(panel_cam))
-        centre_cam = corrected_centre(panel_cam, self.panel_radius_m)
-        centre_odom = R @ centre_cam + T
-
         t_sec = stamp.nanoseconds / 1e9
-        spinning, spin_hz, spin_phase = self._spin.update(t_sec, msg.class_id)
+        panels_odom = []
+        for det in msg.detections:
+            panel_cam = np.array([det.center.x, det.center.y, det.center.z])
+            panel_odom = R @ panel_cam + T
+            range_m = float(np.linalg.norm(panel_cam))
+            stddev = self.meas_noise_base_m + self.meas_noise_range_coeff * range_m * range_m
+            panels_odom.append(panel_odom)
+            R_meas = ray_covariance(panel_odom, T, stddev, self.meas_noise_lateral_m)
 
-        estimator = 0  # running_mean -- width-refined (1) deferred, see module docstring
-        if spinning:
-            self._window.append((t_sec, *centre_odom))
-            self._window = [w for w in self._window if t_sec - w[0] <= self.spin_window_s]
-            xs = np.array([w[1:] for w in self._window])
-            meas = xs.mean(axis=0)
-            # The mean of a spin_window_s window is a measurement at the
-            # window's MEAN time, ~window/2 behind the newest sample.
-            # Feeding it in at t_sec would make the KF read a lagging
-            # position and infer a velocity biased low (0.25s x chassis
-            # speed on the default window); the state is extrapolated back
-            # up to t_sec at publish time.
-            meas_t = float(np.mean([w[0] for w in self._window]))
-            meas_inflation = self.spin_meas_inflation
-        else:
-            self._window = []
-            meas = centre_odom
-            meas_t = t_sec
-            meas_inflation = 1.0
-
-        base_stddev = self.meas_noise_base_m + self.meas_noise_range_coeff * range_m * range_m
-        pos_var = (base_stddev * meas_inflation) ** 2
-
-        if self._kf is None:
-            self._kf = KalmanFilter6D(meas, meas_t, pos_var)
-        else:
-            self._kf.predict(meas_t, self.process_noise_accel)
-            self._kf.update(meas, pos_var)
+            if self._ekf is None:
+                self._ekf = ArmorTracker(
+                    panel_odom, T, t_sec, R_meas, self.panel_radius_m,
+                    self.process_noise_accel, self.process_noise_yaw_accel,
+                    self.process_noise_radius)
+            elif self._ekf.step(panel_odom, T, t_sec, R_meas,
+                                self.gate_nis, self.max_outliers) == 'reacquire':
+                self.get_logger().info(
+                    f'track {self._track_id}: {self.max_outliers} outliers in a row, '
+                    're-seeding position (spin estimate kept)', throttle_duration_sec=1.0)
         self._n_updates += 1
 
+        state, P = self._ekf.predicted(t_sec)
         out = TargetState()
         out.header.stamp = msg.header.stamp
         out.header.frame_id = self.odom_frame
-        out.robot_track_id = msg.robot_track_id
-        # Report at the detection stamp we publish under, which the spin
-        # branch's filter time lags -- see the meas_t comment above.
-        state, variance = self._kf.predicted(t_sec, self.process_noise_accel)
-        cx, cy, cz, vx, vy, vz = state
-        out.centre.x, out.centre.y, out.centre.z = float(cx), float(cy), float(cz)
-        out.velocity.x, out.velocity.y, out.velocity.z = float(vx), float(vy), float(vz)
-        out.variance = [float(v) for v in variance]
-        out.panel.x, out.panel.y, out.panel.z = panel_odom.tolist()
-        out.spin_hz = float(spin_hz)
-        out.spin_phase = float(spin_phase)
-        out.estimator = estimator
-        # Two updates minimum for a meaningful velocity estimate; don't wait
-        # for spin-period convergence (a real engagement may be shorter) --
-        # the consumer weighs the KF variance instead.
+        out.robot_track_id = first.robot_track_id
+        out.centre.x, out.centre.y, out.centre.z = (float(v) for v in state[0:3])
+        out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[3:6])
+        out.variance = [float(P[i, i]) for i in range(6)]
+        out.panel.x, out.panel.y, out.panel.z = (float(v) for v in panels_odom[0])
+        out.yaw = float(state[6])
+        out.yaw_rate = float(state[7])
+        out.yaw_rate_variance = float(P[7, 7])
+        out.radius = float(state[8])
+        out.other_radius = float(self._ekf.other_r)
+        # Two updates before consumers lead on it; they weigh variance
+        # and yaw_rate_variance for anything finer.
         out.valid = self._n_updates >= 2
 
         self.pub.publish(out)
