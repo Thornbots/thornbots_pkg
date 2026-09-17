@@ -68,7 +68,7 @@ class TargetTracker(Node):
         self.declare_parameter('spin_cv_max', 0.35)  # coefficient of variation gate
         self.declare_parameter('spin_window_s', 0.5)  # running-mean window while spinning
         self.declare_parameter('meas_noise_base_m', 0.03)
-        self.declare_parameter('meas_noise_range_coeff', 0.01)  # extra stddev per metre of range
+        self.declare_parameter('meas_noise_range_coeff', 0.01)  # stddev += coeff * range_m^2
         # 1.0 (no inflation) by default: a spin_window_s running mean of
         # ~30 samples is LESS noisy than a single raw sample, so inflating
         # R here would be backwards. Kept as a knob for the residual
