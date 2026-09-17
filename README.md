@@ -323,7 +323,8 @@ bench.
 fire decision to reach the MCB first.
 
 The solve's tau is this tick's `now - state.header.stamp` plus
-`firmware_latency_s` (0.0, unmeasured). It skips `LatencyStat.mean` because
+`firmware_latency_s` (0.05, the static fire-to-exit delay the shot-hit bench
+models; unmeasured on hardware). It skips `LatencyStat.mean` because
 cached state ages between arrival and tick, by up to a tracker period plus
 tick phase (measured: 20ms mean at arrival, 50ms at tick), and the offset
 jitters. `LatencyStat` is logged as a diagnostic.
