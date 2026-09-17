@@ -57,7 +57,6 @@ class TargetTracker(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
         self.declare_parameter('track_max_gap_s', 0.5)
-        self.declare_parameter('tf_timeout_s', 0.05)
         # How far the TF chain may lag the detection stamp before a
         # detection is dropped rather than matched to the newest camera
         # pose. See README.md.
@@ -83,7 +82,6 @@ class TargetTracker(Node):
         self.odom_frame = gp('odom_frame').value
         self.pose_latency_s = float(gp('pose_latency_s').value)
         self.track_max_gap_s = float(gp('track_max_gap_s').value)
-        self.tf_timeout_s = float(gp('tf_timeout_s').value)
         self.tf_future_tolerance_s = float(gp('tf_future_tolerance_s').value)
         self.panel_radius_m = float(gp('panel_radius_m').value)
         self.spin_handoff_timeout_s = float(gp('spin_handoff_timeout_s').value)
@@ -96,6 +94,8 @@ class TargetTracker(Node):
         self.process_noise_accel = float(gp('process_noise_accel').value)
 
         self.tf_buffer = tf2_ros.Buffer()
+        # /tf shares this node's executor, so every lookup below is
+        # non-blocking: a timeout wait in a callback starves /tf. See README.md.
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.pub = self.create_publisher(TargetState, self.output_topic, 10)
@@ -138,8 +138,7 @@ class TargetTracker(Node):
         """
         try:
             return self.tf_buffer.lookup_transform(
-                self.odom_frame, camera_frame, query_time,
-                timeout=Duration(seconds=self.tf_timeout_s))
+                self.odom_frame, camera_frame, query_time)
         except TransformException as ex:
             first_ex = ex
 
@@ -151,8 +150,7 @@ class TargetTracker(Node):
         # of dropping every detection and publishing nothing at all.
         try:
             tf = self.tf_buffer.lookup_transform(
-                self.odom_frame, camera_frame, Time(),
-                timeout=Duration(seconds=self.tf_timeout_s))
+                self.odom_frame, camera_frame, Time())
         except TransformException:
             self.get_logger().error(
                 f'TF lookup {self.odom_frame}<-{camera_frame}@'

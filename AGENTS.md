@@ -55,8 +55,8 @@ front-run firing logic unless asked.
   `point_to_cv_target` works standalone.
 - **Real firing logic is not built** — no HP/heat/power gating, no timing.
   `point_to_cv_target` has a placeholder fire trigger (`fire_rate_hz`,
-  defaulting to on) gated only on `target_active` and cached confidence; it
-  never consults the aim solve, so it can fire when the TF lookup has failed. An
+  defaulting to on) gated on `target_active`, cached confidence, and the last
+  publish tick producing an aim point. An
   aim/lead controller does exist (`target_tracker.py` plus
   `point_to_cv_target`'s `lead_enabled` intercept solve). Out of scope until CV
   is done, per the priority above.

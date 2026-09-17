@@ -15,7 +15,6 @@
 from dji_serial_bridge.msg import CVTarget, FireCommand, PanelDetection, RobotPose, TargetState
 from geometry_msgs.msg import PolygonStamped
 import rclpy
-from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -102,6 +101,8 @@ class PointToCvTarget(Node):
         publish_rate_hz = float(gp('cv_target_publish_rate_hz').value)
 
         self.tf_buffer = tf2_ros.Buffer()
+        # /tf shares this node's executor, so every lookup below is
+        # non-blocking: a timeout wait in a callback starves /tf. See README.md.
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Sensor-like, best-effort traffic: a dropped target update is far
@@ -129,6 +130,7 @@ class PointToCvTarget(Node):
         self.latest_confidence = 1.0
         self.have_confidence = False
         self.target_active = False
+        self.aim_ok = False  # last publish tick emitted a real aim point; gates maybe_fire
         self.last_panel_wall_time = self.get_clock().now()
         self.latest_track_id = 0  # robot_track_id of the newest panel
 
@@ -180,7 +182,7 @@ class PointToCvTarget(Node):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
 
     def maybe_fire(self):
-        if not self.target_active:
+        if not self.target_active or not self.aim_ok:
             return
         confidence = self.latest_confidence if self.have_confidence else self.default_confidence
         if confidence < self.fire_confidence_threshold:
@@ -209,6 +211,7 @@ class PointToCvTarget(Node):
         out = CVTarget()
         out.header.stamp = self.get_clock().now().to_msg()
 
+        self.aim_ok = False
         if not self.target_active:
             self.pub.publish(out)  # all-zero: confidence=0, flags clear
             return
@@ -225,6 +228,7 @@ class PointToCvTarget(Node):
         out.lead_applied = lead_applied
         out.track_valid = track_valid
         self.pub.publish(out)
+        self.aim_ok = True
 
     def _compute_aim_point(self):
         """
@@ -267,8 +271,7 @@ class PointToCvTarget(Node):
 
         try:
             tf = self.tf_buffer.lookup_transform(
-                self.root_frame, self.odom_frame, Time(),
-                timeout=Duration(seconds=0.05))
+                self.root_frame, self.odom_frame, Time())
         except TransformException as ex:
             self.get_logger().error(
                 f'TF lookup {self.root_frame}<-{self.odom_frame} failed: {ex}',
@@ -294,8 +297,7 @@ class PointToCvTarget(Node):
 
         try:
             tf_shooter = self.tf_buffer.lookup_transform(
-                self.odom_frame, self.root_frame, Time(),
-                timeout=Duration(seconds=0.05))
+                self.odom_frame, self.root_frame, Time())
         except TransformException as ex:
             self.get_logger().error(
                 f'TF lookup {self.odom_frame}<-{self.root_frame} failed: {ex}',
