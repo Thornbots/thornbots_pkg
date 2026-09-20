@@ -75,13 +75,15 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 Against sim, it keeps the launch off the real serial devices.
 
 `localization_mode` (`amcl` default, `slam`, `mapping`, `none`) picks the
-`map->odom` owner. `use_ekf` (default `false`) picks whether `odom->root` is
-EKF-fused, with any mode. Both, plus `map_file`, `load_map` and `odom_frame`,
-pass through to `sentry_localization`.
+`map->odom` owner. `use_ekf` (default `true`) picks whether `odom->root` is
+EKF-fused, with any mode; on `true` it also starts `rf2o_laser_odometry_node`,
+which scan-matches `/scan` into the `/scan_odom` the EKF fuses with `/odom`.
+Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
+`sentry_localization`.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
-ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=true
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=false
 ```
 
 `dds_transport` picks the DDS transport per node. On `default`, most nodes use

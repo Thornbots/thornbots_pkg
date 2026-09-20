@@ -120,9 +120,12 @@ def generate_launch_description():
         'value launches.'
     )
     use_ekf_arg = DeclareLaunchArgument(
-        'use_ekf', default_value='false',
+        'use_ekf', default_value='true',
         description='Forwarded to sentry_localization -- whether odom->root '
-        'is EKF-fused instead of passed through raw from /odom. '
+        'is EKF-fused (ekf_node + rf2o_laser_odometry_node on '
+        '/scan) instead of passed through raw from /odom. True '
+        'by default so scan-matched odometry is always in the '
+        'fusion; set false for raw /odom passthrough. '
         'Independent of localization_mode. See '
         "sentry_localization's localization.launch.py module "
         'docstring.'
