@@ -220,6 +220,11 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(real_hardware),
         parameters=[{'use_sim_time': use_sim_time}],
+        # The node publishes ~/pose, i.e. /dji_serial_bridge/pose, but
+        # pose_translator and point_to_cv_target read /pose -- the topic sim's
+        # pose_emulator publishes. Remap so one graph name works in both modes.
+        # ~/ref_sys is left alone: target_selector reads the namespaced name.
+        remappings=[('~/pose', '/pose')],
     )
 
     # Sole relay onto dji_serial_bridge_node's topics -- sentry_localization
