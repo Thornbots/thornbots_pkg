@@ -31,7 +31,9 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    Command, EnvironmentVariable, LaunchConfiguration, PythonExpression
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -76,6 +78,18 @@ def generate_launch_description():
         'odom_frame', default_value='odom',
         description='Frame sentry_localization/odom_tf_broadcaster treat as '
         'their drift-free reference, parent of base_frame.'
+    )
+
+    dds_transport_arg = DeclareLaunchArgument(
+        'dds_transport', default_value='default',
+        choices=['default', 'udp_only'],
+        description='default: nodes use the container DDS profile (shared '
+        'memory + UDP), except the small high-level publishers, which are '
+        'pinned to UDP so a shell on the robot can see them -- a node on '
+        'shared memory is nearly invisible to tooling on the same machine. '
+        'udp_only: every node this file launches goes UDP, at the cost of '
+        "the intra-host fast path. Does not reach sentry_localization's "
+        'nodes or the camera launch, which keep the container default.'
     )
 
     load_map_arg = DeclareLaunchArgument(
@@ -210,6 +224,27 @@ def generate_launch_description():
         'lookup asking for the future. See README.md.'
     )
 
+    # Transport per node. udp_env pins a node to UDP; shm_env leaves it on the
+    # container default (shared memory + UDP) unless dds_transport:=udp_only.
+    # A node on SHM is nearly invisible to `ros2 topic`/`node` run in a shell
+    # on the same machine, so the small high-level publishers -- pose, odom,
+    # TF, CV target -- stay on UDP and remain greppable from a robot terminal.
+    # Remote machines see every node either way.
+    # See config/fastdds_udp_only.xml.
+    udp_profile = os.path.join(pkg_share, 'config', 'fastdds_udp_only.xml')
+    udp_env = {'FASTRTPS_DEFAULT_PROFILES_FILE': udp_profile}
+    shm_env = {
+        'FASTRTPS_DEFAULT_PROFILES_FILE': PythonExpression([
+            "'", udp_profile, "' if '", LaunchConfiguration('dds_transport'),
+            "' == 'udp_only' else '",
+            EnvironmentVariable(
+                'FASTRTPS_DEFAULT_PROFILES_FILE',
+                default_value='/etc/fastdds/profile.xml',
+            ),
+            "'",
+        ])
+    }
+
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
     # (/dev/ttyTHS1, 115200) -- only the lidar's serial settings are exposed
     # as launch args here.
@@ -225,6 +260,7 @@ def generate_launch_description():
         # pose_emulator publishes. Remap so one graph name works in both modes.
         # ~/ref_sys is left alone: target_selector reads the namespaced name.
         remappings=[('~/pose', '/pose')],
+        additional_env=udp_env,
     )
 
     # Sole relay onto dji_serial_bridge_node's topics -- sentry_localization
@@ -239,6 +275,7 @@ def generate_launch_description():
         name='mcb_relay',
         output='screen',
         condition=IfCondition(real_hardware),
+        additional_env=shm_env,
     )
 
     # Turns target_tracker's /cv/target_state into the root-frame CVTarget
@@ -272,6 +309,7 @@ def generate_launch_description():
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
         }],
+        additional_env=udp_env,
     )
 
     # Picks the winning panel out of roi_depth_query's /cv/panel_detections
@@ -295,6 +333,7 @@ def generate_launch_description():
             'priority_class_bonus': LaunchConfiguration('priority_class_bonus'),
             'priority_class_ids':   LaunchConfiguration('priority_class_ids'),
         }],
+        additional_env=shm_env,
     )
 
     # Tracks the selected robot's armor model in odom from /cv/robot_panels --
@@ -317,6 +356,7 @@ def generate_launch_description():
                 LaunchConfiguration('tf_future_tolerance_s'), value_type=float
             ),
         }],
+        additional_env=udp_env,
     )
 
     # Published as scan_raw, not scan -- lidar_self_filter_node below is the
@@ -338,6 +378,7 @@ def generate_launch_description():
             'frame_id': 'lidar',
             'use_sim_time': use_sim_time,
         }],
+        additional_env=shm_env,
     )
 
     lidar_self_filter_node = Node(
@@ -346,20 +387,8 @@ def generate_launch_description():
         name='lidar_self_filter',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}],
+        additional_env=shm_env,
     )
-
-    # FASTRTPS_DEFAULT_PROFILES_FILE forces UDP-only transport (no shared
-    # memory) for just these two nodes: they've been observed hanging in
-    # rcl_node_init/FastDDS SharedMemTransport::CreateInputChannelResource
-    # on startup, before rclpy.spin() even runs, once /dev/shm accumulates
-    # many stale fastrtps_* segments from earlier SIGKILLed runs -- SIGINT
-    # and SIGTERM are never handled because the hang is below the Python
-    # signal-check point. See config/fastdds_no_shm.xml.
-    no_shm_env = {
-        'FASTRTPS_DEFAULT_PROFILES_FILE': os.path.join(
-            pkg_share, 'config', 'fastdds_no_shm.xml'
-        )
-    }
 
     pose_translator_node = Node(
         package='thornbots_pkg',
@@ -370,7 +399,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
         }],
-        additional_env=no_shm_env,
+        additional_env=udp_env,
     )
 
     odom_tf_broadcaster_node = Node(
@@ -382,7 +411,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
         }],
-        additional_env=no_shm_env,
+        additional_env=udp_env,
     )
 
     robot_description = ParameterValue(
@@ -397,6 +426,7 @@ def generate_launch_description():
             'robot_description': robot_description,
             'use_sim_time': use_sim_time,
         }],
+        additional_env=udp_env,
     )
 
     localization_launch_include = IncludeLaunchDescription(
@@ -414,7 +444,8 @@ def generate_launch_description():
     return LaunchDescription([
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, load_map_arg, map_file_arg, localization_mode_arg,
+        odom_frame_arg, dds_transport_arg,
+        load_map_arg, map_file_arg, localization_mode_arg,
         use_ekf_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,

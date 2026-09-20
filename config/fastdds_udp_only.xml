@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+UDP-only transport profile: same discovery as the container default
+(isaac_ros_common/docker/fastdds_cable.xml, installed at
+/etc/fastdds/profile.xml), minus the shared-memory transport.
+
+Two reasons a node runs on this instead of the default:
+
+- A participant using SHM is nearly invisible to tooling started in a shell on
+  the same machine — 1 of 15 nodes in `ros2 node list` on ts-nano-sentry
+  2026-09-20, against all 15 from another machine over tailscale. Nodes
+  publishing small high-level topics (pose, odom, TF, CV targets) stay on UDP
+  so a robot terminal can always see them. auto.launch.py picks which.
+- pose_translator and odom_tf_broadcaster have hung in rcl_node_init to
+  SharedMemTransport::CreateInputChannelResource at startup once /dev/shm
+  accumulates stale fastrtps_* segments from SIGKILLed runs, before
+  rclpy.spin() and so below the Python signal-check point: no SIGINT, no
+  SIGTERM.
+
+initialPeersList is a copy of the default profile's. Adding a robot means
+editing both files.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <transport_descriptors>
+            <transport_descriptor>
+                <transport_id>udp_only</transport_id>
+                <type>UDPv4</type>
+                <maxInitialPeersRange>32</maxInitialPeersRange>
+            </transport_descriptor>
+        </transport_descriptors>
+        <participant profile_name="udp_only_participant" is_default_profile="true">
+            <rtps>
+                <useBuiltinTransports>false</useBuiltinTransports>
+                <userTransports>
+                    <transport_id>udp_only</transport_id>
+                </userTransports>
+                <builtin>
+                    <discovery_config>
+                        <discoveryProtocol>SIMPLE</discoveryProtocol>
+                    </discovery_config>
+                    <initialPeersList>
+                        <!-- local multicast: same machine and same LAN -->
+                        <locator><udpv4><address>239.255.0.1</address></udpv4></locator>
+                        <!-- ts-nano-standard -->
+                        <locator><udpv4><address>100.93.23.77</address></udpv4></locator>
+                        <!-- ts-nano-hero -->
+                        <locator><udpv4><address>100.89.195.53</address></udpv4></locator>
+                        <!-- ts-nano-sentry -->
+                        <locator><udpv4><address>100.87.215.118</address></udpv4></locator>
+                    </initialPeersList>
+                </builtin>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>
