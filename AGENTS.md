@@ -61,3 +61,10 @@ front-run firing logic unless asked.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
+
+## Committing
+
+This package is a submodule of `thornbots_workspace`, on branch `main`. Commit
+and push here first, then bump this gitlink in `../` — one logical change, one
+bump, never a gitlink pointing at an unpushed commit. Full rule in
+`../CLAUDE.md` § Packages.
