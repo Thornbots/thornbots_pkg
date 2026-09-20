@@ -84,6 +84,21 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=true
 ```
 
+`dds_transport` picks the DDS transport per node. On `default`, most nodes use
+the container profile (shared memory plus UDP) and six small high-level
+publishers -- `dji_serial_bridge`, `pose_translator`, `odom_tf_broadcaster`,
+`robot_state_publisher`, `target_tracker`, `point_to_cv_target` -- are pinned
+to `config/fastdds_udp_only.xml`. The reason is visibility, not throughput: a
+node on shared memory is nearly invisible to `ros2 topic`/`node list` run in a
+shell on the same machine, though other machines see it fine. Pinning those six
+keeps pose, odom, TF and the CV target greppable from a robot terminal.
+`dds_transport:=udp_only` puts every node this file launches on UDP; it does
+not reach `sentry_localization`'s nodes or the camera launch.
+
+```bash
+ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
+```
+
 `lidar_serial_port` and `lidar_baudrate` (`/dev/ttyUSB0`, `115200`) configure
 the RPLIDAR A2M8 on hardware. The docstring at the top of
 `launch/auto.launch.py` documents every arg.
