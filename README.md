@@ -5,7 +5,8 @@ ARC 2026 Sentry. It puts `/pose` (hardware or `sim`) and `/scan` on the graph,
 runs `robot_state_publisher` off `urdf/sentry.urdf.xacro`, republishes the
 `odom->root` pose from `sentry_localization`, and turns detections into a
 root-frame `CVTarget`. Localization backends are in
-`sentry_localization/README.md`; game rules are in `../ARCC_2026_SENTRY_CONTEXT.md`.
+`sentry_localization/README.md`; game rules are in
+`../ARCC_2026_SENTRY_CONTEXT.md`.
 
 ## Nodes
 
@@ -71,8 +72,8 @@ ros2 launch thornbots_pkg auto.launch.py
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 ```
 
-`real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`).
-Against sim, it keeps the launch off the real serial devices.
+`real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`),
+and setting it false keeps the launch off the real serial devices.
 
 `localization_mode` (`amcl` default, `slam`, `mapping`, `none`) picks the
 `map->odom` owner. `use_ekf` (default `true`) picks whether `odom->root` is
@@ -87,15 +88,15 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:
 ```
 
 `dds_transport` picks the DDS transport per node. On `default`, most nodes use
-the container profile (shared memory plus UDP) and six small high-level
-publishers -- `dji_serial_bridge`, `pose_translator`, `odom_tf_broadcaster`,
-`robot_state_publisher`, `target_tracker`, `point_to_cv_target` -- are pinned
-to `config/fastdds_udp_only.xml`. The reason is visibility, not throughput: a
-node on shared memory is nearly invisible to `ros2 topic`/`node list` run in a
-shell on the same machine, though other machines see it fine. Pinning those six
-keeps pose, odom, TF and the CV target greppable from a robot terminal.
-`dds_transport:=udp_only` puts every node this file launches on UDP; it does
-not reach `sentry_localization`'s nodes or the camera launch.
+the container profile (shared memory plus UDP), and six small high-level
+publishers (`dji_serial_bridge`, `pose_translator`, `odom_tf_broadcaster`,
+`robot_state_publisher`, `target_tracker`, `point_to_cv_target`) are pinned
+to `config/fastdds_udp_only.xml`. That pinning buys visibility rather than
+throughput: a node on shared memory is nearly invisible to `ros2 topic`/`node
+list` run in a shell on the same machine, though other machines see it fine.
+Pinning those six keeps pose, odom, TF and the CV target greppable from a
+robot terminal. `dds_transport:=udp_only` puts every node this file launches
+on UDP; it does not reach `sentry_localization`'s nodes or the camera launch.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
@@ -129,9 +130,9 @@ python3 -m pytest test/test_target_selector.py test/test_target_tracker.py test/
 
 `test_target_selector.py` covers scoring, centrality, grouping and hysteresis;
 `test_target_tracker.py` the spin detector, KF and radial correction;
-`test_point_to_cv_target.py` the intercept solve and latency stat. `pytest test/`
-also picks up the ament copyright, flake8 and pep257 checks, which
-`colcon test --packages-select thornbots_pkg` runs too.
+`test_point_to_cv_target.py` the intercept solve and latency stat.
+`pytest test/` also picks up the ament copyright, flake8 and pep257 checks,
+which `colcon test --packages-select thornbots_pkg` runs too.
 
 The localization drift suite is
 `sim/test/localization/run_localization_drift_tests.py`, which launches
@@ -170,9 +171,10 @@ on one robot are `hypot(0.30, 0.24) = 0.384m` apart (opposite pairs
 0.48-0.60m, never visible together). It was 0.4, and with 3cm detection noise
 that split 43% of two-panel frames into two robots in sim (2026-09-17), which
 starved the tracker of the second panel. Two robots whose nearest panels are
-within 0.5m will merge; nobody has fixed that. Centroid linkage would instead split one spinning robot as its centroid
-wanders. Clustering runs in camera frame, which is metric because every panel
-in a `PanelDetectionArray` shares one camera pose.
+within 0.5m will merge; nobody has fixed that. Centroid linkage would instead
+split one spinning robot as its centroid wanders. Clustering runs in camera
+frame, which is metric because every panel in a `PanelDetectionArray` shares
+one camera pose.
 
 Every panel of the winning robot also goes out on `/cv/robot_panels`,
 winner first, for `target_tracker`. The per-frame pick flips between two
@@ -194,8 +196,8 @@ across long handoff gaps.
 
 ### target_tracker.py
 
-The filter runs in `odom`. `root` moves with the sentry, which breaks
-constant velocity under acceleration, and camera also rotates with the gimbal.
+The filter runs in `odom`. `root` moves with the sentry, which breaks constant
+velocity under acceleration, and the camera also rotates with the gimbal.
 `lookupTransform(odom, camera, detection_stamp + pose_latency_s)` corrects
 both. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
 offsets `dji_serial_bridge_node`'s `handle_pose()` stamping `RobotPose` at
@@ -252,11 +254,15 @@ yaw from the panel while keeping `w` and the radii. Sim's `target_driver`
 reverses instantly at each end of its path, which otherwise wrecked `w`.
 
 `ArmorTracker` runs five `ArmorEKF`s seeded at `w` = 0, +-7, +-13 rad/s
-(1-2Hz both ways) on every panel and publishes the one with the lowest EWMA of
+(1-2Hz both ways) on every panel and publishes the lead, scored by an EWMA of
 normalised innovation. A single filter fed 15cm noise for its first second,
 as when sim's head slews in from rest, locked onto a wrong spin for good on 6
-of 10 seeds; the bank recovered on 9. A hypothesis trailing the leader by 3
-for 1s is re-seeded from the leader's centre and yaw with its own spin prior.
+of 10 seeds; the bank recovered on 9. The lead changes only once a challenger
+beats it by `switch_margin` (1.0) for `switch_after_s` (0.5), since a noise
+burst briefly favours a collapsed-radius wrong-sign hypothesis. A hypothesis
+trailing the lead by `reseed_margin` (3.0) for `reseed_after_s` (1.0) is
+re-seeded from the lead's centre and yaw, with its own spin prior and fresh
+radii.
 
 The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
 `valid` goes true after 2 updates, because an engagement can be shorter than
@@ -326,8 +332,8 @@ mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
 - Spin mode leads a point on the centre-to-shooter line, radius the mean of
   both pairs, half a tick ahead. That line is steady, so the gimbal can hold it
   while panels sweep past. It fires with the aim point's `delay_ms` set so a
-  panel normal points along that line at impact, if that alignment falls within one
-  publish tick (33ms); otherwise it waits for a later tick. Standard
+  panel normal points along that line at impact, if that alignment falls
+  within one publish tick (33ms); otherwise it waits for a later tick. Standard
   "centre aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
   would lag it.
 
