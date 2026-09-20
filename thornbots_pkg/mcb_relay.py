@@ -14,7 +14,7 @@
 
 import math
 
-from dji_serial_bridge.msg import CVTarget, FireCommand
+from dji_serial_bridge.msg import CVTarget
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 import rclpy
@@ -32,10 +32,9 @@ class McbRelay(Node):
     relocalize: publishes corrected (x, y) on relocalize_output_topic when
     localization_odom_topic and raw_odom_topic drift apart while stationary.
     cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
-    fire_command: republishes fire_command_input_topic onto
-    fire_command_output_topic -- the firing-logic node publishes on the
-    input side, this is what actually reaches dji_serial_bridge_node (and
-    the real launcher hardware).
+    The aim point carries the fire decision (fire, delay_ms), so this is the
+    only CV relay -- it is what reaches dji_serial_bridge_node and the real
+    launcher hardware.
     """
 
     def __init__(self):
@@ -48,8 +47,6 @@ class McbRelay(Node):
         self.declare_parameter('max_move_speed', 0.05)
         self.declare_parameter('cv_target_input_topic', '/cv/target')
         self.declare_parameter('cv_target_output_topic', '/dji_serial_bridge/cv_target')
-        self.declare_parameter('fire_command_input_topic', '/sentry/fire_command')
-        self.declare_parameter('fire_command_output_topic', '/dji_serial_bridge/fire_command')
 
         localization_odom_topic = self.get_parameter('localization_odom_topic').value
         raw_odom_topic = self.get_parameter('raw_odom_topic').value
@@ -58,8 +55,6 @@ class McbRelay(Node):
         self._max_move_speed = self.get_parameter('max_move_speed').value
         cv_target_in = self.get_parameter('cv_target_input_topic').value
         cv_target_out = self.get_parameter('cv_target_output_topic').value
-        fire_command_in = self.get_parameter('fire_command_input_topic').value
-        fire_command_out = self.get_parameter('fire_command_output_topic').value
 
         self._raw_x = 0.0
         self._raw_y = 0.0
@@ -78,19 +73,11 @@ class McbRelay(Node):
         self.cv_target_sub = self.create_subscription(
             CVTarget, cv_target_in, self.cv_target_pub.publish, qos_profile_sensor_data)
 
-        # Fire decisions are discrete events, not a sensor stream -- default
-        # reliable QoS so none get dropped, unlike cv_target's best-effort.
-        self.fire_command_pub = self.create_publisher(
-            FireCommand, fire_command_out, 10)
-        self.fire_command_sub = self.create_subscription(
-            FireCommand, fire_command_in, self.fire_command_pub.publish, 10)
-
         self.get_logger().info(
             f'mcb_relay ready\n'
             f'  {localization_odom_topic} vs {raw_odom_topic} -> {relocalize_out}'
             f' (threshold={self._error_threshold}m, max_move_speed={self._max_move_speed}m/s)\n'
-            f'  {cv_target_in} -> {cv_target_out}\n'
-            f'  {fire_command_in} -> {fire_command_out}'
+            f'  {cv_target_in} -> {cv_target_out} (aim + fire decision)'
         )
 
     def _raw_odom_callback(self, msg):

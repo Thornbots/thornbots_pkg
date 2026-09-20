@@ -55,8 +55,9 @@ front-run firing logic unless asked.
   `point_to_cv_target` works standalone.
 - **Firing logic is partial.** `point_to_cv_target` aims and fires per
   publish tick, at most `fire_rate_hz`, and times shots against a spinning
-  target with `FireCommand.delay_ms`. No HP/heat/power gating, and
-  `FireCommand` isn't on the UART wire yet, so the timing only works in sim.
+  target with `CVTarget.delay_ms`. No HP/heat/power gating, and the MCB
+  firmware's `CVData` struct hasn't grown the merged fire fields yet, so the
+  timing only works in sim.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
