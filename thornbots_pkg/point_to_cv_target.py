@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dji_serial_bridge.msg import CVTarget, FireCommand, PanelDetection, RobotPose, TargetState
+from dji_serial_bridge.msg import CVTarget, PanelDetection, RobotPose, TargetState
 from geometry_msgs.msg import PolygonStamped
 import rclpy
 from rclpy.node import Node
@@ -50,10 +50,11 @@ class PointToCvTarget(Node):
     """
     Turn target_tracker's target state into a root-frame aim point.
 
-    /cv/target_state (armor model, odom) -> /cv/target (root-frame aim point)
-    and /sentry/fire_command, via point_to_cv_target_core.plan_shot. Each
-    cv_target_publish_rate_hz tick aims, and fires (at most fire_rate_hz)
-    with the delay that times a spinning target's panel to the shot.
+    /cv/target_state (armor model, odom) -> /cv/target (root-frame aim
+    point carrying its own fire decision), via
+    point_to_cv_target_core.plan_shot. Each cv_target_publish_rate_hz tick
+    aims, and sets fire/delay_ms (at most fire_rate_hz) with the delay that
+    times a spinning target's panel to the shot.
     Confidence and liveness come from panel_topic. See README.md's
     ### point_to_cv_target.py Notes.
     """
@@ -68,7 +69,6 @@ class PointToCvTarget(Node):
         self.declare_parameter('output_topic', '/cv/target')
         self.declare_parameter('target_timeout_s', 0.5)
         self.declare_parameter('default_confidence', 1.0)
-        self.declare_parameter('fire_topic', '/sentry/fire_command')
         self.declare_parameter('fire_confidence_threshold', 0.5)
         self.declare_parameter('fire_rate_hz', 2.0)
         self.declare_parameter('root_frame', 'root')
@@ -92,7 +92,6 @@ class PointToCvTarget(Node):
         self.output_topic = gp('output_topic').value
         self.target_timeout_s = float(gp('target_timeout_s').value)
         self.default_confidence = float(gp('default_confidence').value)
-        self.fire_topic = gp('fire_topic').value
         self.fire_confidence_threshold = float(gp('fire_confidence_threshold').value)
         self.fire_rate_hz = float(gp('fire_rate_hz').value)
         self.root_frame = gp('root_frame').value
@@ -129,7 +128,6 @@ class PointToCvTarget(Node):
         self.watchdog_timer = self.create_timer(0.1, self.check_timeout)
         self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.on_publish_tick)
 
-        self.fire_pub = self.create_publisher(FireCommand, self.fire_topic, 10)
         self.last_fire_time = None
         self.spinning = False
 
@@ -146,12 +144,13 @@ class PointToCvTarget(Node):
         self.get_logger().info(
             f'point_to_cv_target ready\n'
             f'  {self.panel_topic} (confidence/liveness) + {self.target_state_topic} (position)\n'
-            f'  -> {self.output_topic} (CVTarget, ROOT frame, @ {publish_rate_hz:.1f}Hz)\n'
+            f'  -> {self.output_topic} (CVTarget, ROOT frame, aim + fire, '
+            f'@ {publish_rate_hz:.1f}Hz)\n'
             f'  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} '
             f'firmware_latency_s={self.firmware_latency_s}\n'
             f'  target_timeout_s={self.target_timeout_s:.2f}\n'
-            f'  -> {self.fire_topic} (FireCommand, <= {self.fire_rate_hz:.2f}Hz, spin-timed '
-            f'above {self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold})'
+            f'  fire <= {self.fire_rate_hz:.2f}Hz, spin-timed above '
+            f'{self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold}'
         )
 
     def on_panel(self, msg):
@@ -186,23 +185,24 @@ class PointToCvTarget(Node):
     def on_robot_pose(self, msg):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
 
-    def maybe_fire(self, delay_s):
-        """Publish a FireCommand after delay_s, if rate and confidence allow."""
+    def _fire_decision(self, delay_s, now):
+        """
+        Return (fire, delay_ms) for this tick's CVTarget.
+
+        The delay is measured from the message's own header.stamp, so aim
+        and fire cross the wire as one frame -- see UART_PROTOCOL.md.
+        Rate-limited to fire_rate_hz; delay_ms is clamped to the uint16 field.
+        """
         if delay_s is None or self.fire_rate_hz <= 0.0:
-            return
+            return False, 0
         confidence = self.latest_confidence if self.have_confidence else self.default_confidence
         if confidence < self.fire_confidence_threshold:
-            return
-        now = self.get_clock().now()
+            return False, 0
         if (self.last_fire_time is not None
                 and (now - self.last_fire_time).nanoseconds / 1e9 < 1.0 / self.fire_rate_hz):
-            return
+            return False, 0
         self.last_fire_time = now
-        cmd = FireCommand()
-        cmd.header.stamp = now.to_msg()
-        cmd.fire = True
-        cmd.delay_ms = int(round(delay_s * 1000.0))
-        self.fire_pub.publish(cmd)
+        return True, max(0, min(65535, int(round(delay_s * 1000.0))))
 
     def check_timeout(self):
         if not self.target_active:
@@ -218,11 +218,12 @@ class PointToCvTarget(Node):
         )
 
     def on_publish_tick(self):
+        now = self.get_clock().now()
         out = CVTarget()
-        out.header.stamp = self.get_clock().now().to_msg()
+        out.header.stamp = now.to_msg()
 
         if not self.target_active:
-            self.pub.publish(out)  # all-zero: confidence=0, flags clear
+            self.pub.publish(out)  # all-zero: confidence=0, no fire
             return
 
         aim_root = self._compute_aim_point()
@@ -236,8 +237,8 @@ class PointToCvTarget(Node):
             self.latest_confidence if self.have_confidence else self.default_confidence)
         out.lead_applied = lead_applied
         out.track_valid = track_valid
+        out.fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
         self.pub.publish(out)
-        self.maybe_fire(fire_delay_s)
 
     def _compute_aim_point(self):
         """

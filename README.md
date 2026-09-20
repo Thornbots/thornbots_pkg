@@ -14,10 +14,10 @@ root-frame `CVTarget`. Localization backends are in
 | `pose_translator` | `/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
 | `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
-| `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/sentry/fire_command` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/fire_command` |
+| `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model) |
-| `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection`, `/pose` | `/cv/target` (`CVTarget`, root frame), `/cv/panel_polygon`, `/sentry/fire_command` |
+| `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection`, `/pose` | `/cv/target` (`CVTarget`, root frame, aim + fire decision), `/cv/panel_polygon` |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -271,7 +271,8 @@ using no TF and no backend assumptions. When they differ by more than
 (0.05 m/s, so the correction is still current when the MCB applies it), it
 publishes the localized `(x, y)` as a `Point` on `~/relocalize`. The bridge
 packs that into a `RelocalizePayload` and the MCB resets its odometry origin.
-`cv_target` and `fire_command` are straight republishes.
+`cv_target` is a straight republish, and carries the fire decision with the
+aim point it was solved for.
 
 ### lidar_self_filter.py
 
@@ -322,8 +323,8 @@ mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
   drift, so the seen panel beats the best-facing predicted one.
 - Spin mode leads a point on the centre-to-shooter line, radius the mean of
   both pairs, half a tick ahead. That line is steady, so the gimbal can hold it
-  while panels sweep past. It fires with `FireCommand.delay_ms` set so a panel
-  normal points along that line at impact, if that alignment falls within one
+  while panels sweep past. It fires with the aim point's `delay_ms` set so a
+  panel normal points along that line at impact, if that alignment falls within one
   publish tick (33ms); otherwise it waits for a later tick. Standard
   "centre aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
   would lag it.
@@ -333,9 +334,10 @@ gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
 aims at the current estimate and fires untimed, the control for the shot-hit
 bench.
 
-`delay_ms` is ROS-internal: `FireCommand` isn't on the wire yet (see
-`ros2_dji_serial_bridge/UART_PROTOCOL.md`), so hardware timing needs the
-fire decision to reach the MCB first.
+`fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
+MCB in the same frame as the aim it was solved for, measured from that
+frame's `header.stamp` (see `ros2_dji_serial_bridge/UART_PROTOCOL.md`). The
+firmware struct still has to grow to match before hardware timing works.
 
 The solve's tau is this tick's `now - state.header.stamp` plus
 `firmware_latency_s` (0.05, the static fire-to-exit delay the shot-hit bench
