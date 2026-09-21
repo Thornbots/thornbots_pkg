@@ -318,10 +318,10 @@ def generate_launch_description():
     # Picks the winning panel out of roi_depth_query's /cv/panel_detections
     # (ALL detections) and republishes it as the singular panel_topic --
     # upstream of point_to_cv_target_node in the pipeline, hence its own
-    # enable_target_selector toggle (see run_shot_hit_tests.py's robot_tf
-    # launch for why these two toggles are independent of
-    # enable_cv_target_bridge: it needs point_to_cv_target's/target_selector's
-    # own standalone copies without auto.launch.py launching a second one).
+    # enable_target_selector toggle. These two toggles are independent of
+    # enable_cv_target_bridge because sim's shot_hit.launch.py runs its own
+    # point_to_cv_target/target_selector and needs auto.launch.py not to
+    # launch a second copy.
     target_selector_node = Node(
         package='thornbots_pkg',
         executable='target_selector',
@@ -342,7 +342,7 @@ def generate_launch_description():
     # Tracks the selected robot's armor model in odom from /cv/robot_panels --
     # downstream of target_selector, upstream of point_to_cv_target's
     # shot planner. Own enable toggle for the same reason as
-    # target_selector: run_shot_hit_tests.py's robot_tf launch needs its own
+    # target_selector: sim's shot_hit.launch.py needs its own
     # standalone copy without auto.launch.py launching a second one.
     target_tracker_node = Node(
         package='thornbots_pkg',
