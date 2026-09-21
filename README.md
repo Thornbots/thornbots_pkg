@@ -134,9 +134,9 @@ python3 -m pytest test/test_target_selector.py test/test_target_tracker.py test/
 `pytest test/` also picks up the ament copyright, flake8 and pep257 checks,
 which `colcon test --packages-select thornbots_pkg` runs too.
 
-The localization drift suite is
-`sim/test/localization/run_localization_drift_tests.py`, which launches
-`auto.launch.py`; see `sim/README.md`.
+The localization drift suite is `ros2 launch sim
+localization_tests.launch.py`, which launches `auto.launch.py`; see
+`sim/README.md`.
 
 ## Notes
 

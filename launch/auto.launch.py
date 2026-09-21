@@ -329,6 +329,7 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_target_selector')),
         parameters=[{
+            'use_sim_time':         use_sim_time,
             'panel_array_topic':    LaunchConfiguration('panel_array_topic'),
             'panel_topic':          LaunchConfiguration('panel_topic'),
             'ref_sys_topic':        LaunchConfiguration('ref_sys_topic'),
