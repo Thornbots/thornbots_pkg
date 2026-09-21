@@ -339,8 +339,7 @@ mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
 
 `solve_intercept()` is the time-of-flight fixed point, 2-3 iterations, with no
 gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
-aims at the current estimate and fires untimed, the control for the shot-hit
-bench.
+aims at the current estimate and fires untimed.
 
 `fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
 MCB in the same frame as the aim it was solved for, measured from that
