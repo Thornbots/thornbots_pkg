@@ -2,7 +2,8 @@
 
 Hardware interface, robot description, and CV target selection for the Thornbots
 ARC 2026 Sentry. It puts `/pose` (hardware or `sim`) and `/scan` on the graph,
-runs `robot_state_publisher` off `urdf/sentry.urdf.xacro`, republishes the
+runs `robot_state_publisher` off `urdf/sentry.urdf.xacro` (the `sentry_v2`
+CAD's frames, with its meshes in `meshes/sentry_v2/`), republishes the
 `odom->root` pose from `sentry_localization`, and turns detections into a
 root-frame `CVTarget`. Localization backends are in
 `sentry_localization/README.md`; game rules are in
@@ -286,18 +287,31 @@ aim point it was solved for.
 
 The lidar is bolted to the head, so the head's blind sector is fixed in the
 lidar frame whatever the yaw, and a static angular filter needs no joint
-states. It runs in sim and on hardware. Sim's `gpu_lidar` has no collision,
-and gz-sim's `visibility_mask`/`visibility_flags` work per visual, so the URDF
-approach either saw through the head or reported self-hits. Hardware has no
-equivalent.
+states. It runs in sim and on hardware. Sim's lidar doesn't see the robot at
+all (see `sim/README.md`), so this filter is the only thing modelling the
+blind sector.
 
-The sector covers the head's real footprint, wider than sim's self-hit
-cluster. Sim's thin, non-watertight STL only returns hits at its tangent edge
-and lets beams through its bulk. The raw cluster sits at about 2.967-3.022
-rad. `blind_angle_end` (3.20) matches where sim wall hits return (from
-~3.024); `blind_angle_start` (2.20) is widened to approximate the real head,
-for 1.0 rad total. Both come from the sim mesh; retune against a real
-`/scan_raw` capture.
+The sector, `blind_angle_start` 0.09 to `blind_angle_end` 1.41 rad (5-81 deg
+counter-clockwise from the gun, +x), comes from the `sentry_v2` CAD. We sliced
+the Onshape export at the RPLIDAR's scan plane (z ~0.355 m, +-6 mm). The lidar
+sits on the head at (-0.120, -0.185) in root, 0.22 m from the yaw axis, so it
+pans with the gimbal.
+
+- Head-fixed parts (gimbal body, the GM6020 and M2006 motors, the lidar's own
+  cover and standoffs) block 17-79.5 deg, from 0.045 to 0.34 m out.
+- The pitch stage (shooter, flywheels) blocks more as the gun pitches nose
+  down. Over +-0.6 rad of pitch the union is 6-79 deg.
+- Chassis parts top out at 0.347-0.348 m, 7 mm under the scan plane, so the
+  chassis blocks nothing at any head yaw.
+
+The defaults add 1 deg of margin to the 6-79.5 deg union.
+
+On hardware the sector is unverified. The URDF gives the `lidar` frame no
+rotation (same axes as the head, +x along the gun), but nobody has measured
+where the real RPLIDAR's 0 deg points relative to the gun. The CAD's lidar
+part has its local x 30.7 deg counter-clockwise of the gun, which may or may
+not be the sensor's 0 deg. Check the sector against a real `/scan_raw` before
+trusting it.
 
 ### point_to_cv_target.py
 

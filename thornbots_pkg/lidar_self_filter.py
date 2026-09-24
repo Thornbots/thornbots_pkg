@@ -19,8 +19,9 @@ Blanks out a fixed angular sector of /scan_raw where the robot's own head
 sits in the lidar's FOV (fixed in the lidar's frame; no joint-state sub
 needed), republishing on /scan. Works for sim and real hardware.
 
-Current values: blind_angle_start=2.20, blind_angle_end=3.20 (1.0 rad),
-sim-mesh-derived -- see README.md for design rationale and retuning notes.
+Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg
+CCW from the gun), from sentry_v2's CAD -- see README.md for design
+rationale and retuning notes.
 """
 import math
 
@@ -34,8 +35,8 @@ class LidarSelfFilter(Node):
     def __init__(self):
         super().__init__('lidar_self_filter')
 
-        self.declare_parameter('blind_angle_start', 2.20)
-        self.declare_parameter('blind_angle_end', 3.20)
+        self.declare_parameter('blind_angle_start', 0.09)
+        self.declare_parameter('blind_angle_end', 1.41)
 
         self.sub = self.create_subscription(
             LaserScan, 'scan_raw', self.scan_callback, 10

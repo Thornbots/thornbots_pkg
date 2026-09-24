@@ -44,6 +44,14 @@ front-run firing logic unless asked.
 
 ## Open
 
+- **The URDF is now `sentry_v2`'s frames and meshes** (`meshes/sentry_v2/`),
+  with a `muzzle` frame on `head_pitch`. Wheel and suspension joints are
+  fixed, since `/joint_states` only carries `headlink` and `headpitch`.
+- **Measure the real lidar's blind sector.** `lidar_self_filter`'s 0.09-1.41
+  rad comes from the CAD (README.md), and nobody has measured where the real
+  RPLIDAR's 0 deg points relative to the gun. Capture `/scan_raw` on the
+  robot, find its 0 deg direction and the head's real shadow, and fix the
+  `lidar` frame's yaw or the sector to match.
 - **`auto.launch.py` should bring up the CV stack too, and doesn't yet.**
   Decided 2026-07-27: this package owns launching the whole stack, since it
   already owns pose/TF ownership and the `real_hardware`/`localization_mode`
