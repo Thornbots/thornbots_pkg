@@ -4,7 +4,7 @@
   <name>thornbots_pkg</name>
   <version>0.0.0</version>
   <description>Sentry hardware interface and robot description for ARC 2026</description>
-  <maintainer email="baptisbc@rose-hulman.edu">ubuntu</maintainer>
+  <maintainer email="baptisbc@RHIT.edu">Thornbots</maintainer>
   <license>Apache-2.0</license>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
