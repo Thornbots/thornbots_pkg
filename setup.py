@@ -40,7 +40,7 @@ setup(
     tests_require=['pytest'],
     zip_safe=True,
     maintainer='ubuntu',
-    maintainer_email='baptisbc@rose-hulman.edu',
+    maintainer_email='baptisbc@RHIT.edu',
     description='Sentry hardware interface and robot description for RHIT Thornbots ARC 2026',
     license='Apache-2.0',
     entry_points={
