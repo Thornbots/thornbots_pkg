@@ -63,19 +63,21 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
     return aim_pos, t
 
 
-def plan_shot(state, other_r, horizon_s, shooter_pos, v_muzzle, spinning,
+def plan_shot(state, radius, horizon_s, shooter_pos, v_muzzle, spinning,
               tick_s, lead=True, iterations=3, shooter_vel=(0.0, 0.0, 0.0)):
     """
     Choose an aim point and fire delay against target_tracker's armor model.
 
-    state: [xc, yc, zc, vx, vy, vz, yaw, w, r] in odom at its stamp;
-    horizon_s: stamp to muzzle exit for a shot fired now. Not spinning: lead
-    the tracked panel, fire now. Spinning: lead a point on the
-    centre->shooter line half a tick ahead, fire after the delay (< tick_s)
+    state: [xc, yc, zc, vx, vy, vz, yaw, w] in odom at its stamp; radius:
+    TargetState.radius, per panel pair, [0] the tracked panel's. horizon_s:
+    stamp to muzzle exit for a shot fired now. Not spinning: lead the
+    tracked panel, fire now. Spinning: lead a point on the
+    center->shooter line half a tick ahead, fire after the delay (< tick_s)
     that lands on the next quarter-turn alignment, else None. lead=False
     aims at the current estimate. Returns (aim_pos, delay_s or None).
     """
-    xc, yc, zc, vx, vy, vz, yaw, w, r = (float(v) for v in state)
+    xc, yc, zc, vx, vy, vz, yaw, w = (float(v) for v in state)
+    r, other_r = float(radius[0]), float(radius[1])
     if not lead:
         horizon_s, tick_s = 0.0, 0.0
     ahead = horizon_s + (tick_s / 2.0 if spinning else 0.0)

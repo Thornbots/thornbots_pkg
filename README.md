@@ -17,9 +17,9 @@ root-frame `CVTarget`. Localization backends are in
 | `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
-| `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/robot_panels` (that robot's panels) |
+| `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model) |
-| `point_to_cv_target` | `/cv/target_state`, `/cv/panel_detection`, `/pose` | `/cv/target` (`CVTarget`, root frame, aim + fire decision), `/cv/panel_polygon` |
+| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, root frame, aim + fire decision) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -34,10 +34,8 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
-                                        \-> /cv/panel_detection (one pick)
-/cv/target_state (armor model) + /cv/panel_detection (confidence, liveness, corners) --[point_to_cv_target]--\
-                                                                    /cv/panel_polygon (rviz/foxglove) <---/
-                                                                    /cv/target (root frame) <-------------/
+                                        \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
+/cv/target_state (armor model, confidence, track id) --[point_to_cv_target]--> /cv/target (root frame)
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
            \-[sim's cv_head_aim]--> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
@@ -131,7 +129,8 @@ python3 -m pytest test/test_target_selector.py test/test_target_tracker.py test/
 
 `test_target_selector.py` covers scoring, centrality, grouping and hysteresis;
 `test_target_tracker.py` the spin detector, KF and radial correction;
-`test_point_to_cv_target.py` the intercept solve and latency stat.
+`test_point_to_cv_target.py` the intercept solve, shot planner, latency stat,
+and the node's subscriptions: `TargetState` and `RobotPose`, nothing else.
 `pytest test/` also picks up the ament copyright, flake8 and pep257 checks,
 which `colcon test --packages-select thornbots_pkg` runs too.
 
@@ -266,9 +265,14 @@ re-seeded from the lead's centre and yaw, with its own spin prior and fresh
 radii.
 
 The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
-`valid` goes true after 2 updates, because an engagement can be shorter than
-one spin period; consumers should weigh `variance` and `yaw_rate_variance`.
-Published state is `ArmorTracker.predicted(t_sec)` at the detection stamp.
+It publishes on every `/cv/robot_panels` message it can place in odom, from
+the first. `valid` goes true after 2 updates, because an engagement can be
+shorter than one spin period; consumers should weigh `variance` and
+`yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
+position, `radius` both pairs' radii, and `z_offset` stays `[0, 0]` (one
+height). Published state is `ArmorTracker.predicted(t_sec)` at the detection
+stamp. `TargetState.msg` asks for the publish time, with the state predicted
+forward to it; that is `../CV_SPLIT_PLAN.md` Phase 2.
 
 ### mcb_relay.py
 
@@ -319,36 +323,34 @@ trusting it.
 a camera-relative vector. See `CVTarget.msg` and
 `ros2_dji_serial_bridge/README.md`'s wire-format history.
 
-`/cv/target_state` has position, velocity and validity but no confidence, so
-`panel_topic` still drives confidence, the `target_timeout_s` (0.5) watchdog
-and the `/cv/panel_polygon` corners. Without `target_tracker` running,
-`/cv/target` stays at zero confidence even with live panels.
+The node reads `/cv/target_state` and `/pose` and nothing else, so anything
+that publishes a `TargetState` can drive it: `target_tracker` on hardware,
+`sim`'s `target_state_truth` on the aim bench. Liveness is the state's age
+against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
+the message.
 
 A timer publishes at `cv_target_publish_rate_hz` (30) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `_compute_aim_point()` handles three cases per tick:
 
 - No usable state, or TF fails: zero confidence, with a throttled `ERROR` on
-  TF failure. Usable means present, younger than `target_timeout_s`, and on the
-  newest panel's `robot_track_id`. On a target switch the panel names the new
-  robot at once while the tracker needs two updates, so without that check
-  the node aims at the old robot at full confidence with `track_valid=True`.
+  TF failure. Usable means present and younger than `target_timeout_s`.
 - `valid == False`: raw `panel` position, `lead_applied=False`,
-  `track_valid=False`. No extrapolation off an unconverged track.
+  `track_valid=False`, no fire. No extrapolation off an unconverged track.
 - `valid == True`: `plan_shot()`'s aim point in root. See below.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
 mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
 
-- Panel mode leads the tracked panel (centre velocity plus its tangential
+- Panel mode leads the tracked panel (center velocity plus its tangential
   `r*w`) with `solve_intercept()` and fires now. A slow target's yaw and radius
   drift, so the seen panel beats the best-facing predicted one.
-- Spin mode leads a point on the centre-to-shooter line, radius the mean of
+- Spin mode leads a point on the center-to-shooter line, radius the mean of
   both pairs, half a tick ahead. That line is steady, so the gimbal can hold it
   while panels sweep past. It fires with the aim point's `delay_ms` set so a
   panel normal points along that line at impact, if that alignment falls
   within one publish tick (33ms); otherwise it waits for a later tick. Standard
-  "centre aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
+  "center aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
   would lag it.
 
 `solve_intercept()` is the time-of-flight fixed point, 2-3 iterations, with no
