@@ -250,7 +250,7 @@ Noise: `R` stddev is `meas_noise_base_m + meas_noise_range_coeff * range_m^2`
 (depth error grows with z^2). `process_noise_accel` (2.0 m/s^2) drives the
 centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
 `process_noise_radius` (0.02) the radius, which clamps to 0.18-0.45m. These
-came from an offline sweep against an emulator-shaped target; the higher yaw
+came from a sweep against an emulator-shaped target; the higher yaw
 noise let a jinking target's translation leak into `w`.
 
 Acceleration is a Singer model: it decays over `accel_time_constant_s` (1.0)
@@ -259,8 +259,7 @@ filter can't separate the centre accelerating from the panel spinning faster
 than one spin period, so a loose model (jerk 20 and up) explained the 43 m/s^2
 centripetal swing of a 2Hz panel as a jinking centre and slammed the radius
 between its clamps. At jerk 3 it tracks the target's 6 m/s^2 braking at the
-path ends: facing-panel p95 at 4 m/s went from 0.65 m to 0.12 m on
-`sim/tools/estimation_offline.py` (2026-09-25). `acceleration` is published.
+path ends. `acceleration` is published.
 
 A panel seen alone faces the camera: its neighbours sit 90 degrees round, and
 one within the detector's ~75 degree cone would be seen too. So a frame with
@@ -291,15 +290,17 @@ A sixth, still hypothesis (`still_hypothesis`) covers a parked,
 non-spinning target: velocity, acceleration and `w` pinned at exactly 0,
 the centre and yaw random-walking at `still_process_noise_pos` (0.02
 m/sqrt(s)) and `still_process_noise_yaw` (0.05 rad/sqrt(s)). The moving
-filters read a still target's noise as motion (velocity p95 0.14 m/s
-offline, 0.19 m/s on gz), which Part 1 turned into lead. The still filter
+filters read a still target's noise as motion (velocity p95 0.19 m/s on
+gz C2), which Part 1 turned into lead. The still filter
 takes the lead at a 0.25 margin rather than 1.0, since it wins by only
 ~0.6 per sample, and hands it back once a CUSUM of the per-sample
 log-likelihood ratio against the best moving filter passes
 `still_exit_llr` (15). A single gated detection adds ~13, so one misfire
-can't knock it out. Offline, D435 noise: parked facing-panel p95 2.8 to
-0.8 cm. A target that pulls away at 6 m/s^2 is handed over after 0.23 s,
-with up to 9 cm error in between (4 cm without the still model).
+can't knock it out. On gz C2 the parked cells read velocity and spin
+exactly 0 and facing-panel p95 1.3 cm (flat), from 4.1 cm. A target that
+pulls away at 6 m/s^2 is handed over after about 0.23 s, with up to 9 cm
+error in between (4 cm without the still model); that came from a
+unit-test probe, and C2 has no drive-off cell to confirm it yet.
 
 The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
 It publishes on every `/cv/robot_panels` message it can place in odom, from
