@@ -370,7 +370,7 @@ not a straight line.
 
 - Panel mode leads the panel facing the shooter at impact, with that pair's
   radius and `z_offset`, and fires now.
-- Spin mode, shotgating (`chase_settle_s < 0`, the default): leads a point on
+- Spin mode, shotgating (`chase_settle_s < 0`): leads a point on
   the center-to-shooter line, at the radius and height of the pair arriving
   next. The line is steady, so the gimbal can hold it while panels sweep
   past. It fires with `delay_ms` set so a panel normal points along the line
@@ -378,14 +378,15 @@ not a straight line.
   in five at 2 Hz spin. The pair switches only once the last shot at the
   current one has left the muzzle: its height is a step, and a switch any
   earlier moved the gun under that shot (staggered 0.5 m/s: 58% to 97%).
-- Spin mode, chase (`chase_settle_s >= 0`): leads the facing panel itself and
+- Spin mode, chase (`chase_settle_s >= 0`, the default, 0): leads the facing panel itself and
   fires on any tick whose panel will have faced the shooter for
   `chase_settle_s` at impact, with `chase_margin_s` still to go. Both cover
   the gimbal's jump between panels; 0 and 0 fire every tick. The fire is
   delayed to leave mid-hold of whichever aim is current then, where that aim
   is exact. On the point bench's perfect gimbal it hits 94-98% of shots at
   every tick, against shotgating's one tick in five. A real gimbal has to
-  make a ~7 deg jump every quarter turn; measure it before turning this on.
+  make a ~7 deg jump every quarter turn and settle; measure that on hardware
+  and set `chase_settle_s` to it, or fall back to shotgating.
 
 Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
 the aim point, past the half tick each aim is held: the aim leads by
