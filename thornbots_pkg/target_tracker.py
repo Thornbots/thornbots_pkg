@@ -52,7 +52,7 @@ class TargetTracker(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
         # Capture time = detection stamp - camera_latency_s. Unmeasured on
-        # hardware (CV_SPLIT_PLAN.md Phase 2); match the emulator's in sim.
+        # hardware (CV_SPLIT_PLAN.md, Estimation); match the emulator's in sim.
         self.declare_parameter('camera_latency_s', 0.0)
         self.declare_parameter('track_max_gap_s', 0.5)
         # How far the TF chain may lag the detection stamp before a
@@ -223,14 +223,14 @@ class TargetTracker(Node):
         out.confidence = float(first.confidence)
         out.center.x, out.center.y, out.center.z = (float(v) for v in state[0:3])
         out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[3:6])
-        # acceleration stays 0: the EKF is constant-velocity (Phase 2).
+        # acceleration stays 0: the EKF is constant-velocity.
         out.variance = [float(P[i, i]) for i in range(6)]
         out.panel.x, out.panel.y, out.panel.z = (float(v) for v in panels_odom[0])
         out.yaw = float(state[6])
         out.yaw_rate = float(state[7])
         out.yaw_rate_variance = float(P[7, 7])
         out.radius = [float(state[8]), float(self._ekf.other_r)]
-        out.z_offset = [0.0, 0.0]  # one-height model until per-pair z (Phase 2)
+        out.z_offset = [float(state[9]), float(-state[9])]  # the other pair at -dz
         # Two updates before consumers lead on it; they weigh variance
         # and yaw_rate_variance for anything finer.
         out.valid = self._n_updates >= 2
