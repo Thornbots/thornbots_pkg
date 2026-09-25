@@ -70,8 +70,11 @@ class PointToCvTarget(Node):
         self.declare_parameter('root_frame', 'root')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('lead_enabled', True)
-        # Fire decision to projectile exit; flight time is solved on top.
+        # Fire decision to projectile exit; times the fire against the spin.
         self.declare_parameter('firmware_latency_s', 0.05)
+        # Setpoint to gimbal pointing there, on a moving setpoint; sets how
+        # far ahead the aim point leads. See README.md.
+        self.declare_parameter('gimbal_lag_s', 0.05)
         self.declare_parameter('v_muzzle', 25.0)
         self.declare_parameter('tof_iterations', 3)
         self.declare_parameter('cv_target_publish_rate_hz', 30.0)
@@ -79,6 +82,12 @@ class PointToCvTarget(Node):
         # aim below exit, in |yaw_rate| rad/s.
         self.declare_parameter('spin_enter_rad_s', 3.0)
         self.declare_parameter('spin_exit_rad_s', 2.0)
+        # Spin mode aims at the center line and times the fire (< 0), or,
+        # when >= 0, chases the facing panel and fires on any tick whose
+        # panel has faced us this long and will for chase_margin_s more.
+        # Both cover the gimbal's jump between panels. See README.md.
+        self.declare_parameter('chase_settle_s', -1.0)
+        self.declare_parameter('chase_margin_s', 0.0)
 
         gp = self.get_parameter
         self.target_state_topic = gp('target_state_topic').value
@@ -91,12 +100,16 @@ class PointToCvTarget(Node):
         self.odom_frame = gp('odom_frame').value
         self.lead_enabled = bool(gp('lead_enabled').value)
         self.firmware_latency_s = float(gp('firmware_latency_s').value)
+        self.gimbal_lag_s = float(gp('gimbal_lag_s').value)
         self.v_muzzle = float(gp('v_muzzle').value)
         self.tof_iterations = int(gp('tof_iterations').value)
         publish_rate_hz = float(gp('cv_target_publish_rate_hz').value)
         self.tick_s = 1.0 / publish_rate_hz
         self.spin_enter_rad_s = float(gp('spin_enter_rad_s').value)
         self.spin_exit_rad_s = float(gp('spin_exit_rad_s').value)
+        chase_settle_s = float(gp('chase_settle_s').value)
+        self.chase_settle_s = chase_settle_s if chase_settle_s >= 0.0 else None
+        self.chase_margin_s = float(gp('chase_margin_s').value)
 
         self.tf_buffer = tf2_ros.Buffer()
         # /tf shares this node's executor, so every lookup below is
@@ -131,7 +144,7 @@ class PointToCvTarget(Node):
             f'  -> {self.output_topic} (CVTarget, ROOT frame, aim + fire, '
             f'@ {publish_rate_hz:.1f}Hz)\n'
             f'  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} '
-            f'firmware_latency_s={self.firmware_latency_s}\n'
+            f'firmware_latency_s={self.firmware_latency_s} gimbal_lag_s={self.gimbal_lag_s}\n'
             f'  target_timeout_s={self.target_timeout_s:.2f}\n'
             f'  fire <= {self.fire_rate_hz:.2f}Hz, spin-timed above '
             f'{self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold}'
@@ -272,11 +285,14 @@ class PointToCvTarget(Node):
                  state.yaw, state.yaw_rate)
         # Age of THIS state at THIS tick, not latency_stat.mean: publishing
         # runs on its own timer over a cached state. See README.md.
-        horizon_s = state_age_s + self.firmware_latency_s
         aim_odom, fire_delay_s = plan_shot(
-            armor, tuple(state.radius), horizon_s, shooter_pos_odom, self.v_muzzle,
-            self.spinning, self.tick_s, lead=self.lead_enabled,
-            iterations=self.tof_iterations, shooter_vel=shooter_vel_odom)
+            armor, tuple(state.radius), tuple(state.z_offset), state_age_s,
+            shooter_pos_odom, self.v_muzzle, self.spinning, self.tick_s,
+            gimbal_lag_s=self.gimbal_lag_s, firmware_latency_s=self.firmware_latency_s,
+            lead=self.lead_enabled, iterations=self.tof_iterations,
+            shooter_vel=shooter_vel_odom, chase_settle_s=self.chase_settle_s,
+            chase_margin_s=self.chase_margin_s,
+            accel=(state.acceleration.x, state.acceleration.y, state.acceleration.z))
 
         return _apply(R, T, aim_odom), self.lead_enabled, True, fire_delay_s
 

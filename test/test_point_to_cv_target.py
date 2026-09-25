@@ -23,6 +23,8 @@ import math
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.point_to_cv_target_core import (  # noqa: E402
@@ -257,29 +259,44 @@ def test_latency_stat_running_mean():
 
 SHOOTER = (0.0, 0.0, 0.4)
 TICK_S = 1.0 / 30.0
-
-
 RADII = (0.30, 0.24)
+FLAT = (0.0, 0.0)
+STAGGER = (0.045, -0.045)
 
 
 def _armor(center=(3.0, 0.0, 0.3), vel=(0.0, 0.0, 0.0), yaw=math.pi, w=0.0):
     return (*center, *vel, yaw, w)
 
 
+def _plan(state, horizon, spinning, z_offset=FLAT, **kw):
+    # Zero age, and a gimbal lag that puts the aim horizon (lag + half a
+    # tick) on the fire horizon: horizon is both.
+    return plan_shot(state, RADII, z_offset, 0.0, SHOOTER, V_MUZZLE, spinning, TICK_S,
+                     gimbal_lag_s=horizon - TICK_S / 2.0, firmware_latency_s=horizon, **kw)
+
+
 def _flight(aim):
     return math.dist(aim, SHOOTER) / V_MUZZLE
 
 
-def test_plan_non_spinning_stationary_aims_at_the_tracked_panel_now():
-    aim, delay = plan_shot(_armor(), RADII, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+def test_plan_non_spinning_stationary_aims_at_the_facing_panel_now():
+    aim, delay = _plan(_armor(), 0.1, False)
     assert delay == 0.0
     assert math.dist(aim, (2.7, 0.0, 0.3)) < 1e-9
 
 
+def test_plan_non_spinning_picks_the_facing_panel_and_its_pair():
+    # Panel 0 faces away; panel 2 (same pair) faces the shooter, panel 1 or 3
+    # (other pair) would at a quarter turn.
+    aim, _ = _plan(_armor(yaw=0.0), 0.1, False, z_offset=STAGGER)
+    assert math.dist(aim, (2.7, 0.0, 0.345)) < 1e-9
+    aim, _ = _plan(_armor(yaw=math.pi / 2.0), 0.1, False, z_offset=STAGGER)
+    assert math.dist(aim, (2.76, 0.0, 0.255)) < 1e-9
+
+
 def test_plan_non_spinning_crossing_panel_meets_the_intercept_condition():
     horizon = 0.12
-    aim, _ = plan_shot(_armor(vel=(0.0, 2.0, 0.0)), RADII, horizon, SHOOTER,
-                       V_MUZZLE, False, TICK_S, iterations=50)
+    aim, _ = _plan(_armor(vel=(0.0, 2.0, 0.0)), horizon, False, iterations=50)
     t = _analytic_flight_time((2.7, 0.0, 0.3), (0.0, 2.0, 0.0), horizon, V_MUZZLE,
                               shooter_pos=SHOOTER)
     assert math.isclose(aim[1], 2.0 * (horizon + t), rel_tol=1e-6)
@@ -288,13 +305,13 @@ def test_plan_non_spinning_crossing_panel_meets_the_intercept_condition():
 
 def test_plan_non_spinning_leads_the_tangential_panel_velocity():
     # Panel facing the shooter on a slowly turning chassis moves sideways at
-    # r*w even with a still centre.
-    aim, _ = plan_shot(_armor(w=1.0), RADII, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+    # r*w even with a still center.
+    aim, _ = _plan(_armor(w=1.0), 0.1, False)
     assert aim[1] < -0.02  # yaw pi, w > 0: the panel sweeps toward -y
 
 
-def _alignment_error(state, radius, horizon, delay):
-    aim, _ = plan_shot(state, radius, horizon, SHOOTER, V_MUZZLE, True, TICK_S)
+def _alignment_error(state, horizon, delay):
+    aim, _ = _plan(state, horizon, True)
     xc, yc, _, _, _, _, yaw, w = state
     t_impact = horizon + _flight(aim) + delay
     bearing = math.atan2(SHOOTER[1] - yc, SHOOTER[0] - xc)
@@ -309,28 +326,101 @@ def test_plan_spinning_delay_lands_a_panel_square_to_the_shooter():
         yaw = math.pi + i * (math.pi / 2.0) / 40.0
         for spin in (w, -w):
             state = _armor(yaw=yaw, w=spin)
-            _, delay = plan_shot(state, RADII, 0.08, SHOOTER, V_MUZZLE, True, TICK_S)
+            _, delay = _plan(state, 0.08, True)
             if delay is None:
                 continue
             fired += 1
             assert 0.0 <= delay < TICK_S
-            assert _alignment_error(state, RADII, 0.08, delay) < 0.02  # rad; flight-time residual
+            assert _alignment_error(state, 0.08, delay) < 0.02  # rad; flight-time residual
     # A tick-long window catches tick*|w| of each quarter turn, both directions.
     expected = 2 * 40 * (TICK_S * w) / (math.pi / 2.0)
     assert abs(fired - expected) <= 4
 
 
 def test_plan_spinning_aims_on_the_center_to_shooter_line():
-    aim, _ = plan_shot(_armor(center=(3.0, 1.0, 0.3), w=9.0), RADII, 0.1, SHOOTER,
-                       V_MUZZLE, True, TICK_S)
+    aim, _ = _plan(_armor(center=(3.0, 1.0, 0.3), w=9.0), 0.1, True)
     to_shooter = math.atan2(SHOOTER[1] - 1.0, SHOOTER[0] - 3.0)
     assert math.isclose(math.atan2(aim[1] - 1.0, aim[0] - 3.0), to_shooter, abs_tol=1e-9)
-    assert math.isclose(math.hypot(aim[0] - 3.0, aim[1] - 1.0), 0.27, abs_tol=1e-9)
+    assert math.hypot(aim[0] - 3.0, aim[1] - 1.0) in (
+        pytest.approx(RADII[0]), pytest.approx(RADII[1]))
+
+
+def test_plan_spinning_aims_at_the_arriving_pairs_radius_and_height():
+    # Sweep the phase: whichever pair the delay lands on, the aim uses its
+    # radius and height, and both pairs come up.
+    w = 9.0
+    seen = set()
+    for i in range(160):
+        state = _armor(yaw=math.pi + i * (2.0 * math.pi) / 160.0, w=w)
+        aim, delay = _plan(state, 0.08, True, z_offset=STAGGER)
+        if delay is None:
+            continue
+        t_impact = 0.08 + _flight(aim) + delay
+        k = round((math.pi - (state[6] + w * t_impact)) / (math.pi / 2.0)) % 4
+        assert math.isclose(math.hypot(aim[0] - 3.0, aim[1]), RADII[k % 2], abs_tol=1e-9)
+        assert math.isclose(aim[2], 0.3 + STAGGER[k % 2], abs_tol=1e-9)
+        seen.add(k % 2)
+    assert seen == {0, 1}
+
+
+def test_plan_aim_horizon_sets_the_lead_and_fire_horizon_the_timing():
+    state = _armor(vel=(0.0, 2.0, 0.0), w=9.0)
+    # Equal radii, so the pair each horizon picks can't move the aim.
+    near, d_near = plan_shot(state, (0.27, 0.27), FLAT, 0.0, SHOOTER, V_MUZZLE, True,
+                             TICK_S, gimbal_lag_s=0.03 - TICK_S / 2.0,
+                             firmware_latency_s=0.08)
+    far, d_far = plan_shot(state, (0.27, 0.27), FLAT, 0.0, SHOOTER, V_MUZZLE, True,
+                           TICK_S, gimbal_lag_s=0.08 - TICK_S / 2.0,
+                           firmware_latency_s=0.08)
+    # The line to the shooter turns a little as the center moves, hence 1 cm.
+    assert math.isclose(far[1] - near[1], 2.0 * 0.05, abs_tol=0.01)
+    assert d_near == d_far
+
+
+def test_plan_chase_aims_at_the_facing_panel_and_fires_once_settled():
+    w = 9.0
+    quarter = (math.pi / 2.0) / w
+    fired = 0
+    for i in range(160):
+        state = _armor(yaw=math.pi + i * (2.0 * math.pi) / 160.0, w=w)
+        aim, delay = plan_shot(state, RADII, STAGGER, 0.0, SHOOTER, V_MUZZLE, True, TICK_S,
+                               gimbal_lag_s=0.02 - TICK_S / 2.0, firmware_latency_s=0.05,
+                               chase_settle_s=0.3 * quarter, chase_margin_s=0.1 * quarter)
+        if delay is None:
+            continue
+        fired += 1
+        # It leaves mid-hold: aim horizon minus fire horizon, mod a tick.
+        assert math.isclose(delay, (0.02 - 0.05) % TICK_S)
+        # A fired shot's aim is where a panel facing the shooter (within
+        # 45 deg) is at impact, on its circle.
+        t_impact = 0.02 + _flight(aim)  # the aim horizon; a mid-hold exit meets it
+        miss, off = min(
+            (math.dist(aim, (3.0 + RADII[k % 2] * math.cos(yaw_k),
+                             RADII[k % 2] * math.sin(yaw_k), 0.3 + STAGGER[k % 2])),
+             abs((yaw_k - math.pi + math.pi) % (2.0 * math.pi) - math.pi))
+            for k in range(4) for yaw_k in [state[6] + w * t_impact + k * math.pi / 2.0])
+        assert miss < 0.01
+        assert off < math.radians(45.0)
+    # Fires on the middle 60% of each panel's facing window.
+    assert abs(fired - 0.6 * 160) <= 4
+
+
+def test_plan_extrapolates_with_acceleration():
+    # A target braking at 6 m/s^2 from 2 m/s: the aim is on the parabola at
+    # impact, and the intercept condition holds on it.
+    horizon = 0.1
+    aim, _ = _plan(_armor(vel=(0.0, 2.0, 0.0)), horizon, False, iterations=50,
+                   accel=(0.0, -6.0, 0.0))
+    t = horizon + _flight(aim)
+    assert math.isclose(aim[1], 2.0 * t - 3.0 * t * t, abs_tol=1e-9)
+    assert math.isclose(aim[0], 2.7, abs_tol=1e-9)
+    straight, _ = _plan(_armor(vel=(0.0, 2.0, 0.0)), horizon, False, iterations=50)
+    assert straight[1] - aim[1] > 0.05
 
 
 def test_plan_without_lead_aims_at_the_current_estimate_and_fires_now():
     state = _armor(vel=(0.0, 4.0, 0.0), w=9.0)
-    aim, delay = plan_shot(state, RADII, 0.3, SHOOTER, V_MUZZLE, True, TICK_S, lead=False)
+    aim, delay = _plan(state, 0.3, True, lead=False)
     assert delay == 0.0
     assert abs(aim[1]) < 1e-9
 

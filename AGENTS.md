@@ -69,23 +69,19 @@ front-run firing logic unless asked.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
-- **The CV stack fails `sim`'s shot-hit bench at speed.** Run of 2026-09-21
-  (40 Hz fire, score = mean of hit rate and hits per expected shot, floors 50%
-  stationary / 25% moving), flat panels then panels staggered 9 cm:
-  stationary 98.2% / 29.6%, 0.5 m/s 35.8% / 27.9%, 1 m/s 23.0% / 13.7%,
-  2 m/s 5.4% / 3.1%, 4 m/s 3.6% / 1.5%. `log/shot_hit_2026-09-21_stagger/
-  shots.jsonl` (workspace root) has all 5032 shots. What the miss logs show:
-  - At 4 m/s the shots trail the panel by ~0.23 m on average: the lead is
-    too short.
-  - At 1-2 m/s the mean bias is under 3 cm but misses scatter 0.08-0.17 m.
-    Suspect the constant-velocity model against `target_driver` braking
-    (6 m/s^2) at each end of its path; check whether big misses cluster at
-    the path ends before changing the filter.
-  - `ArmorEKF` puts every panel at one height, so staggered panels drop the
-    stationary case from 98% to 30%. A per-pair z offset (like the per-pair
-    radius) is the obvious fix.
-  - Every case, stationary included, shows the panel 2-4 cm left of the
-    shot. A fixed aim offset; not yet traced.
+- **Part 1 (`point_to_cv_target`) passes `sim`'s gz-free aim bench 10/10**
+  (2026-09-24, chase mode: 94-98% of shots hit at every tick, 99% stationary).
+  The old misses split between the halves:
+  - Part 1's, now fixed: aiming at panel 0 not the facing one, one height,
+    no acceleration, and the lead taken from the firmware latency, not the
+    gimbal's lag.
+  - Part 2's, still open: `ArmorEKF` has one height and no acceleration, and
+    the 2-4 cm sideways offset is gone on the perfect model, so it comes
+    from the tracker or gz geometry.
+  - gz's shots land 1.6 cm low on every case, likely the chassis sagging
+    on its placeholder springs while TF keeps `root` at z = 0. Not traced.
+- **Chase mode is off by default** (`chase_settle_s` -1). It needs the
+  gimbal to jump ~7 deg every quarter turn; measure that on hardware first.
 
 ## Committing
 
