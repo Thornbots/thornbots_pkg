@@ -16,8 +16,9 @@
 Track the selected robot as a spinning 4-panel armor model.
 
 /cv/robot_panels (target_selector's robot, winner first) -> /cv/target_state
-(TargetState, odom): chassis center, velocity, panel yaw, spin rate, both
-pairs' radii and heights, from target_tracker_core.ArmorTracker. Capture time
+(TargetState, odom): chassis center, velocity, acceleration, panel yaw, spin
+rate, both pairs' radii and heights, from target_tracker_core.ArmorTracker.
+A panel seen alone also measures yaw (it faces us). Capture time
 is the detection stamp less camera_latency_s; the state is predicted to its
 publish time and stamped with it. See README.md's ### target_tracker.py Notes.
 """
@@ -30,7 +31,9 @@ from rclpy.time import Time
 import tf2_ros
 from tf2_ros import TransformException
 
-from thornbots_pkg.target_tracker_core import ArmorTracker, ray_covariance
+from thornbots_pkg.target_tracker_core import (
+    ACC, ArmorTracker, DZ, POS, R, ray_covariance, VEL, W, YAW,
+)
 
 
 def _quat_to_rot(x, y, z, w):
@@ -65,6 +68,13 @@ class TargetTracker(Node):
         # Across the camera ray; depth noise above applies along it only.
         self.declare_parameter('meas_noise_lateral_m', 0.04)
         self.declare_parameter('process_noise_accel', 2.0)  # m/s^2, centre
+        # Horizontal acceleration: white jerk (m/s^3) on a Singer model that
+        # decays over accel_time_constant_s. Kept well under the spin rate's
+        # bandwidth, or it explains the spinning panel as a jinking centre.
+        self.declare_parameter('process_noise_jerk', 3.0)
+        self.declare_parameter('accel_time_constant_s', 1.0)
+        # A panel seen alone faces the camera within about this (rad).
+        self.declare_parameter('single_panel_yaw_std', 0.3)
         self.declare_parameter('process_noise_yaw_accel', 5.0)  # rad/s^2, spin rate drift
         self.declare_parameter('process_noise_radius', 0.02)  # m/sqrt(s)
         # chi-square(3) innovation gate; this many outliers in a row re-seed
@@ -87,6 +97,9 @@ class TargetTracker(Node):
         self.process_noise_accel = float(gp('process_noise_accel').value)
         self.process_noise_yaw_accel = float(gp('process_noise_yaw_accel').value)
         self.process_noise_radius = float(gp('process_noise_radius').value)
+        self.process_noise_jerk = float(gp('process_noise_jerk').value)
+        self.accel_time_constant_s = float(gp('accel_time_constant_s').value)
+        self.single_panel_yaw_std = float(gp('single_panel_yaw_std').value)
         self.gate_nis = float(gp('gate_nis').value)
         self.max_outliers = int(gp('max_outliers').value)
 
@@ -188,14 +201,15 @@ class TargetTracker(Node):
 
         t = tf.transform.translation
         q = tf.transform.rotation
-        R = _quat_to_rot(q.x, q.y, q.z, q.w)
+        rot = _quat_to_rot(q.x, q.y, q.z, q.w)
         T = np.array([t.x, t.y, t.z])
 
         t_sec = stamp.nanoseconds / 1e9
+        facing_std = self.single_panel_yaw_std if len(msg.detections) == 1 else None
         panels_odom = []
         for det in msg.detections:
             panel_cam = np.array([det.center.x, det.center.y, det.center.z])
-            panel_odom = R @ panel_cam + T
+            panel_odom = rot @ panel_cam + T
             range_m = float(np.linalg.norm(panel_cam))
             stddev = self.meas_noise_base_m + self.meas_noise_range_coeff * range_m * range_m
             panels_odom.append(panel_odom)
@@ -205,9 +219,10 @@ class TargetTracker(Node):
                 self._ekf = ArmorTracker(
                     panel_odom, T, t_sec, R_meas, self.panel_radius_m,
                     self.process_noise_accel, self.process_noise_yaw_accel,
-                    self.process_noise_radius)
-            elif self._ekf.step(panel_odom, T, t_sec, R_meas,
-                                self.gate_nis, self.max_outliers) == 'reacquire':
+                    self.process_noise_radius, q_jerk=self.process_noise_jerk,
+                    accel_tau_s=self.accel_time_constant_s)
+            elif self._ekf.step(panel_odom, T, t_sec, R_meas, self.gate_nis,
+                                self.max_outliers, facing_std) == 'reacquire':
                 self.get_logger().info(
                     f'track {self._track_id}: {self.max_outliers} outliers in a row, '
                     're-seeding position (spin estimate kept)', throttle_duration_sec=1.0)
@@ -221,16 +236,18 @@ class TargetTracker(Node):
         out.header.frame_id = self.odom_frame
         out.robot_track_id = first.robot_track_id
         out.confidence = float(first.confidence)
-        out.center.x, out.center.y, out.center.z = (float(v) for v in state[0:3])
-        out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[3:6])
-        # acceleration stays 0: the EKF is constant-velocity.
-        out.variance = [float(P[i, i]) for i in range(6)]
+        out.center.x, out.center.y, out.center.z = (float(v) for v in state[POS])
+        out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[VEL])
+        out.acceleration.x, out.acceleration.y, out.acceleration.z = (
+            float(v) for v in state[ACC])
+        out.variance = [float(v) for v in np.concatenate(
+            (np.diag(P)[POS], np.diag(P)[VEL]))]
         out.panel.x, out.panel.y, out.panel.z = (float(v) for v in panels_odom[0])
-        out.yaw = float(state[6])
-        out.yaw_rate = float(state[7])
-        out.yaw_rate_variance = float(P[7, 7])
-        out.radius = [float(state[8]), float(self._ekf.other_r)]
-        out.z_offset = [float(state[9]), float(-state[9])]  # the other pair at -dz
+        out.yaw = float(state[YAW])
+        out.yaw_rate = float(state[W])
+        out.yaw_rate_variance = float(P[W, W])
+        out.radius = [float(state[R]), float(self._ekf.other_r)]
+        out.z_offset = [float(state[DZ]), float(-state[DZ])]  # the other pair at -dz
         # Two updates before consumers lead on it; they weigh variance
         # and yaw_rate_variance for anything finer.
         out.valid = self._n_updates >= 2
