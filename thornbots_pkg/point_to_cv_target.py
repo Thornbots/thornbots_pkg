@@ -82,11 +82,11 @@ class PointToCvTarget(Node):
         # aim below exit, in |yaw_rate| rad/s.
         self.declare_parameter('spin_enter_rad_s', 3.0)
         self.declare_parameter('spin_exit_rad_s', 2.0)
-        # Spin mode is shotgating (< 0): aim at the center line, time the fire. Or,
-        # when >= 0, chases the facing panel and fires on any tick whose
-        # panel has faced us this long and will for chase_margin_s more.
-        # Both cover the gimbal's jump between panels. See README.md.
-        self.declare_parameter('chase_settle_s', -1.0)
+        # Spin mode, >= 0 (default): chase the facing panel, firing on any
+        # tick whose panel has faced us this long and will for
+        # chase_margin_s more; both cover the gimbal's jump between panels.
+        # < 0: shotgating, hold the center line and time the fire. README.md.
+        self.declare_parameter('chase_settle_s', 0.0)
         self.declare_parameter('chase_margin_s', 0.0)
 
         gp = self.get_parameter
