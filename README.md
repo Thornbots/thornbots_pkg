@@ -371,8 +371,8 @@ to muzzle exit, and times the fire against the spin. Aiming both from the
 firmware latency overshot moving targets in sim by ~27 ms of their motion,
 since the sim gimbal reaches a moving setpoint in 35 ms.
 
-`solve_intercept()` is the time-of-flight fixed point, 2-3 iterations, with no
-gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
+`plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
+no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
 aims at the current estimate and fires untimed.
 
 `fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
@@ -388,7 +388,15 @@ at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
 Frames convert by TF: `lookup_transform(root_frame, odom_frame, Time())`. For
 lead, the reverse lookup gives shooter position in odom, and
 `RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
-latest transform, since the solve needs where the shooter is now.
+latest transform, and the position is carried at that velocity to the state's
+stamp, which is `plan_shot()`'s time zero.
+
+Our own motion: the shot leaves where we are at the aim horizon and carries
+our velocity, so `plan_shot()` returns a gun point, the intercept less our
+motion from the stamp to impact, and the node sends `gun - shooter` rotated
+into root rather than the intercept transformed. At 1 m/s and 3 m the
+difference is ~0.15 m, three panel half-widths. A still shooter gets the intercept itself.
+`solve_intercept()` is no longer on the node's path; only its tests use it.
 
 Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
 only above `fire_confidence_threshold`, so a failed TF lookup or stale state

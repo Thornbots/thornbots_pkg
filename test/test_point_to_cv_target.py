@@ -72,11 +72,8 @@ GEOMETRIES = [
     ((3.0, 4.0, 0.5), (1.0, -3.0, 0.5), 0.12, (-1.0, 1.5, 0.9), ORIGIN),
 ]
 
-# No row above moves the shooter, so the chassis-velocity correction's
-# CORRECTNESS is still untested; test_shooter_velocity_is_wired_into_the_solve
-# only pins that the parameter reaches the math at all. See
-# sim/CV_TEST_GAPS.md gap 2 -- deliberately open until the moving-robot test
-# exists, not an oversight.
+# No row above moves the shooter. plan_shot's own-motion correction, the one
+# the node uses, is checked by flying the shot: test_plan_moving_shooter_*.
 
 
 def _analytic_flight_time(target_pos, target_vel, tau, v_muzzle,
@@ -185,7 +182,7 @@ def test_shooter_velocity_is_wired_into_the_solve():
     what deleting the parameter would look like. This asserts only that
     the two differ and that the sign is the intuitive one (chasing the
     target shortens the closing distance, so the shot arrives sooner).
-    Whether the magnitude is *right* is untested; see gap 2.
+    The magnitude is checked on plan_shot, test_plan_moving_shooter_*.
     """
     target_pos, target_vel, tau = (8.0, 0.0, 0.0), (0.0, 2.0, 0.0), 0.05
     stationary, t_stationary = solve_intercept(
@@ -439,3 +436,47 @@ def test_node_subscribes_to_target_state_and_robot_pose_only():
                   if isinstance(call, ast.Call)
                   and getattr(call.func, 'attr', None) == 'create_subscription']
     assert sorted(subscribed) == ['RobotPose', 'TargetState']
+
+
+def _fly(gun, horizon, shooter_vel, t):
+    # A shot leaving shooter(horizon) toward gun - SHOOTER at V_MUZZLE, carrying
+    # our velocity, t seconds later: what the aim bench's harness flies.
+    d = [gun[i] - SHOOTER[i] for i in range(3)]
+    n = math.hypot(*d)
+    return tuple(SHOOTER[i] + shooter_vel[i] * (horizon + t)
+                 + V_MUZZLE * d[i] / n * t for i in range(3))
+
+
+@pytest.mark.parametrize('shooter_vel', [(0.0, 1.0, 0.0), (0.0, -2.0, 0.0),
+                                         (1.5, 0.5, 0.0)])
+@pytest.mark.parametrize('target_vel', [(0.0, 0.0, 0.0), (0.0, 2.0, 0.0)])
+def test_plan_moving_shooter_lands_on_the_panel(shooter_vel, target_vel):
+    # Our shot leaves where we are at the aim horizon and carries our velocity,
+    # so the gun must point off the intercept by our motion to impact.
+    horizon = 0.1
+    state = _armor(vel=target_vel)
+    gun, _ = _plan(state, horizon, False, iterations=50, shooter_vel=shooter_vel)
+    still, _ = _plan(state, horizon, False, iterations=50)
+    t = math.dist(gun, SHOOTER) / V_MUZZLE
+    panel = (2.7 + target_vel[0] * (horizon + t), target_vel[1] * (horizon + t), 0.3)
+    assert math.dist(_fly(gun, horizon, shooter_vel, t), panel) < 1e-6
+    # Aiming as if still misses by our motion to impact: many panel widths.
+    t_still = math.dist(still, SHOOTER) / V_MUZZLE
+    assert math.dist(_fly(still, horizon, shooter_vel, t_still), panel) > 0.1
+
+
+def test_plan_moving_shooter_chase_lands_on_a_facing_panel():
+    w, sv = 9.0, (0.0, 1.0, 0.0)
+    state = _armor(yaw=math.pi + 0.3, w=w, vel=(0.0, 1.0, 0.0))
+    gun, delay = plan_shot(state, RADII, FLAT, 0.0, SHOOTER, V_MUZZLE, True, TICK_S,
+                           gimbal_lag_s=0.02 - TICK_S / 2.0, firmware_latency_s=0.05,
+                           iterations=50, shooter_vel=sv, chase_settle_s=0.0)
+    assert delay is not None
+    t = math.dist(gun, SHOOTER) / V_MUZZLE
+    t_impact = 0.02 + t
+    center = (3.0, t_impact, 0.3)
+    shot = _fly(gun, 0.02, sv, t)
+    miss = min(math.dist(shot, (center[0] + RADII[k % 2] * math.cos(yaw_k),
+                                center[1] + RADII[k % 2] * math.sin(yaw_k), 0.3))
+               for k in range(4) for yaw_k in [state[6] + w * t_impact + k * math.pi / 2.0])
+    assert miss < 1e-6
