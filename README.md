@@ -198,8 +198,9 @@ across long handoff gaps.
 
 The filter runs in `odom`. `root` moves with the sentry, which breaks constant
 velocity under acceleration, and the camera also rotates with the gimbal.
-`lookupTransform(odom, camera, detection_stamp + pose_latency_s)` corrects
-both. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
+`lookupTransform(odom, camera, capture + pose_latency_s)` corrects both.
+Capture time is the detection stamp less `camera_latency_s` (0, unmeasured):
+the EKF updates at capture, and the TF lookup asks for the camera there. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
 offsets `dji_serial_bridge_node`'s `handle_pose()` stamping `RobotPose` at
 parse time instead of MCB sample time. Sweep it on hardware.
 
@@ -270,9 +271,10 @@ the first. `valid` goes true after 2 updates, because an engagement can be
 shorter than one spin period; consumers should weigh `variance` and
 `yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
 position, `radius` both pairs' radii; `z_offset` stays `[0, 0]` (one height)
-and `acceleration` 0 (constant-velocity model), both Phase 2. Published state is `ArmorTracker.predicted(t_sec)` at the detection
-stamp. `TargetState.msg` asks for the publish time, with the state predicted
-forward to it; that is `../CV_SPLIT_PLAN.md` Phase 2.
+and `acceleration` 0 (constant-velocity model). Each state is
+`ArmorTracker.predicted()` at the publish time and stamped with it, as
+`TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
+Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
 
 ### mcb_relay.py
 
