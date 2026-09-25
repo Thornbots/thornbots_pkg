@@ -275,8 +275,13 @@ class PointToCvTarget(Node):
         st = tf_shooter.transform.translation
         sq = tf_shooter.transform.rotation
         shooter_R = _quat_to_rot(sq.x, sq.y, sq.z, sq.w)
-        shooter_pos_odom = (st.x, st.y, st.z)
         shooter_vel_odom = _rotate(shooter_R, self.chassis_vel_root)
+        # plan_shot wants us at the state's stamp, not the transform's.
+        tf_to_state_s = (Time.from_msg(state.header.stamp)
+                         - Time.from_msg(tf_shooter.header.stamp)).nanoseconds / 1e9
+        shooter_pos_odom = (st.x + shooter_vel_odom[0] * tf_to_state_s,
+                            st.y + shooter_vel_odom[1] * tf_to_state_s,
+                            st.z + shooter_vel_odom[2] * tf_to_state_s)
 
         threshold = self.spin_exit_rad_s if self.spinning else self.spin_enter_rad_s
         self.spinning = abs(state.yaw_rate) > threshold
@@ -294,7 +299,9 @@ class PointToCvTarget(Node):
             chase_margin_s=self.chase_margin_s,
             accel=(state.acceleration.x, state.acceleration.y, state.acceleration.z))
 
-        return _apply(R, T, aim_odom), self.lead_enabled, True, fire_delay_s
+        # The gun vector, not the point: we move between now and the shot.
+        gun_odom = tuple(aim_odom[i] - shooter_pos_odom[i] for i in range(3))
+        return _rotate(R, gun_odom), self.lead_enabled, True, fire_delay_s
 
 
 def main(args=None):

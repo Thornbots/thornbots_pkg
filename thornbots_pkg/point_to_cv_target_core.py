@@ -74,7 +74,8 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
     Choose an aim point and fire delay against a TargetState armor model.
 
     state: [xc, yc, zc, vx, vy, vz, yaw, w] in odom at its stamp, age_s old;
-    accel: the center's; radius, z_offset: per pair, as in TargetState. Each
+    accel: the center's; radius, z_offset: per pair, as in TargetState;
+    shooter_pos, shooter_vel: ours at that stamp, in odom. Each
     aim holds a tick_s, then the gimbal trails it by gimbal_lag_s; the aim
     targets the middle of that. The fire is timed over firmware_latency_s.
     Not spinning: lead the facing panel, fire now. Spinning: aim on the
@@ -83,7 +84,9 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
     the facing panel, fire mid-hold if the panel a shot meets has faced us
     chase_settle_s and will for chase_margin_s more.
     lead=False: aim at the current estimate, fire now. Returns (aim_pos,
-    delay_s or None).
+    delay_s or None): the gun points from shooter_pos toward aim_pos, the
+    intercept less our motion from the stamp to impact, since the shot
+    carries our velocity. A still shooter aims at the intercept itself.
     """
     xc, yc, zc, vx, vy, vz, yaw, w = (float(v) for v in state)
     ax, ay, az = (float(v) for v in accel)
@@ -94,9 +97,12 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
         h = 0.5 * t * t
         return (xc + vx * t + ax * h, yc + vy * t + ay * h, zc + vz * t + az * h)
 
+    def shooter(t):
+        return tuple(shooter_pos[i] + shooter_vel[i] * t for i in range(3))
+
     def bearing(t):
-        c = center(t)
-        return math.atan2(shooter_pos[1] - c[1], shooter_pos[0] - c[0])
+        c, s = center(t), shooter(t)
+        return math.atan2(s[1] - c[1], s[0] - c[0])
 
     def facing(t):
         return round((bearing(t) - (yaw + w * t)) / QUARTER_TURN) % 4
@@ -114,12 +120,14 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
     def intercept(path):
         # Fixed point on the target's true path (curved by acceleration and
         # spin), not a straight-line extrapolation: t <- |path(h + t) -
-        # muzzle(t)| / v_muzzle.
+        # shooter(h + t)| / v_muzzle, the muzzle leaving at h and the shot
+        # moving with it. Returns the gun point for that shot, and t.
         t = 0.0
         for _ in range(max(1, iterations)):
-            muzzle = [shooter_pos[i] + shooter_vel[i] * t for i in range(3)]
-            t = math.dist(path(aim_horizon_s + t), muzzle) / v_muzzle if v_muzzle > 0.0 else 0.0
-        return path(aim_horizon_s + t), t
+            t = math.dist(path(aim_horizon_s + t),
+                          shooter(aim_horizon_s + t)) / v_muzzle if v_muzzle > 0.0 else 0.0
+        hit, s = path(aim_horizon_s + t), shooter(aim_horizon_s + t)
+        return tuple(hit[i] - s[i] + shooter_pos[i] for i in range(3)), t
 
     def facing_panel(t):
         return panel(facing(t), t)
