@@ -15,11 +15,13 @@
 """
 Pure numpy armor-model EKF for target_tracker.py (no rclpy import).
 
-State [xc, yc, zc, vx, vy, vz, yaw, w, r, dz]: chassis centre and velocity
-in odom, the yaw of the tracked panel's outward normal, spin rate (rad/s),
-that panel's centre-to-panel radius, and its pair's height above the centre
-(the other pair sits at -dz). Measurement is one panel position;
-h = centre + r * (cos yaw, sin yaw, 0) + (0, 0, dz). The other pair's radius
+State [pos, vel, acc, yaw, w, r, dz]: chassis centre position, velocity and
+acceleration (3-vectors in odom, indexed by POS, VEL, ACC), the yaw of the
+tracked panel's outward normal, spin rate (rad/s), that panel's
+centre-to-panel radius, and its pair's height above the centre (the other
+pair sits at -dz). Acceleration is a Singer model: it decays over
+accel_tau_s, driven by white jerk. Measurement is one panel position;
+h = pos + r * (cos yaw, sin yaw, 0) + (0, 0, dz). The other pair's radius
 is kept outside the state and swapped in on an odd handoff, which also flips
 dz. See README.md's ### target_tracker.py Notes.
 """
@@ -27,8 +29,11 @@ import math
 
 import numpy as np
 
-N_STATE = 10
+POS, VEL, ACC = slice(0, 3), slice(3, 6), slice(6, 9)
+YAW, W, R, DZ = 9, 10, 11, 12
+N_STATE = 13
 DZ_MAX = 0.15  # m, clamp on the pair height offset
+I3 = np.eye(3)
 
 
 def _as_cov(pos_var):
@@ -52,41 +57,50 @@ QUARTER_TURN = math.pi / 2.0
 BACK_FACING_COS = -0.3  # association skips panels facing further away than this
 
 
+def _offset(yaw, r, dz):
+    """Panel position relative to the centre."""
+    return np.array([r * math.cos(yaw), r * math.sin(yaw), dz])
+
+
 def panel_positions(state, other_r):
     """Return [(k, yaw_k, position)] for all 4 panels, k=0 the tracked one."""
-    xc, yc, zc = state[0], state[1], state[2]
-    yaw, r, dz = state[6], state[8], state[9]
     out = []
     for k in range(4):
-        yaw_k = yaw + k * QUARTER_TURN
-        r_k, dz_k = (r, dz) if k % 2 == 0 else (other_r, -dz)
-        out.append((k, yaw_k, np.array([xc + r_k * math.cos(yaw_k),
-                                        yc + r_k * math.sin(yaw_k), zc + dz_k])))
+        yaw_k = state[YAW] + k * QUARTER_TURN
+        r_k, dz_k = (state[R], state[DZ]) if k % 2 == 0 else (other_r, -state[DZ])
+        out.append((k, yaw_k, state[POS] + _offset(yaw_k, r_k, dz_k)))
     return out
 
 
 class ArmorEKF:
     """
-    Constant-velocity centre plus constant-rate spin, position-only updates.
+    Manoeuvring centre plus constant-rate spin, position-only updates.
 
-    q_accel (m/s^2) and q_yaw_accel (rad/s^2) drive white-noise-acceleration
-    process noise; q_radius and q_dz (m/sqrt(s)) let r and dz drift. r is
-    clamped to [r_min, r_max] and dz to +-DZ_MAX after every update.
+    q_accel (m/s^2) is white-noise acceleration on the centre, q_jerk
+    (m/s^3) drives the acceleration states (0 pins them at 0, a
+    constant-velocity filter), q_yaw_accel (rad/s^2) the spin rate; q_radius
+    and q_dz (m/sqrt(s)) let r and dz drift. r is clamped to [r_min, r_max]
+    and dz to +-DZ_MAX after every update.
     """
 
     def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius,
                  q_accel, q_yaw_accel, q_radius, r_min=0.18, r_max=0.45,
-                 spin_prior=0.0, spin_prior_std=8.0, q_dz=0.005, dz_prior_std=0.05):
+                 spin_prior=0.0, spin_prior_std=8.0, q_dz=0.005, dz_prior_std=0.05,
+                 q_jerk=0.0, accel_tau_s=0.5, accel_prior_std=6.0):
         self.q_accel = q_accel
+        self.q_jerk = q_jerk
+        self.accel_tau_s = accel_tau_s
+        self.accel_prior_std = accel_prior_std if q_jerk > 0.0 else 0.0
         self.q_yaw_accel = q_yaw_accel
         self.q_radius = q_radius
         self.q_dz = q_dz
         self.dz_prior_std = dz_prior_std
         self.r_min = r_min
         self.r_max = r_max
-        self.state = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, radius, 0.0])
+        self.state = np.zeros(N_STATE)
+        self.state[R] = radius
         self.P = np.eye(N_STATE)
-        self.P[9, 9] = dz_prior_std ** 2
+        self.P[DZ, DZ] = dz_prior_std ** 2
         self.other_r = radius
         self.t_sec = t_sec
         self.n_outliers = 0
@@ -103,33 +117,54 @@ class ArmorEKF:
         keep_spin keeps w, both radii and dz (with their variance), since a
         target that jinks rarely changes its spin in the same instant.
         """
-        pos_var = _as_cov(pos_var)
-        r, dz = self.state[8], self.state[9]
+        panel_pos = np.asarray(panel_pos, dtype=float)
+        r, dz = self.state[R], self.state[DZ]
         yaw = math.atan2(camera_pos[1] - panel_pos[1], camera_pos[0] - panel_pos[0])
-        w, w_var, r_var, dz_var = self.state[7], self.P[7, 7], self.P[8, 8], self.P[9, 9]
+        w, w_var = self.state[W], self.P[W, W]
+        r_var, dz_var = self.P[R, R], self.P[DZ, DZ]
         if not keep_spin:
             w, w_var, r_var = self.spin_prior, self.spin_prior_std ** 2, 0.05 ** 2
             dz, dz_var = 0.0, self.dz_prior_std ** 2
-        self.state = np.array([
-            panel_pos[0] - r * math.cos(yaw), panel_pos[1] - r * math.sin(yaw),
-            panel_pos[2] - dz, 0.0, 0.0, 0.0, yaw, w, r, dz])
-        self.P = np.diag([0.0, 0.0, 0.0, 4.0, 4.0, 0.25, 0.5 ** 2, w_var, r_var, dz_var])
-        self.P[:3, :3] = pos_var + np.diag([0.01, 0.01, 0.0])
+        self.state = np.zeros(N_STATE)
+        self.state[POS] = panel_pos - _offset(yaw, r, dz)
+        self.state[YAW], self.state[W], self.state[R], self.state[DZ] = yaw, w, r, dz
+        self.P = np.zeros((N_STATE, N_STATE))
+        self.P[POS, POS] = _as_cov(pos_var) + np.diag([0.01, 0.01, 0.0])
+        self.P[VEL, VEL] = np.diag([4.0, 4.0, 0.25])
+        self.P[ACC, ACC] = self.accel_prior_std ** 2 * I3
+        self.P[YAW, YAW], self.P[W, W] = 0.5 ** 2, w_var
+        self.P[R, R], self.P[DZ, DZ] = r_var, dz_var
         self.t_sec = t_sec
         self.n_outliers = 0
 
     def _transition(self, dt):
         F = np.eye(N_STATE)
-        F[0, 3] = F[1, 4] = F[2, 5] = dt
-        F[6, 7] = dt
+        F[POS, VEL] = dt * I3
+        F[YAW, W] = dt
         Q = np.zeros((N_STATE, N_STATE))
         block = np.array([[dt ** 4 / 4.0, dt ** 3 / 2.0],
                           [dt ** 3 / 2.0, dt ** 2]])
-        for i in range(3):
-            Q[np.ix_([i, i + 3], [i, i + 3])] = block * self.q_accel ** 2
-        Q[np.ix_([6, 7], [6, 7])] = block * self.q_yaw_accel ** 2
-        Q[8, 8] = dt * self.q_radius ** 2
-        Q[9, 9] = dt * self.q_dz ** 2
+        Q[POS, POS] = block[0, 0] * self.q_accel ** 2 * I3
+        Q[POS, VEL] = Q[VEL, POS] = block[0, 1] * self.q_accel ** 2 * I3
+        Q[VEL, VEL] = block[1, 1] * self.q_accel ** 2 * I3
+        Q[np.ix_([YAW, W], [YAW, W])] = block * self.q_yaw_accel ** 2
+        Q[R, R] = dt * self.q_radius ** 2
+        Q[DZ, DZ] = dt * self.q_dz ** 2
+        if self.q_jerk > 0.0:
+            # Singer: acc' = -acc / tau + jerk noise; exact F, white-jerk Q.
+            alpha = 1.0 / self.accel_tau_s
+            decay = math.exp(-alpha * dt)
+            F[POS, ACC] = (alpha * dt - 1.0 + decay) / alpha ** 2 * I3
+            F[VEL, ACC] = (1.0 - decay) / alpha * I3
+            F[ACC, ACC] = decay * I3
+            jerk = self.q_jerk ** 2 * np.array([
+                [dt ** 5 / 20.0, dt ** 4 / 8.0, dt ** 3 / 6.0],
+                [dt ** 4 / 8.0, dt ** 3 / 3.0, dt ** 2 / 2.0],
+                [dt ** 3 / 6.0, dt ** 2 / 2.0, dt]])
+            blocks = (POS, VEL, ACC)
+            for i, bi in enumerate(blocks):
+                for j, bj in enumerate(blocks):
+                    Q[bi, bj] += jerk[i, j] * I3
         return F, Q
 
     def predicted(self, t_sec):
@@ -166,21 +201,23 @@ class ArmorEKF:
             return None, float('inf')
         k = best[0]
         if k:
-            self.state[6] += k * QUARTER_TURN
+            self.state[YAW] += k * QUARTER_TURN
             if k % 2:
-                self.state[8], self.other_r = self.other_r, self.state[8]
-                self.state[9] = -self.state[9]
-                self.P[9, :] *= -1.0
-                self.P[:, 9] *= -1.0  # P[9, 9] flips twice, staying put
+                self.state[R], self.other_r = self.other_r, self.state[R]
+                self.state[DZ] = -self.state[DZ]
+                self.P[DZ, :] *= -1.0
+                self.P[:, DZ] *= -1.0  # P[DZ, DZ] flips twice, staying put
         return best
 
-    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3):
+    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3,
+             facing_std=None):
         """
         Predict, associate and update on one detection; return 'update', 'outlier' or 'reacquire'.
 
         gate_nis is the chi-square(3) bound on the normalised innovation
         (16.3 = 99.9%). Outliers are skipped; max_outliers in a row re-seed
         the position via reacquire(), keeping the spin estimate.
+        facing_std (rad): the panel was seen alone; see update_facing().
         """
         self.predict(t_sec)
         self.associate(panel_pos, camera_pos)
@@ -193,17 +230,37 @@ class ArmorEKF:
             return 'reacquire'
         self.n_outliers = 0
         self.update(panel_pos, pos_var)
+        if facing_std:
+            self.update_facing(camera_pos, facing_std)
         return 'update'
 
+    def update_facing(self, camera_pos, std):
+        """
+        Pseudo-measure the tracked panel's yaw as the bearing to the camera, +-std.
+
+        A panel seen alone faces the camera: its neighbours, 90 deg round,
+        would otherwise present too. With one panel in view nothing else
+        fixes yaw, which random-walks and swings the centre round the panel.
+        """
+        yaw = self.state[YAW]
+        panel = self.state[POS] + _offset(yaw, self.state[R], 0.0)
+        bearing = math.atan2(camera_pos[1] - panel[1], camera_pos[0] - panel[0])
+        y = math.atan2(math.sin(bearing - yaw), math.cos(bearing - yaw))
+        S = self.P[YAW, YAW] + std ** 2
+        K = self.P[:, YAW] / S
+        self.state = self.state + K * y
+        self.P = self.P - np.outer(K, self.P[YAW, :])
+        self.P = 0.5 * (self.P + self.P.T)
+
     def _h_and_jacobian(self):
-        xc, yc, zc = self.state[0], self.state[1], self.state[2]
-        yaw, r, dz = self.state[6], self.state[8], self.state[9]
+        yaw, r = self.state[YAW], self.state[R]
         c, s = math.cos(yaw), math.sin(yaw)
-        h = np.array([xc + r * c, yc + r * s, zc + dz])
+        h = self.state[POS] + _offset(yaw, r, self.state[DZ])
         H = np.zeros((3, N_STATE))
-        H[0, 0] = H[1, 1] = H[2, 2] = H[2, 9] = 1.0
-        H[0, 6], H[0, 8] = -r * s, c
-        H[1, 6], H[1, 8] = r * c, s
+        H[:, POS] = I3
+        H[2, DZ] = 1.0
+        H[0, YAW], H[0, R] = -r * s, c
+        H[1, YAW], H[1, R] = r * c, s
         return h, H
 
     def nis(self, panel_pos, pos_var):
@@ -214,14 +271,14 @@ class ArmorEKF:
 
     def update(self, panel_pos, pos_var):
         h, H = self._h_and_jacobian()
-        R = _as_cov(pos_var)
-        S = H @ self.P @ H.T + R
+        R_meas = _as_cov(pos_var)
+        S = H @ self.P @ H.T + R_meas
         K = self.P @ H.T @ np.linalg.inv(S)
         self.state = self.state + K @ (np.asarray(panel_pos) - h)
         IKH = np.eye(N_STATE) - K @ H
-        self.P = IKH @ self.P @ IKH.T + K @ R @ K.T  # Joseph form
-        self.state[8] = min(max(self.state[8], self.r_min), self.r_max)
-        self.state[9] = min(max(self.state[9], -DZ_MAX), DZ_MAX)
+        self.P = IKH @ self.P @ IKH.T + K @ R_meas @ K.T  # Joseph form
+        self.state[R] = min(max(self.state[R], self.r_min), self.r_max)
+        self.state[DZ] = min(max(self.state[DZ], -DZ_MAX), DZ_MAX)
 
 
 class ArmorTracker:
@@ -233,15 +290,17 @@ class ArmorTracker:
     head slews in. Every hypothesis sees every panel; score is an EWMA of
     its NIS (alpha). A hypothesis scoring worse than the leader by
     reseed_margin for reseed_after_s is re-seeded from the leader's centre
-    and yaw, with its own spin prior and fresh radii. See README.md.
+    and yaw, with its own spin prior and fresh radii. ekf_kwargs go to
+    every ArmorEKF. See README.md.
     """
 
     def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
                  q_yaw_accel, q_radius, spin_priors=(0.0, 7.0, -7.0, 13.0, -13.0),
                  prior_std=3.0, alpha=0.03, reseed_margin=3.0, reseed_after_s=1.0,
-                 switch_margin=1.0, switch_after_s=0.5):
+                 switch_margin=1.0, switch_after_s=0.5, **ekf_kwargs):
         self.filters = [ArmorEKF(panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
-                                 q_yaw_accel, q_radius, spin_prior=w, spin_prior_std=prior_std)
+                                 q_yaw_accel, q_radius, spin_prior=w, spin_prior_std=prior_std,
+                                 **ekf_kwargs)
                         for w in spin_priors]
         self.scores = [3.0] * len(self.filters)  # NIS mean for 3 dof
         self.worse_since = [None] * len(self.filters)
@@ -268,11 +327,13 @@ class ArmorTracker:
     def predicted(self, t_sec):
         return self.best.predicted(t_sec)
 
-    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3):
+    def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3,
+             facing_std=None):
         """Advance every hypothesis on one panel; return the leading filter's status."""
         statuses = []
         for i, f in enumerate(self.filters):
-            statuses.append(f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers))
+            statuses.append(f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers,
+                                   facing_std))
             nis = min(f.last_nis, gate_nis)  # one wild sample shouldn't sink a filter
             self.scores[i] += self.alpha * (nis - self.scores[i])
         # The lead changes only after a challenger beats it by switch_margin
@@ -296,13 +357,13 @@ class ArmorTracker:
                 self.worse_since[i] = t_sec
             elif t_sec - self.worse_since[i] >= self.reseed_after_s:
                 f.state = best.state.copy()
-                f.state[7] = f.spin_prior
-                f.state[8] = f.other_r = f.initial_radius
+                f.state[W] = f.spin_prior
+                f.state[R] = f.other_r = f.initial_radius
                 f.P = best.P.copy()
-                f.P[7, :] = f.P[:, 7] = 0.0
-                f.P[7, 7] = f.spin_prior_std ** 2
-                f.P[8, :] = f.P[:, 8] = 0.0
-                f.P[8, 8] = 0.05 ** 2
+                f.P[W, :] = f.P[:, W] = 0.0
+                f.P[W, W] = f.spin_prior_std ** 2
+                f.P[R, :] = f.P[:, R] = 0.0
+                f.P[R, R] = 0.05 ** 2
                 f.t_sec = best.t_sec
                 self.scores[i] = best_score + self.reseed_margin / 2.0
                 self.worse_since[i] = None

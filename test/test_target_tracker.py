@@ -27,7 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.target_tracker_core import (  # noqa: E402
-    ArmorEKF, ArmorTracker, panel_positions, ray_covariance,
+    ACC, ArmorEKF, ArmorTracker, DZ, panel_positions, POS, R, ray_covariance, VEL, W, YAW,
 )
 
 CAMERA = np.array([0.0, 0.0, 0.4])
@@ -82,32 +82,32 @@ def _run(velocity, spin_rad_s, seconds, seed=0, noise=NOISE_M, start=(3.0, 0.0, 
 def test_stationary_target_estimates_centre_and_no_spin():
     ekf, centre, _ = _run((0.0, 0.0, 0.0), 0.0, 3.0)
     # Only the seen panel is observable, so check it rather than the centre.
-    panel = ekf.state[:3] + ekf.state[8] * np.array(
-        [math.cos(ekf.state[6]), math.sin(ekf.state[6]), 0.0])
+    panel = ekf.state[POS] + ekf.state[R] * np.array(
+        [math.cos(ekf.state[YAW]), math.sin(ekf.state[YAW]), 0.0])
     assert np.linalg.norm(panel - _seen_panel(centre, 0.3)) < 0.03
-    assert abs(ekf.state[7]) < 1.0
+    assert abs(ekf.state[W]) < 1.0
 
 
 def test_spin_in_place_recovers_rate_centre_and_both_radii():
     w = 2.0 * math.pi * 1.5
     ekf, centre, _ = _run((0.0, 0.0, 0.0), w, 4.0)
-    assert abs(ekf.state[7] - w) < 0.1 * w
-    assert np.linalg.norm(ekf.state[:2] - centre[:2]) < 0.05
-    radii = sorted([ekf.state[8], ekf.other_r])
+    assert abs(ekf.state[W] - w) < 0.1 * w
+    assert np.linalg.norm(ekf.state[POS][:2] - centre[:2]) < 0.05
+    radii = sorted([ekf.state[R], ekf.other_r])
     assert abs(radii[0] - RY) < 0.04 and abs(radii[1] - RX) < 0.04
 
 
 def test_spin_direction_is_signed():
     ekf, _, _ = _run((0.0, 0.0, 0.0), -2.0 * math.pi, 4.0)
-    assert ekf.state[7] < -0.9 * 2.0 * math.pi
+    assert ekf.state[W] < -0.9 * 2.0 * math.pi
 
 
 def test_spinning_while_translating_recovers_velocity_and_rate():
     w = 2.0 * math.pi * 1.5
     ekf, centre, _ = _run((0.0, 1.0, 0.0), w, 3.0, start=(3.0, -1.5, 0.3))
-    assert abs(ekf.state[7] - w) < 0.15 * w
-    assert abs(ekf.state[4] - 1.0) < 0.3
-    assert np.linalg.norm(ekf.state[:2] - centre[:2]) < 0.1
+    assert abs(ekf.state[W] - w) < 0.15 * w
+    assert abs(ekf.state[VEL][1] - 1.0) < 0.3
+    assert np.linalg.norm(ekf.state[POS][:2] - centre[:2]) < 0.1
 
 
 def test_handoff_steps_yaw_a_quarter_turn_and_swaps_radius():
@@ -115,13 +115,13 @@ def test_handoff_steps_yaw_a_quarter_turn_and_swaps_radius():
     # clockwise so the k=1 panel (yaw pi + 40 deg) is the more head-on one.
     ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
     ekf.other_r = 0.24
-    ekf.state[6] -= math.radians(50.0)
-    yaw_before = ekf.state[6]
+    ekf.state[YAW] -= math.radians(50.0)
+    yaw_before = ekf.state[YAW]
     k1_pos = panel_positions(ekf.state, ekf.other_r)[1][2]
     k, distance = ekf.associate(k1_pos, CAMERA)
     assert k == 1 and distance < 1e-9
-    assert math.isclose(ekf.state[6], yaw_before + math.pi / 2.0)
-    assert ekf.state[8] == 0.24 and ekf.other_r == 0.30
+    assert math.isclose(ekf.state[YAW], yaw_before + math.pi / 2.0)
+    assert ekf.state[R] == 0.24 and ekf.other_r == 0.30
 
 
 def test_back_panel_is_never_associated():
@@ -135,7 +135,7 @@ def test_predicted_does_not_mutate_or_alias():
     ekf, _, _ = _run((0.0, 1.0, 0.0), 6.0, 1.0)
     before, P_before, t_before = ekf.state.copy(), ekf.P.copy(), ekf.t_sec
     state, P = ekf.predicted(ekf.t_sec + 0.2)
-    assert state[1] > before[1] and state[6] > before[6]
+    assert state[POS][1] > before[POS][1] and state[YAW] > before[YAW]
     state[:] = 0.0
     P[:] = 0.0
     same_t, same_P = ekf.predicted(ekf.t_sec)
@@ -152,14 +152,14 @@ def test_jink_reacquires_position_and_keeps_spin():
     jumped = np.array([3.0, 0.8, 0.3]) + np.array([-RX, 0.0, 0.0])
     results = [ekf.step(jumped, CAMERA, t + (i + 1) * DT, 0.05 ** 2) for i in range(3)]
     assert results == ['outlier', 'outlier', 'reacquire']
-    assert abs(ekf.state[1] - 0.8) < 0.1
-    assert abs(ekf.state[7] - w) < 0.1 * w
+    assert abs(ekf.state[POS][1] - 0.8) < 0.1
+    assert abs(ekf.state[W] - w) < 0.1 * w
 
 
 def test_radius_is_clamped():
     ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.27, 2.0, 5.0, 0.02)
     ekf.update((1.0, 0.0, 0.3), 1e-6)
-    assert ekf.r_min <= ekf.state[8] <= ekf.r_max
+    assert ekf.r_min <= ekf.state[R] <= ekf.r_max
 
 
 def test_tracker_bank_recovers_the_spin_after_a_bad_first_second():
@@ -170,8 +170,8 @@ def test_tracker_bank_recovers_the_spin_after_a_bad_first_second():
     single = bank = 0
     for seed in range(8):
         kwargs = {'seed': seed, 'bad_start_s': 1.0, 'yaw0': seed * 0.37}
-        single += abs(_run((0.0, 0.0, 0.0), w, 6.0, **kwargs)[0].state[7] - w) < 0.1 * w
-        bank += abs(_run((0.0, 0.0, 0.0), w, 6.0, cls=ArmorTracker, **kwargs)[0].state[7] - w) \
+        single += abs(_run((0.0, 0.0, 0.0), w, 6.0, **kwargs)[0].state[W] - w) < 0.1 * w
+        bank += abs(_run((0.0, 0.0, 0.0), w, 6.0, cls=ArmorTracker, **kwargs)[0].state[W] - w) \
             < 0.1 * w
     assert bank >= 7
     assert bank > single
@@ -179,7 +179,7 @@ def test_tracker_bank_recovers_the_spin_after_a_bad_first_second():
 
 def test_tracker_bank_leads_with_the_right_spin_sign():
     tracker, _, _ = _run((0.0, 0.0, 0.0), -2.0 * math.pi * 1.5, 4.0, cls=ArmorTracker)
-    assert tracker.state[7] < -0.9 * 2.0 * math.pi * 1.5
+    assert tracker.state[W] < -0.9 * 2.0 * math.pi * 1.5
 
 
 def test_ray_covariance_is_depth_along_the_ray_and_lateral_across():
@@ -211,7 +211,7 @@ def test_tracker_bank_locks_spin_under_heavy_depth_noise_with_ray_covariance():
                 tracker = ArmorTracker(meas, CAMERA, t, cov, 0.27, 2.0, 5.0, 0.02)
             else:
                 tracker.step(meas, CAMERA, t, cov)
-        locked += abs(tracker.state[7] - w) < 0.1 * w
+        locked += abs(tracker.state[W] - w) < 0.1 * w
     assert locked >= 7
 
 
@@ -229,25 +229,74 @@ def test_staggered_spin_recovers_both_pair_heights():
     w = 2.0 * math.pi * 1.5
     for cls in (ArmorEKF, ArmorTracker):
         filt, centre, yaw = _run((0.0, 0.0, 0.0), w, 4.0, cls=cls, stagger=STAGGER_M)
-        assert abs(abs(filt.state[9]) - STAGGER_M / 2.0) < 0.015
-        assert abs(filt.state[2] - centre[2]) < 0.015
+        assert abs(abs(filt.state[DZ]) - STAGGER_M / 2.0) < 0.015
+        assert abs(filt.state[POS][2] - centre[2]) < 0.015
         # The sign too: every implied panel sits on a true one, heights included.
         assert _panel_error(filt, centre, yaw, STAGGER_M) < 0.05
 
 
 def test_flat_spin_keeps_dz_near_zero():
     filt, _, _ = _run((0.0, 0.0, 0.0), 2.0 * math.pi * 1.5, 4.0, cls=ArmorTracker)
-    assert abs(filt.state[9]) < 0.01
+    assert abs(filt.state[DZ]) < 0.01
 
 
 def test_odd_handoff_flips_dz_and_its_covariance():
     ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
-    ekf.state[9], ekf.P[2, 9] = 0.04, -1e-4
-    ekf.P[9, 2] = ekf.P[2, 9]
-    ekf.state[6] -= math.radians(50.0)
+    ekf.state[DZ], ekf.P[2, DZ] = 0.04, -1e-4
+    ekf.P[DZ, 2] = ekf.P[2, DZ]
+    ekf.state[YAW] -= math.radians(50.0)
     k1_pos = panel_positions(ekf.state, ekf.other_r)[1][2]
     assert math.isclose(k1_pos[2], 0.3 - 0.04)
     k, _ = ekf.associate(k1_pos, CAMERA)
     assert k == 1
-    assert math.isclose(ekf.state[9], -0.04) and ekf.P[2, 9] == ekf.P[9, 2] == 1e-4
+    assert math.isclose(ekf.state[DZ], -0.04) and ekf.P[2, DZ] == ekf.P[DZ, 2] == 1e-4
     assert np.all(np.linalg.eigvalsh(ekf.P) >= -1e-12)
+
+
+def test_single_panel_facing_update_holds_a_still_targets_yaw():
+    # One panel in view: without the facing update yaw random-walks and the
+    # centre swings round the panel.
+    seen = _seen_panel(np.array([3.0, 0.0, 0.3]), math.pi)
+    rng = np.random.default_rng(0)
+    tracker = None
+    for i in range(int(30.0 / DT)):
+        meas = seen + rng.normal(0.0, 0.01, 3)
+        if tracker is None:
+            tracker = ArmorTracker(meas, CAMERA, i * DT, 0.05 ** 2, 0.27, 2.0, 5.0, 0.02)
+        else:
+            tracker.step(meas, CAMERA, i * DT, 0.05 ** 2, facing_std=0.3)
+    dyaw = tracker.state[YAW] - math.pi
+    yaw_err = math.atan2(math.sin(dyaw), math.cos(dyaw))
+    assert abs(yaw_err) < 0.15
+    assert np.linalg.norm(tracker.state[POS][:2] - (3.0, 0.0)) < 0.06
+
+
+def test_acceleration_tracks_braking_under_spin():
+    # 4 m/s braking at 6 m/s^2 while spinning 1 Hz, as target_driver's path end.
+    w, a = 2.0 * math.pi, -6.0
+    rng = np.random.default_rng(1)
+    ekf = None
+    for i in range(int(1.2 / DT)):
+        t = i * DT
+        pre = max(0.0, t - 0.6)  # cruise 0.6 s, then brake
+        vy = 4.0 + a * pre
+        centre = np.array([3.0, -2.0 + 4.0 * t + 0.5 * a * pre ** 2, 0.3])
+        seen = _seen_panel(centre, 0.3 + w * t)
+        if seen is None:
+            continue
+        meas = seen + rng.normal(0.0, 0.01, 3)
+        if ekf is None:
+            ekf = ArmorEKF(meas, CAMERA, t, 0.03 ** 2, 0.27, 2.0, 5.0, 0.02,
+                           spin_prior=w, spin_prior_std=0.5, q_jerk=3.0, accel_tau_s=1.0)
+        else:
+            ekf.step(meas, CAMERA, t, 0.03 ** 2)
+    assert ekf.state[ACC][1] < 0.5 * a
+    assert abs(ekf.state[VEL][1] - vy) < 0.5
+
+
+def test_zero_jerk_is_constant_velocity():
+    ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
+    ekf.state[ACC] = (5.0, 5.0, 5.0)
+    state, _ = ekf.predicted(0.5)
+    assert np.allclose(state[POS], ekf.state[POS]) and np.allclose(state[VEL], ekf.state[VEL])
+    assert not ekf.P[ACC, ACC].any()

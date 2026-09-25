@@ -229,7 +229,9 @@ tracker (rm_auto_aim's) reduced to position-only detections. On hardware
 can't come from handoffs; it has to come from geometry. The old `SpinDetector`
 counted `class_id` changes and only worked because the emulator faked them.
 
-`ArmorEKF` state is centre, centre velocity, the tracked panel's normal yaw,
+`ArmorEKF` state is the centre's position, velocity and acceleration
+(3-vectors, `POS`/`VEL`/`ACC` in `target_tracker_core.py`), the tracked
+panel's normal yaw,
 spin rate `w`, that panel's radius and its pair's height `dz` above the
 centre, with the other pair's radius kept aside and its height at `-dz`. A
 panel measures `centre + r * (cos yaw, sin yaw, 0) + (0, 0, dz)`. Only the
@@ -249,9 +251,24 @@ Noise: `R` stddev is `meas_noise_base_m + meas_noise_range_coeff * range_m^2`
 centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
 `process_noise_radius` (0.02) the radius, which clamps to 0.18-0.45m. These
 came from an offline sweep against an emulator-shaped target; the higher yaw
-noise let a jinking target's translation leak into `w`. Without spin, yaw and
-radius are unobservable and drift, but the seen panel's position stays solid,
-which is what `point_to_cv_target` aims at then.
+noise let a jinking target's translation leak into `w`.
+
+Acceleration is a Singer model: it decays over `accel_time_constant_s` (1.0)
+and `process_noise_jerk` (3.0 m/s^3) drives it. From panel positions alone a
+filter can't separate the centre accelerating from the panel spinning faster
+than one spin period, so a loose model (jerk 20 and up) explained the 43 m/s^2
+centripetal swing of a 2Hz panel as a jinking centre and slammed the radius
+between its clamps. At jerk 3 it tracks the target's 6 m/s^2 braking at the
+path ends: facing-panel p95 at 4 m/s went from 0.65 m to 0.12 m on
+`sim/tools/estimation_offline.py` (2026-09-25). `acceleration` is published.
+
+A panel seen alone faces the camera: its neighbours sit 90 degrees round, and
+one within the detector's ~75 degree cone would be seen too. So a frame with
+one panel also measures the tracked panel's yaw as the bearing to the camera,
++-`single_panel_yaw_std` (0.3 rad). Without it a still target's yaw was
+unobservable and random-walked a quarter turn in 30 s, and since
+`point_to_cv_target` rebuilds the facing panel from centre, yaw and radius, it
+aimed up to 0.4 m off a target that never moved.
 
 Innovation gating: a normalised innovation over `gate_nis` (16.3, 99.9% for 3
 dof) is skipped, and `max_outliers` (3) in a row re-seed centre, velocity and
@@ -275,7 +292,7 @@ the first. `valid` goes true after 2 updates, because an engagement can be
 shorter than one spin period; consumers should weigh `variance` and
 `yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
 position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
-`acceleration` 0 (constant-velocity model). Each state is
+`acceleration` the centre's. Each state is
 `ArmorTracker.predicted()` at the publish time and stamped with it, as
 `TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
 Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
