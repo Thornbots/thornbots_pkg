@@ -277,7 +277,8 @@ reverses instantly at each end of its path, which otherwise wrecked `w`.
 
 `ArmorTracker` runs five `ArmorEKF`s seeded at `w` = 0, +-7, +-13 rad/s
 (1-2Hz both ways) on every panel and publishes the lead, scored by an EWMA of
-normalised innovation. A single filter fed 15cm noise for its first second,
+negative log-likelihood (NIS + log det S). NIS alone rewards the loosest
+model, whose wide S shrinks every innovation. A single filter fed 15cm noise for its first second,
 as when sim's head slews in from rest, locked onto a wrong spin for good on 6
 of 10 seeds; the bank recovered on 9. The lead changes only once a challenger
 beats it by `switch_margin` (1.0) for `switch_after_s` (0.5), since a noise
@@ -285,6 +286,20 @@ burst briefly favours a collapsed-radius wrong-sign hypothesis. A hypothesis
 trailing the lead by `reseed_margin` (3.0) for `reseed_after_s` (1.0) is
 re-seeded from the lead's centre and yaw, with its own spin prior and fresh
 radii.
+
+A sixth, still hypothesis (`still_hypothesis`) covers a parked,
+non-spinning target: velocity, acceleration and `w` pinned at exactly 0,
+the centre and yaw random-walking at `still_process_noise_pos` (0.02
+m/sqrt(s)) and `still_process_noise_yaw` (0.05 rad/sqrt(s)). The moving
+filters read a still target's noise as motion (velocity p95 0.14 m/s
+offline, 0.19 m/s on gz), which Part 1 turned into lead. The still filter
+takes the lead at a 0.25 margin rather than 1.0, since it wins by only
+~0.6 per sample, and hands it back once a CUSUM of the per-sample
+log-likelihood ratio against the best moving filter passes
+`still_exit_llr` (15). A single gated detection adds ~13, so one misfire
+can't knock it out. Offline, D435 noise: parked facing-panel p95 2.8 to
+0.8 cm. A target that pulls away at 6 m/s^2 is handed over after 0.23 s,
+with up to 9 cm error in between (4 cm without the still model).
 
 The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
 It publishes on every `/cv/robot_panels` message it can place in odom, from

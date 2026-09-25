@@ -82,6 +82,9 @@ front-run firing logic unless asked.
   Unit-tested and checked on `sim/tools/estimation_offline.py`, not yet on
   gz C2. Where it stopped and what's next: `../CV_SPLIT_PLAN.md` "Where
   this stopped".
+  - A still hypothesis (2026-09-25) gives a parked, non-spinning target
+    exactly zero velocity and spin; README.md has the numbers. Offline
+    only; gz C2 hasn't run it. Drive-off costs ~0.23 s at up to 9 cm.
   - gz's shots land 1.6 cm low on every case, likely the chassis sagging
     on its placeholder springs while TF keeps `root` at z = 0. Not traced.
 - **Part 1 now aims for our own motion** (2026-09-25): the shot leaves
