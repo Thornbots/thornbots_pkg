@@ -85,8 +85,9 @@ front-run firing logic unless asked.
   - gz's shots land 1.6 cm low on every case, likely the chassis sagging
     on its placeholder springs while TF keeps `root` at z = 0. Not traced.
 - **Part 1 now aims for our own motion** (2026-09-25): the shot leaves
-  where we are at the aim horizon and carries our velocity. Unit-tested;
-  the aim bench's `shooter_speed:=1.0` run hasn't happened yet.
+  where we are at the aim horizon and carries our velocity. On the aim
+  bench at `shooter_speed:=1.0`, 95-99%, at most 1.5 points under a still
+  shooter.
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
