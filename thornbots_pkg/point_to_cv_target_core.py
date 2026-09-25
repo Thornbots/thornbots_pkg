@@ -78,7 +78,7 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
     shooter_pos, shooter_vel: ours at that stamp, in odom. Each
     aim holds a tick_s, then the gimbal trails it by gimbal_lag_s; the aim
     targets the middle of that. The fire is timed over firmware_latency_s.
-    Not spinning: lead the facing panel, fire now. Spinning: aim on the
+    Not spinning: lead the facing panel, fire now. Spinning (shotgating): aim on the
     center->shooter line at the arriving pair, fire after the delay that
     lands it there if under tick_s, else None. With chase_settle_s: chase
     the facing panel, fire mid-hold if the panel a shot meets has faced us
