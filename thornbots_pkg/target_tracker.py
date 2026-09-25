@@ -16,9 +16,10 @@
 Track the selected robot as a spinning 4-panel armor model.
 
 /cv/robot_panels (target_selector's robot, winner first) -> /cv/target_state
-(TargetState, odom): chassis center, velocity, panel yaw, spin rate and
-both panel radii, from target_tracker_core.ArmorTracker. Consumed by
-point_to_cv_target.py. See README.md's ### target_tracker.py Notes.
+(TargetState, odom): chassis center, velocity, panel yaw, spin rate, both
+pairs' radii and heights, from target_tracker_core.ArmorTracker. Capture time
+is the detection stamp less camera_latency_s; the state is predicted to its
+publish time and stamped with it. See README.md's ### target_tracker.py Notes.
 """
 from dji_serial_bridge.msg import PanelDetectionArray, TargetState
 import numpy as np
@@ -50,6 +51,9 @@ class TargetTracker(Node):
         self.declare_parameter('output_topic', '/cv/target_state')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
+        # Capture time = detection stamp - camera_latency_s. Unmeasured on
+        # hardware (CV_SPLIT_PLAN.md Phase 2); match the emulator's in sim.
+        self.declare_parameter('camera_latency_s', 0.0)
         self.declare_parameter('track_max_gap_s', 0.5)
         # How far the TF chain may lag the detection stamp before a
         # detection is dropped rather than matched to the newest camera
@@ -73,6 +77,7 @@ class TargetTracker(Node):
         self.output_topic = gp('output_topic').value
         self.odom_frame = gp('odom_frame').value
         self.pose_latency_s = float(gp('pose_latency_s').value)
+        self.camera_latency_s = float(gp('camera_latency_s').value)
         self.track_max_gap_s = float(gp('track_max_gap_s').value)
         self.tf_future_tolerance_s = float(gp('tf_future_tolerance_s').value)
         self.panel_radius_m = float(gp('panel_radius_m').value)
@@ -103,6 +108,7 @@ class TargetTracker(Node):
             f'target_tracker ready\n'
             f'  {self.robot_panels_topic} -> {self.output_topic} (frame={self.odom_frame})\n'
             f'  pose_latency_s={self.pose_latency_s:.3f} '
+            f'camera_latency_s={self.camera_latency_s:.3f} '
             f'track_max_gap_s={self.track_max_gap_s:.2f}\n'
             f'  panel_radius_m={self.panel_radius_m:.2f} (approximation, see README.md)'
         )
@@ -163,7 +169,7 @@ class TargetTracker(Node):
         if not msg.detections:
             return
         first = msg.detections[0]
-        stamp = Time.from_msg(msg.header.stamp)
+        stamp = Time.from_msg(msg.header.stamp) - Duration(seconds=self.camera_latency_s)
 
         max_gap_ns = int(self.track_max_gap_s * 1e9)
         if (self._track_id is None
@@ -207,11 +213,11 @@ class TargetTracker(Node):
                     're-seeding position (spin estimate kept)', throttle_duration_sec=1.0)
         self._n_updates += 1
 
-        state, P = self._ekf.predicted(t_sec)
+        # TargetState describes the target now: predict to the publish time.
+        now = max(self.get_clock().now(), stamp)
+        state, P = self._ekf.predicted(now.nanoseconds / 1e9)
         out = TargetState()
-        # Still the detection stamp, not the publish time TargetState.msg
-        # asks for: predicting forward to it is CV_SPLIT_PLAN.md Phase 2.
-        out.header.stamp = msg.header.stamp
+        out.header.stamp = now.to_msg()
         out.header.frame_id = self.odom_frame
         out.robot_track_id = first.robot_track_id
         out.confidence = float(first.confidence)
