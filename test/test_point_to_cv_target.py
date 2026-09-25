@@ -18,6 +18,7 @@ Unit tests for point_to_cv_target_core.py's intercept solve and shot planner.
 No rclpy, no ROS message packages. Run with
 `python3 -m pytest test/test_point_to_cv_target.py`.
 """
+import ast
 import math
 import os
 import sys
@@ -258,8 +259,11 @@ SHOOTER = (0.0, 0.0, 0.4)
 TICK_S = 1.0 / 30.0
 
 
-def _armor(centre=(3.0, 0.0, 0.3), vel=(0.0, 0.0, 0.0), yaw=math.pi, w=0.0, r=0.30):
-    return (*centre, *vel, yaw, w, r)
+RADII = (0.30, 0.24)
+
+
+def _armor(center=(3.0, 0.0, 0.3), vel=(0.0, 0.0, 0.0), yaw=math.pi, w=0.0):
+    return (*center, *vel, yaw, w)
 
 
 def _flight(aim):
@@ -267,14 +271,14 @@ def _flight(aim):
 
 
 def test_plan_non_spinning_stationary_aims_at_the_tracked_panel_now():
-    aim, delay = plan_shot(_armor(), 0.24, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+    aim, delay = plan_shot(_armor(), RADII, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
     assert delay == 0.0
     assert math.dist(aim, (2.7, 0.0, 0.3)) < 1e-9
 
 
 def test_plan_non_spinning_crossing_panel_meets_the_intercept_condition():
     horizon = 0.12
-    aim, _ = plan_shot(_armor(vel=(0.0, 2.0, 0.0)), 0.24, horizon, SHOOTER,
+    aim, _ = plan_shot(_armor(vel=(0.0, 2.0, 0.0)), RADII, horizon, SHOOTER,
                        V_MUZZLE, False, TICK_S, iterations=50)
     t = _analytic_flight_time((2.7, 0.0, 0.3), (0.0, 2.0, 0.0), horizon, V_MUZZLE,
                               shooter_pos=SHOOTER)
@@ -285,13 +289,13 @@ def test_plan_non_spinning_crossing_panel_meets_the_intercept_condition():
 def test_plan_non_spinning_leads_the_tangential_panel_velocity():
     # Panel facing the shooter on a slowly turning chassis moves sideways at
     # r*w even with a still centre.
-    aim, _ = plan_shot(_armor(w=1.0), 0.24, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
+    aim, _ = plan_shot(_armor(w=1.0), RADII, 0.1, SHOOTER, V_MUZZLE, False, TICK_S)
     assert aim[1] < -0.02  # yaw pi, w > 0: the panel sweeps toward -y
 
 
-def _alignment_error(state, other_r, horizon, delay):
-    aim, _ = plan_shot(state, other_r, horizon, SHOOTER, V_MUZZLE, True, TICK_S)
-    xc, yc, _, _, _, _, yaw, w, _ = state
+def _alignment_error(state, radius, horizon, delay):
+    aim, _ = plan_shot(state, radius, horizon, SHOOTER, V_MUZZLE, True, TICK_S)
+    xc, yc, _, _, _, _, yaw, w = state
     t_impact = horizon + _flight(aim) + delay
     bearing = math.atan2(SHOOTER[1] - yc, SHOOTER[0] - xc)
     phase = (yaw + w * t_impact - bearing) % (math.pi / 2.0)
@@ -305,19 +309,19 @@ def test_plan_spinning_delay_lands_a_panel_square_to_the_shooter():
         yaw = math.pi + i * (math.pi / 2.0) / 40.0
         for spin in (w, -w):
             state = _armor(yaw=yaw, w=spin)
-            _, delay = plan_shot(state, 0.24, 0.08, SHOOTER, V_MUZZLE, True, TICK_S)
+            _, delay = plan_shot(state, RADII, 0.08, SHOOTER, V_MUZZLE, True, TICK_S)
             if delay is None:
                 continue
             fired += 1
             assert 0.0 <= delay < TICK_S
-            assert _alignment_error(state, 0.24, 0.08, delay) < 0.02  # rad; flight-time residual
+            assert _alignment_error(state, RADII, 0.08, delay) < 0.02  # rad; flight-time residual
     # A tick-long window catches tick*|w| of each quarter turn, both directions.
     expected = 2 * 40 * (TICK_S * w) / (math.pi / 2.0)
     assert abs(fired - expected) <= 4
 
 
-def test_plan_spinning_aims_on_the_centre_to_shooter_line():
-    aim, _ = plan_shot(_armor(centre=(3.0, 1.0, 0.3), w=9.0), 0.24, 0.1, SHOOTER,
+def test_plan_spinning_aims_on_the_center_to_shooter_line():
+    aim, _ = plan_shot(_armor(center=(3.0, 1.0, 0.3), w=9.0), RADII, 0.1, SHOOTER,
                        V_MUZZLE, True, TICK_S)
     to_shooter = math.atan2(SHOOTER[1] - 1.0, SHOOTER[0] - 3.0)
     assert math.isclose(math.atan2(aim[1] - 1.0, aim[0] - 3.0), to_shooter, abs_tol=1e-9)
@@ -326,6 +330,22 @@ def test_plan_spinning_aims_on_the_centre_to_shooter_line():
 
 def test_plan_without_lead_aims_at_the_current_estimate_and_fires_now():
     state = _armor(vel=(0.0, 4.0, 0.0), w=9.0)
-    aim, delay = plan_shot(state, 0.24, 0.3, SHOOTER, V_MUZZLE, True, TICK_S, lead=False)
+    aim, delay = plan_shot(state, RADII, 0.3, SHOOTER, V_MUZZLE, True, TICK_S, lead=False)
     assert delay == 0.0
     assert abs(aim[1]) < 1e-9
+
+
+# ── node contract ─────────────────────────────────────────────────────────
+
+NODE_SRC = os.path.join(os.path.dirname(__file__), '..', 'thornbots_pkg',
+                        'point_to_cv_target.py')
+
+
+def test_node_subscribes_to_target_state_and_robot_pose_only():
+    # The CV split's seam (CV_SPLIT_PLAN.md 1.0): Part 1 aims from
+    # TargetState alone, so a truth publisher can replace the whole of Part 2.
+    tree = ast.parse(open(NODE_SRC).read())
+    subscribed = [call.args[0].id for call in ast.walk(tree)
+                  if isinstance(call, ast.Call)
+                  and getattr(call.func, 'attr', None) == 'create_subscription']
+    assert sorted(subscribed) == ['RobotPose', 'TargetState']

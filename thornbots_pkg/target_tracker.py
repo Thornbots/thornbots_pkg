@@ -16,7 +16,7 @@
 Track the selected robot as a spinning 4-panel armor model.
 
 /cv/robot_panels (target_selector's robot, winner first) -> /cv/target_state
-(TargetState, odom): chassis centre, velocity, panel yaw, spin rate and
+(TargetState, odom): chassis center, velocity, panel yaw, spin rate and
 both panel radii, from target_tracker_core.ArmorTracker. Consumed by
 point_to_cv_target.py. See README.md's ### target_tracker.py Notes.
 """
@@ -209,18 +209,21 @@ class TargetTracker(Node):
 
         state, P = self._ekf.predicted(t_sec)
         out = TargetState()
+        # Still the detection stamp, not the publish time TargetState.msg
+        # asks for: predicting forward to it is CV_SPLIT_PLAN.md Phase 2.
         out.header.stamp = msg.header.stamp
         out.header.frame_id = self.odom_frame
         out.robot_track_id = first.robot_track_id
-        out.centre.x, out.centre.y, out.centre.z = (float(v) for v in state[0:3])
+        out.confidence = float(first.confidence)
+        out.center.x, out.center.y, out.center.z = (float(v) for v in state[0:3])
         out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[3:6])
         out.variance = [float(P[i, i]) for i in range(6)]
         out.panel.x, out.panel.y, out.panel.z = (float(v) for v in panels_odom[0])
         out.yaw = float(state[6])
         out.yaw_rate = float(state[7])
         out.yaw_rate_variance = float(P[7, 7])
-        out.radius = float(state[8])
-        out.other_radius = float(self._ekf.other_r)
+        out.radius = [float(state[8]), float(self._ekf.other_r)]
+        out.z_offset = [0.0, 0.0]  # one-height model until per-pair z (Phase 2)
         # Two updates before consumers lead on it; they weigh variance
         # and yaw_rate_variance for anything finer.
         out.valid = self._n_updates >= 2

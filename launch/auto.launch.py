@@ -135,22 +135,21 @@ def generate_launch_description():
         'enable_cv_target_bridge', default_value='true',
         description="Launch point_to_cv_target to turn target_tracker's "
         '/cv/target_state into the root-frame /cv/target aim '
-        'point (plus /cv/panel_polygon off panel_topic). '
+        'point. '
         'Independent of real_hardware -- consumed by mcb_relay '
         "when real_hardware:=true, and by sim's cv_head_aim "
         'node when running against sim.'
     )
     panel_topic_arg = DeclareLaunchArgument(
         'panel_topic', default_value='/cv/panel_detection',
-        description='Singular PanelDetection topic (the picked panel) -- '
-        'published by target_selector, consumed by '
-        'point_to_cv_target.'
+        description='Singular PanelDetection topic (the picked panel), '
+        'published by target_selector for debugging and rviz.'
     )
     lead_enabled_arg = DeclareLaunchArgument(
         'lead_enabled', default_value='true',
         description='point_to_cv_target: apply the intercept/lead solve '
         'to /cv/target. false emits the raw '
-        'target_tracker centre with no prediction -- one '
+        'target_tracker center with no prediction -- one '
         'param flip between before/after.'
     )
     firmware_latency_s_arg = DeclareLaunchArgument(
@@ -282,8 +281,7 @@ def generate_launch_description():
     )
 
     # Turns target_tracker's /cv/target_state into the root-frame CVTarget
-    # published on /cv/target (and panel_topic's corners into
-    # /cv/panel_polygon) -- consumed by mcb_relay (real_hardware:=true)
+    # published on /cv/target -- consumed by mcb_relay (real_hardware:=true)
     # and/or sim's cv_head_aim node (real_hardware:=false), so this runs in
     # both modes; enable_cv_target_bridge lets you disable it if you intend
     # to publish /cv/target yourself.
@@ -295,7 +293,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_cv_target_bridge')),
         parameters=[{
             'use_sim_time': use_sim_time,
-            'panel_topic': LaunchConfiguration('panel_topic'),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('odom_frame'),
@@ -316,7 +313,8 @@ def generate_launch_description():
     )
 
     # Picks the winning panel out of roi_depth_query's /cv/panel_detections
-    # (ALL detections) and republishes it as the singular panel_topic --
+    # (ALL detections) and republishes it as the singular panel_topic, its
+    # corners on /cv/panel_polygon and the robot's panels on /cv/robot_panels --
     # upstream of point_to_cv_target_node in the pipeline, hence its own
     # enable_target_selector toggle. These two toggles are independent of
     # enable_cv_target_bridge because sim's shot_hit.launch.py runs its own
