@@ -77,6 +77,13 @@ class TargetTracker(Node):
         self.declare_parameter('single_panel_yaw_std', 0.3)
         self.declare_parameter('process_noise_yaw_accel', 5.0)  # rad/s^2, spin rate drift
         self.declare_parameter('process_noise_radius', 0.02)  # m/sqrt(s)
+        # A parked, non-spinning target: a hypothesis with v, a and w pinned
+        # at 0, its centre and yaw random-walking; it hands the lead back once
+        # the summed log-likelihood ratio passes still_exit_llr. See README.md.
+        self.declare_parameter('still_hypothesis', True)
+        self.declare_parameter('still_process_noise_pos', 0.02)  # m/sqrt(s)
+        self.declare_parameter('still_process_noise_yaw', 0.05)  # rad/sqrt(s)
+        self.declare_parameter('still_exit_llr', 15.0)
         # chi-square(3) innovation gate; this many outliers in a row re-seed
         # the position and keep the spin estimate. See README.md.
         self.declare_parameter('gate_nis', 16.3)
@@ -100,6 +107,10 @@ class TargetTracker(Node):
         self.process_noise_jerk = float(gp('process_noise_jerk').value)
         self.accel_time_constant_s = float(gp('accel_time_constant_s').value)
         self.single_panel_yaw_std = float(gp('single_panel_yaw_std').value)
+        self.still_hypothesis = bool(gp('still_hypothesis').value)
+        self.still_process_noise_pos = float(gp('still_process_noise_pos').value)
+        self.still_process_noise_yaw = float(gp('still_process_noise_yaw').value)
+        self.still_exit_llr = float(gp('still_exit_llr').value)
         self.gate_nis = float(gp('gate_nis').value)
         self.max_outliers = int(gp('max_outliers').value)
 
@@ -220,7 +231,10 @@ class TargetTracker(Node):
                     panel_odom, T, t_sec, R_meas, self.panel_radius_m,
                     self.process_noise_accel, self.process_noise_yaw_accel,
                     self.process_noise_radius, q_jerk=self.process_noise_jerk,
-                    accel_tau_s=self.accel_time_constant_s)
+                    accel_tau_s=self.accel_time_constant_s, still=self.still_hypothesis,
+                    still_exit_llr=self.still_exit_llr,
+                    q_still_pos=self.still_process_noise_pos,
+                    q_still_yaw=self.still_process_noise_yaw)
             elif self._ekf.step(panel_odom, T, t_sec, R_meas, self.gate_nis,
                                 self.max_outliers, facing_std) == 'reacquire':
                 self.get_logger().info(

@@ -80,13 +80,19 @@ class ArmorEKF:
     (m/s^3) drives the acceleration states (0 pins them at 0, a
     constant-velocity filter), q_yaw_accel (rad/s^2) the spin rate; q_radius
     and q_dz (m/sqrt(s)) let r and dz drift. r is clamped to [r_min, r_max]
-    and dz to +-DZ_MAX after every update.
+    and dz to +-DZ_MAX after every update. still=True pins velocity,
+    acceleration and spin at exactly 0; the centre and yaw random-walk at
+    q_still_pos (m/sqrt(s)) and q_still_yaw (rad/sqrt(s)) instead.
     """
 
     def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius,
                  q_accel, q_yaw_accel, q_radius, r_min=0.18, r_max=0.45,
                  spin_prior=0.0, spin_prior_std=8.0, q_dz=0.005, dz_prior_std=0.05,
-                 q_jerk=0.0, accel_tau_s=0.5, accel_prior_std=6.0):
+                 q_jerk=0.0, accel_tau_s=0.5, accel_prior_std=6.0, still=False,
+                 q_still_pos=0.02, q_still_yaw=0.05):
+        self.still = still
+        self.q_still_pos = q_still_pos
+        self.q_still_yaw = q_still_yaw
         self.q_accel = q_accel
         self.q_jerk = q_jerk
         self.accel_tau_s = accel_tau_s
@@ -105,6 +111,7 @@ class ArmorEKF:
         self.t_sec = t_sec
         self.n_outliers = 0
         self.last_nis = 0.0
+        self.last_logdet = 0.0  # log det of the last innovation covariance
         self.spin_prior = spin_prior
         self.spin_prior_std = spin_prior_std
         self.initial_radius = radius
@@ -136,12 +143,28 @@ class ArmorEKF:
         self.P[R, R], self.P[DZ, DZ] = r_var, dz_var
         self.t_sec = t_sec
         self.n_outliers = 0
+        self.pin_still()
+
+    def pin_still(self):
+        """On a still filter, zero velocity, acceleration and spin and their covariance."""
+        if not self.still:
+            return
+        for idx in (VEL, ACC, W):
+            self.state[idx] = 0.0
+            self.P[idx, :] = 0.0
+            self.P[:, idx] = 0.0
 
     def _transition(self, dt):
         F = np.eye(N_STATE)
         F[POS, VEL] = dt * I3
         F[YAW, W] = dt
         Q = np.zeros((N_STATE, N_STATE))
+        if self.still:
+            Q[POS, POS] = dt * self.q_still_pos ** 2 * I3
+            Q[YAW, YAW] = dt * self.q_still_yaw ** 2
+            Q[R, R] = dt * self.q_radius ** 2
+            Q[DZ, DZ] = dt * self.q_dz ** 2
+            return F, Q
         block = np.array([[dt ** 4 / 4.0, dt ** 3 / 2.0],
                           [dt ** 3 / 2.0, dt ** 2]])
         Q[POS, POS] = block[0, 0] * self.q_accel ** 2 * I3
@@ -221,7 +244,7 @@ class ArmorEKF:
         """
         self.predict(t_sec)
         self.associate(panel_pos, camera_pos)
-        self.last_nis = self.nis(panel_pos, pos_var)
+        self.last_nis, self.last_logdet = self._innovation(panel_pos, pos_var)
         if self.last_nis > gate_nis:
             self.n_outliers += 1
             if self.n_outliers < max_outliers:
@@ -264,10 +287,14 @@ class ArmorEKF:
         return h, H
 
     def nis(self, panel_pos, pos_var):
+        return self._innovation(panel_pos, pos_var)[0]
+
+    def _innovation(self, panel_pos, pos_var):
+        """Return (NIS, log det S) of panel_pos against the current prediction."""
         h, H = self._h_and_jacobian()
         y = np.asarray(panel_pos) - h
         S = H @ self.P @ H.T + _as_cov(pos_var)
-        return float(y @ np.linalg.solve(S, y))
+        return float(y @ np.linalg.solve(S, y)), float(np.linalg.slogdet(S)[1])
 
     def update(self, panel_pos, pos_var):
         h, H = self._h_and_jacobian()
@@ -283,26 +310,33 @@ class ArmorEKF:
 
 class ArmorTracker:
     """
-    Bank of ArmorEKFs seeded at different spin rates; the lowest-NIS one leads.
+    Bank of ArmorEKFs seeded at different spin rates, plus a still one; the likeliest leads.
 
-    One EKF started at w=0 locks into a wrong spin (often w~0 with a
-    collapsed radius) if its first second of data is poor, e.g. while the
-    head slews in. Every hypothesis sees every panel; score is an EWMA of
-    its NIS (alpha). A hypothesis scoring worse than the leader by
-    reseed_margin for reseed_after_s is re-seeded from the leader's centre
-    and yaw, with its own spin prior and fresh radii. ekf_kwargs go to
-    every ArmorEKF. See README.md.
+    Every hypothesis sees every panel; score is an EWMA (alpha) of its
+    negative log-likelihood, NIS + log det S, so a looser model can't win on
+    slack alone. still=True adds a filter with v, a and w pinned at 0 for a
+    parked, non-spinning target: it takes the lead at still_margin, and
+    loses it once the summed log-likelihood ratio against the best moving
+    filter passes still_exit_llr. A hypothesis scoring worse than the leader
+    by reseed_margin for reseed_after_s is re-seeded from the leader's centre
+    and yaw.
+    ekf_kwargs go to every ArmorEKF. See README.md.
     """
 
     def __init__(self, panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
                  q_yaw_accel, q_radius, spin_priors=(0.0, 7.0, -7.0, 13.0, -13.0),
                  prior_std=3.0, alpha=0.03, reseed_margin=3.0, reseed_after_s=1.0,
-                 switch_margin=1.0, switch_after_s=0.5, **ekf_kwargs):
+                 switch_margin=1.0, switch_after_s=0.5, still=True, still_margin=0.25,
+                 still_exit_llr=15.0, **ekf_kwargs):
         self.filters = [ArmorEKF(panel_pos, camera_pos, t_sec, pos_var, radius, q_accel,
                                  q_yaw_accel, q_radius, spin_prior=w, spin_prior_std=prior_std,
                                  **ekf_kwargs)
                         for w in spin_priors]
-        self.scores = [3.0] * len(self.filters)  # NIS mean for 3 dof
+        if still:
+            self.filters.append(ArmorEKF(panel_pos, camera_pos, t_sec, pos_var, radius,
+                                         q_accel, q_yaw_accel, q_radius, spin_prior=0.0,
+                                         spin_prior_std=0.0, still=True, **ekf_kwargs))
+        self.scores = [None] * len(self.filters)  # set by the first step
         self.worse_since = [None] * len(self.filters)
         self.alpha = alpha
         self.reseed_margin = reseed_margin
@@ -310,6 +344,9 @@ class ArmorTracker:
         self.lead = 0
         self.switch_margin = switch_margin
         self.switch_after_s = switch_after_s
+        self.still_margin = still_margin
+        self.still_exit_llr = still_exit_llr
+        self._still_cusum = 0.0
         self._challenger = None  # (index, since t_sec)
 
     @property
@@ -330,18 +367,32 @@ class ArmorTracker:
     def step(self, panel_pos, camera_pos, t_sec, pos_var, gate_nis=16.3, max_outliers=3,
              facing_std=None):
         """Advance every hypothesis on one panel; return the leading filter's status."""
-        statuses = []
+        statuses, nlls = [], []
         for i, f in enumerate(self.filters):
             statuses.append(f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers,
                                    facing_std))
-            nis = min(f.last_nis, gate_nis)  # one wild sample shouldn't sink a filter
-            self.scores[i] += self.alpha * (nis - self.scores[i])
+            nll = min(f.last_nis, gate_nis) + f.last_logdet  # clamped: one wild sample
+            nlls.append(nll)
+            if self.scores[i] is None:
+                self.scores[i] = nll
+            else:
+                self.scores[i] += self.alpha * (nll - self.scores[i])
+        if self.best.still:
+            # A parked target that moves: CUSUM of the per-sample log-likelihood
+            # ratio against the best moving filter hands over within a few samples.
+            moving = [i for i, f in enumerate(self.filters) if not f.still]
+            rival = min(moving, key=lambda i: nlls[i])
+            self._still_cusum = max(0.0, self._still_cusum + nlls[self.lead] - nlls[rival])
+            if self._still_cusum > self.still_exit_llr:
+                self.lead = min(moving, key=lambda i: self.scores[i])
+                self._challenger, self._still_cusum = None, 0.0
         # The lead changes only after a challenger beats it by switch_margin
         # for switch_after_s: a noise burst briefly favours a collapsed-radius
         # wrong-sign hypothesis, which is least sensitive to it.
         best_i = int(np.argmin(self.scores))
         lead_score = self.scores[self.lead]
-        if best_i == self.lead or self.scores[best_i] > lead_score - self.switch_margin:
+        margin = self.still_margin if self.filters[best_i].still else self.switch_margin
+        if best_i == self.lead or self.scores[best_i] > lead_score - margin:
             self._challenger = None
         elif self._challenger is None or self._challenger[0] != best_i:
             self._challenger = (best_i, t_sec)
@@ -364,6 +415,7 @@ class ArmorTracker:
                 f.P[W, W] = f.spin_prior_std ** 2
                 f.P[R, :] = f.P[:, R] = 0.0
                 f.P[R, R] = 0.05 ** 2
+                f.pin_still()
                 f.t_sec = best.t_sec
                 self.scores[i] = best_score + self.reseed_margin / 2.0
                 self.worse_since[i] = None

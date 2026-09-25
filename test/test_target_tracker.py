@@ -300,3 +300,40 @@ def test_zero_jerk_is_constant_velocity():
     state, _ = ekf.predicted(0.5)
     assert np.allclose(state[POS], ekf.state[POS]) and np.allclose(state[VEL], ekf.state[VEL])
     assert not ekf.P[ACC, ACC].any()
+
+
+def _parked_then(motion, seed=0):
+    """Park a non-spinning target 3 s, then start motion(t) -> (centre, yaw); return lead log."""
+    rng = np.random.default_rng(seed)
+    tracker, log = None, []
+    for i in range(int(4.0 / DT)):
+        t = i * DT
+        centre, yaw = motion(max(0.0, t - 3.0))
+        meas = _seen_panel(centre, yaw) + rng.normal(0.0, NOISE_M, 3)
+        if tracker is None:
+            tracker = ArmorTracker(meas, CAMERA, t, NOISE_M ** 2, 0.27, 2.0, 5.0, 0.02,
+                                   q_jerk=3.0, accel_tau_s=1.0)
+        else:
+            tracker.step(meas, CAMERA, t, NOISE_M ** 2, facing_std=0.3)
+        log.append((t, tracker.best.still, tracker.state.copy()))
+    return log
+
+
+def test_parked_target_is_led_by_the_still_hypothesis():
+    log = _parked_then(lambda t: (np.array([3.0, 0.0, 0.3]), math.pi))
+    parked = [(still, s) for t, still, s in log if 1.0 < t < 3.0]
+    assert all(still for still, _ in parked)
+    assert all(np.all(s[VEL] == 0.0) and np.all(s[ACC] == 0.0) and s[W] == 0.0
+               for _, s in parked)
+
+
+def test_parked_target_that_drives_off_leaves_the_still_hypothesis_fast():
+    # 6 m/s^2 across the view, the braking figure target_driver uses.
+    log = _parked_then(lambda t: (np.array([3.0, 3.0 * t * t, 0.3]), math.pi))
+    left = next(t for t, still, _ in log if t >= 3.0 and not still)
+    assert left - 3.0 < 0.3
+
+
+def test_spinning_in_place_is_never_led_by_the_still_hypothesis():
+    tracker, _, _ = _run((0.0, 0.0, 0.0), 2.0 * math.pi * 1.5, 4.0, cls=ArmorTracker)
+    assert not tracker.best.still
