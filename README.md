@@ -269,8 +269,8 @@ It publishes on every `/cv/robot_panels` message it can place in odom, from
 the first. `valid` goes true after 2 updates, because an engagement can be
 shorter than one spin period; consumers should weigh `variance` and
 `yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
-position, `radius` both pairs' radii, and `z_offset` stays `[0, 0]` (one
-height). Published state is `ArmorTracker.predicted(t_sec)` at the detection
+position, `radius` both pairs' radii; `z_offset` stays `[0, 0]` (one height)
+and `acceleration` 0 (constant-velocity model), both Phase 2. Published state is `ArmorTracker.predicted(t_sec)` at the detection
 stamp. `TargetState.msg` asks for the publish time, with the state predicted
 forward to it; that is `../CV_SPLIT_PLAN.md` Phase 2.
 
@@ -341,17 +341,35 @@ tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
 mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
+Every mode extrapolates the center with `TargetState.acceleration` and solves
+the intercept on the target's true path (curved by acceleration and spin),
+not a straight line.
 
-- Panel mode leads the tracked panel (center velocity plus its tangential
-  `r*w`) with `solve_intercept()` and fires now. A slow target's yaw and radius
-  drift, so the seen panel beats the best-facing predicted one.
-- Spin mode leads a point on the center-to-shooter line, radius the mean of
-  both pairs, half a tick ahead. That line is steady, so the gimbal can hold it
-  while panels sweep past. It fires with the aim point's `delay_ms` set so a
-  panel normal points along that line at impact, if that alignment falls
-  within one publish tick (33ms); otherwise it waits for a later tick. Standard
-  "center aim plus timed fire"; a gimbal chasing each panel at 1-2Hz spin
-  would lag it.
+- Panel mode leads the panel facing the shooter at impact, with that pair's
+  radius and `z_offset`, and fires now.
+- Spin mode, center aim (`chase_settle_s < 0`, the default): leads a point on
+  the center-to-shooter line, at the radius and height of the pair arriving
+  next. The line is steady, so the gimbal can hold it while panels sweep
+  past. It fires with `delay_ms` set so a panel normal points along the line
+  at impact, if that alignment falls within one publish tick; about one tick
+  in five at 2 Hz spin. The pair switches only once the last shot at the
+  current one has left the muzzle: its height is a step, and a switch any
+  earlier moved the gun under that shot (staggered 0.5 m/s: 58% to 97%).
+- Spin mode, chase (`chase_settle_s >= 0`): leads the facing panel itself and
+  fires on any tick whose panel will have faced the shooter for
+  `chase_settle_s` at impact, with `chase_margin_s` still to go. Both cover
+  the gimbal's jump between panels; 0 and 0 fire every tick. The fire is
+  delayed to leave mid-hold of whichever aim is current then, where that aim
+  is exact. On the point bench's perfect gimbal it hits 94-98% of shots at
+  every tick, against center aim's one tick in five. A real gimbal has to
+  make a ~7 deg jump every quarter turn; measure it before turning this on.
+
+Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
+the aim point, past the half tick each aim is held: the aim leads by
+`gimbal_lag_s` plus half a tick. `firmware_latency_s` (0.05) is fire decision
+to muzzle exit, and times the fire against the spin. Aiming both from the
+firmware latency overshot moving targets in sim by ~27 ms of their motion,
+since the sim gimbal reaches a moving setpoint in 35 ms.
 
 `solve_intercept()` is the time-of-flight fixed point, 2-3 iterations, with no
 gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
@@ -362,12 +380,10 @@ MCB in the same frame as the aim it was solved for, measured from that
 frame's `header.stamp` (see `ros2_dji_serial_bridge/UART_PROTOCOL.md`). The
 firmware struct still has to grow to match before hardware timing works.
 
-The solve's tau is this tick's `now - state.header.stamp` plus
-`firmware_latency_s` (0.05, the static fire-to-exit delay the shot-hit bench
-models; unmeasured on hardware). It skips `LatencyStat.mean` because
-cached state ages between arrival and tick, by up to a tracker period plus
-tick phase (measured: 20ms mean at arrival, 50ms at tick), and the offset
-jitters. `LatencyStat` is logged as a diagnostic.
+Both horizons start from this tick's `now - state.header.stamp`, not
+`LatencyStat.mean`, because cached state ages between arrival and tick, by
+up to a tracker period plus tick phase (measured: 20ms mean at arrival, 50ms
+at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
 
 Frames convert by TF: `lookup_transform(root_frame, odom_frame, Time())`. For
 lead, the reverse lookup gives shooter position in odom, and

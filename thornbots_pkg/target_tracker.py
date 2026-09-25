@@ -217,6 +217,7 @@ class TargetTracker(Node):
         out.confidence = float(first.confidence)
         out.center.x, out.center.y, out.center.z = (float(v) for v in state[0:3])
         out.velocity.x, out.velocity.y, out.velocity.z = (float(v) for v in state[3:6])
+        # acceleration stays 0: the EKF is constant-velocity (Phase 2).
         out.variance = [float(P[i, i]) for i in range(6)]
         out.panel.x, out.panel.y, out.panel.z = (float(v) for v in panels_odom[0])
         out.yaw = float(state[6])
