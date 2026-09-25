@@ -230,11 +230,15 @@ can't come from handoffs; it has to come from geometry. The old `SpinDetector`
 counted `class_id` changes and only worked because the emulator faked them.
 
 `ArmorEKF` state is centre, centre velocity, the tracked panel's normal yaw,
-spin rate `w` and that panel's radius, with the other pair's radius kept
-aside. A panel measures `centre + r * (cos yaw, sin yaw, 0)`. Each detection
+spin rate `w`, that panel's radius and its pair's height `dz` above the
+centre, with the other pair's radius kept aside and its height at `-dz`. A
+panel measures `centre + r * (cos yaw, sin yaw, 0) + (0, 0, dz)`. Only the
+two pairs' difference is observable, so the centre is their mean height;
+`dz` starts at 0 (0.05 m std), drifts at `q_dz` (0.005 m/sqrt(s)) and clamps
+to +-0.15 m. Each detection
 first associates to the nearest of the four predicted panels, skipping those
 facing more than ~107 degrees from the camera; `k != 0` is a handoff, stepping
-yaw by quarter turns and swapping radii on odd `k`. A cut at exactly 90 degrees
+yaw by quarter turns and, on odd `k`, swapping radii and flipping `dz`. A cut at exactly 90 degrees
 mis-assigned edge-on panels whenever the camera moved 10cm and held a wrong
 spin for seconds. `PanelDetection.corners` stay unused:
 `roi_depth_node.cpp`'s `deprojectDetection()` puts all four at one
@@ -270,8 +274,8 @@ It publishes on every `/cv/robot_panels` message it can place in odom, from
 the first. `valid` goes true after 2 updates, because an engagement can be
 shorter than one spin period; consumers should weigh `variance` and
 `yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
-position, `radius` both pairs' radii; `z_offset` stays `[0, 0]` (one height)
-and `acceleration` 0 (constant-velocity model). Each state is
+position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
+`acceleration` 0 (constant-velocity model). Each state is
 `ArmorTracker.predicted()` at the publish time and stamped with it, as
 `TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
 Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).

@@ -36,17 +36,20 @@ NOISE_M = 0.03
 DT = 1.0 / 60.0
 
 
-def _true_panels(centre, yaw):
+def _true_panels(centre, yaw, stagger=0.0):
+    # Pair 0 (k = 0, 2) sits stagger/2 above the centre, pair 1 below, as in
+    # cv_target_emulator.
     return [(centre + (RX if k % 2 == 0 else RY)
              * np.array([math.cos(yaw + k * math.pi / 2.0),
-                         math.sin(yaw + k * math.pi / 2.0), 0.0]),
+                         math.sin(yaw + k * math.pi / 2.0), 0.0])
+             + np.array([0.0, 0.0, stagger / 2.0 if k % 2 == 0 else -stagger / 2.0]),
              yaw + k * math.pi / 2.0) for k in range(4)]
 
 
-def _seen_panel(centre, yaw):
+def _seen_panel(centre, yaw, stagger=0.0):
     """Most head-on panel within 75 degrees of the camera, like the emulator."""
     best = None
-    for pos, yaw_k in _true_panels(centre, yaw):
+    for pos, yaw_k in _true_panels(centre, yaw, stagger):
         to_cam = CAMERA - pos
         cos_view = (math.cos(yaw_k) * to_cam[0] + math.sin(yaw_k) * to_cam[1]) \
             / np.linalg.norm(to_cam[:2])
@@ -56,7 +59,7 @@ def _seen_panel(centre, yaw):
 
 
 def _run(velocity, spin_rad_s, seconds, seed=0, noise=NOISE_M, start=(3.0, 0.0, 0.3),
-         cls=ArmorEKF, bad_start_s=0.0, yaw0=0.3):
+         cls=ArmorEKF, bad_start_s=0.0, yaw0=0.3, stagger=0.0):
     """Feed a noisy constant-velocity spinning target; return (filter, truth centre, truth yaw)."""
     rng = np.random.default_rng(seed)
     ekf = None
@@ -65,7 +68,7 @@ def _run(velocity, spin_rad_s, seconds, seed=0, noise=NOISE_M, start=(3.0, 0.0, 
         t = i * DT
         centre = np.array(start) + np.array(velocity) * t
         yaw = yaw0 + spin_rad_s * t
-        seen = _seen_panel(centre, yaw)
+        seen = _seen_panel(centre, yaw, stagger)
         if seen is None:
             continue
         meas = seen + rng.normal(0.0, noise if t >= bad_start_s else 0.15, 3)
@@ -210,3 +213,41 @@ def test_tracker_bank_locks_spin_under_heavy_depth_noise_with_ray_covariance():
                 tracker.step(meas, CAMERA, t, cov)
         locked += abs(tracker.state[7] - w) < 0.1 * w
     assert locked >= 7
+
+
+STAGGER_M = 0.09  # sim's staggered layout: 90% of a 0.1 m panel
+
+
+def _panel_error(filt, centre, yaw, stagger):
+    # Worst distance from a true panel to the nearest panel the state implies.
+    implied = [pos for _, _, pos in panel_positions(filt.state, filt.other_r)]
+    return max(min(np.linalg.norm(pos - p) for p in implied)
+               for pos, _ in _true_panels(centre, yaw, stagger))
+
+
+def test_staggered_spin_recovers_both_pair_heights():
+    w = 2.0 * math.pi * 1.5
+    for cls in (ArmorEKF, ArmorTracker):
+        filt, centre, yaw = _run((0.0, 0.0, 0.0), w, 4.0, cls=cls, stagger=STAGGER_M)
+        assert abs(abs(filt.state[9]) - STAGGER_M / 2.0) < 0.015
+        assert abs(filt.state[2] - centre[2]) < 0.015
+        # The sign too: every implied panel sits on a true one, heights included.
+        assert _panel_error(filt, centre, yaw, STAGGER_M) < 0.05
+
+
+def test_flat_spin_keeps_dz_near_zero():
+    filt, _, _ = _run((0.0, 0.0, 0.0), 2.0 * math.pi * 1.5, 4.0, cls=ArmorTracker)
+    assert abs(filt.state[9]) < 0.01
+
+
+def test_odd_handoff_flips_dz_and_its_covariance():
+    ekf = ArmorEKF((2.7, 0.0, 0.3), CAMERA, 0.0, 1e-4, 0.30, 2.0, 5.0, 0.02)
+    ekf.state[9], ekf.P[2, 9] = 0.04, -1e-4
+    ekf.P[9, 2] = ekf.P[2, 9]
+    ekf.state[6] -= math.radians(50.0)
+    k1_pos = panel_positions(ekf.state, ekf.other_r)[1][2]
+    assert math.isclose(k1_pos[2], 0.3 - 0.04)
+    k, _ = ekf.associate(k1_pos, CAMERA)
+    assert k == 1
+    assert math.isclose(ekf.state[9], -0.04) and ekf.P[2, 9] == ekf.P[9, 2] == 1e-4
+    assert np.all(np.linalg.eigvalsh(ekf.P) >= -1e-12)

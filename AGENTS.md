@@ -75,9 +75,9 @@ front-run firing logic unless asked.
   - Part 1's, now fixed: aiming at panel 0 not the facing one, one height,
     no acceleration, and the lead taken from the firmware latency, not the
     gimbal's lag.
-  - Part 2's, still open: `ArmorEKF` has one height and no acceleration, and
-    the 2-4 cm sideways offset is gone on the perfect model, so it comes
-    from the tracker or gz geometry.
+  - Part 2's, still open: `ArmorEKF` has no acceleration (per-pair height
+    landed 2026-09-25, unit-tested only), and the 2-4 cm sideways offset is
+    gone on the perfect model, so it comes from the tracker or gz geometry.
   - gz's shots land 1.6 cm low on every case, likely the chassis sagging
     on its placeholder springs while TF keeps `root` at z = 0. Not traced.
 - **Part 1 now aims for our own motion** (2026-09-25): the shot leaves
