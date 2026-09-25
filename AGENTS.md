@@ -90,6 +90,8 @@ front-run firing logic unless asked.
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
+- **Jazzy: drop `setup.py`'s `tests_require`.** The CV tests are part of
+  the Jazzy move's done-when bar. `../JAZZY_PLAN.md`.
 
 ## Committing
 
