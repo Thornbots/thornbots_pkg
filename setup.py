@@ -35,9 +35,9 @@ setup(
     ],
     install_requires=['setuptools'],
     # colcon only runs its pytest step when the package declares pytest
-    # here; without it `colcon test` silently reports 0 tests and test/
-    # never runs.
-    tests_require=['pytest'],
+    # as a test extra; without it `colcon test` silently reports 0 tests.
+    # (Not tests_require: setuptools deprecated it.)
+    extras_require={'test': ['pytest']},
     zip_safe=True,
     maintainer='ubuntu',
     maintainer_email='baptisbc@RHIT.edu',
