@@ -215,15 +215,11 @@ def generate_launch_description():
         description='TargetState topic published by target_tracker, '
         "consumed by point_to_cv_target's intercept solver."
     )
-    tf_future_tolerance_s_arg = DeclareLaunchArgument(
-        'tf_future_tolerance_s', default_value='0.25',
-        description='target_tracker: how far the TF chain may lag a '
-        'detection stamp before the detection is dropped instead '
-        'of matched to the newest camera pose. Nonzero because '
-        'relaunching this file against an already-running sim '
-        'cold-starts its nodes into a live topic stream they '
-        'never catch up with, leaving TF ~0.6s behind and every '
-        'lookup asking for the future. See README.md.'
+    tf_max_wait_s_arg = DeclareLaunchArgument(
+        'tf_max_wait_s', default_value='0.25',
+        description='target_tracker: how long a detection waits for the '
+        "camera's TF at its capture time before it is dropped. It is "
+        'never matched to a newer camera pose. See README.md.'
     )
 
     # Transport per node. udp_env pins a node to UDP; shm_env leaves it on the
@@ -354,8 +350,8 @@ def generate_launch_description():
             'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
             'odom_frame': LaunchConfiguration('odom_frame'),
-            'tf_future_tolerance_s': ParameterValue(
-                LaunchConfiguration('tf_future_tolerance_s'), value_type=float
+            'tf_max_wait_s': ParameterValue(
+                LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
         }],
         additional_env=udp_env,
@@ -455,7 +451,7 @@ def generate_launch_description():
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_future_tolerance_s_arg,
+        tf_max_wait_s_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,

@@ -19,13 +19,18 @@ Track the selected robot as a spinning 4-panel armor model.
 (TargetState, odom): chassis center, velocity, acceleration, panel yaw, spin
 rate, both pairs' radii and heights, from target_tracker_core.ArmorTracker.
 A panel seen alone also measures yaw (it faces us). Capture time
-is the detection stamp less camera_latency_s; the state is predicted to its
-publish time and stamped with it. See README.md's ### target_tracker.py Notes.
+is the detection stamp less camera_latency_s; each detection waits (up to
+tf_max_wait_s) for the camera's TF at that time, and the state is predicted to
+its publish time and stamped with it. See README.md's ### target_tracker.py.
 """
+from collections import deque
+import threading
+
 from dji_serial_bridge.msg import PanelDetectionArray, TargetState
 import numpy as np
 import rclpy
 from rclpy.duration import Duration
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.time import Time
 import tf2_ros
@@ -58,10 +63,10 @@ class TargetTracker(Node):
         # hardware (CV_SPLIT_PLAN.md, Estimation); match the emulator's in sim.
         self.declare_parameter('camera_latency_s', 0.0)
         self.declare_parameter('track_max_gap_s', 0.5)
-        # How far the TF chain may lag the detection stamp before a
-        # detection is dropped rather than matched to the newest camera
-        # pose. See README.md.
-        self.declare_parameter('tf_future_tolerance_s', 0.25)
+        # How long a detection waits for the camera's TF at its capture
+        # time before it is dropped. Never matched to a newer pose: the
+        # error would be the wait times the head's slew rate. See README.md.
+        self.declare_parameter('tf_max_wait_s', 0.25)
         self.declare_parameter('panel_radius_m', 0.27)  # initial radius, both panel pairs
         self.declare_parameter('meas_noise_base_m', 0.03)
         self.declare_parameter('meas_noise_range_coeff', 0.01)  # stddev += coeff * range_m^2
@@ -96,7 +101,7 @@ class TargetTracker(Node):
         self.pose_latency_s = float(gp('pose_latency_s').value)
         self.camera_latency_s = float(gp('camera_latency_s').value)
         self.track_max_gap_s = float(gp('track_max_gap_s').value)
-        self.tf_future_tolerance_s = float(gp('tf_future_tolerance_s').value)
+        self.tf_max_wait_s = float(gp('tf_max_wait_s').value)
         self.panel_radius_m = float(gp('panel_radius_m').value)
         self.meas_noise_base_m = float(gp('meas_noise_base_m').value)
         self.meas_noise_range_coeff = float(gp('meas_noise_range_coeff').value)
@@ -114,14 +119,26 @@ class TargetTracker(Node):
         self.gate_nis = float(gp('gate_nis').value)
         self.max_outliers = int(gp('max_outliers').value)
 
+        # /tf gets its own node and thread, so a slow tracker callback can't
+        # back it up; lookups here stay non-blocking. See README.md.
         self.tf_buffer = tf2_ros.Buffer()
-        # /tf shares this node's executor, so every lookup below is
-        # non-blocking: a timeout wait in a callback starves /tf. See README.md.
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self._tf_node = rclpy.create_node(
+            'target_tracker_tf', parameter_overrides=[
+                self.get_parameter('use_sim_time')])
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self._tf_node)
+        self._tf_executor = SingleThreadedExecutor()
+        self._tf_executor.add_node(self._tf_node)
+        threading.Thread(target=self._spin_tf, daemon=True).start()
+
+        self._waiting = deque()  # (PanelDetectionArray, arrival Time) awaiting TF
+        self._tf_waits = []  # seconds each processed detection waited for TF
+        self._tf_drops = 0
 
         self.pub = self.create_publisher(TargetState, self.output_topic, 10)
         self.sub = self.create_subscription(
             PanelDetectionArray, self.robot_panels_topic, self.on_robot_panels, 10)
+        self.create_timer(0.005, self._drain)
+        self.create_timer(5.0, self._log_tf_waits)
 
         self._track_id = None
         self._ekf = None
@@ -133,9 +150,16 @@ class TargetTracker(Node):
             f'  {self.robot_panels_topic} -> {self.output_topic} (frame={self.odom_frame})\n'
             f'  pose_latency_s={self.pose_latency_s:.3f} '
             f'camera_latency_s={self.camera_latency_s:.3f} '
-            f'track_max_gap_s={self.track_max_gap_s:.2f}\n'
+            f'track_max_gap_s={self.track_max_gap_s:.2f} '
+            f'tf_max_wait_s={self.tf_max_wait_s:.2f}\n'
             f'  panel_radius_m={self.panel_radius_m:.2f} (approximation, see README.md)'
         )
+
+    def _spin_tf(self):
+        try:
+            self._tf_executor.spin()
+        except (KeyboardInterrupt, ExternalShutdownException):
+            pass  # Ctrl-C reaches every wait set; main() reports the shutdown
 
     def _reset(self, track_id):
         self._track_id = track_id
@@ -143,57 +167,60 @@ class TargetTracker(Node):
         self._last_stamp = None
         self._n_updates = 0
 
-    def _lookup_camera_tf(self, camera_frame, query_time):
-        """
-        Look up odom<-camera at query_time, or the newest TF within tolerance.
-
-        Returns None (logged, never silent) if TF is missing outright or
-        lags further than tf_future_tolerance_s -- see README.md for why
-        the fallback exists.
-        """
-        try:
-            return self.tf_buffer.lookup_transform(
-                self.odom_frame, camera_frame, query_time)
-        except TransformException as ex:
-            first_ex = ex
-
-        # A detection stamp newer than the newest TF is normal when the TF
-        # chain runs behind (a cold-started node on a loaded box, or sim's
-        # high-rate /clock); the camera pose is then stale by that gap
-        # rather than wrong. Accept it up to tf_future_tolerance_s, which
-        # bounds the induced bearing error by gap x head slew rate, instead
-        # of dropping every detection and publishing nothing at all.
-        try:
-            tf = self.tf_buffer.lookup_transform(
-                self.odom_frame, camera_frame, Time())
-        except TransformException:
-            self.get_logger().error(
-                f'TF lookup {self.odom_frame}<-{camera_frame}@'
-                f'{query_time.nanoseconds} failed: {first_ex}',
-                throttle_duration_sec=1.0)
-            return None
-
-        gap_s = (query_time - Time.from_msg(tf.header.stamp)).nanoseconds / 1e9
-        if gap_s > self.tf_future_tolerance_s:
-            self.get_logger().error(
-                f'TF {self.odom_frame}<-{camera_frame} is {gap_s:.3f} s behind the '
-                f'detection stamp (> tf_future_tolerance_s='
-                f'{self.tf_future_tolerance_s:.2f}) -- dropping. The TF chain is '
-                f'not keeping up: {first_ex}',
-                throttle_duration_sec=1.0)
-            return None
-
-        self.get_logger().warn(
-            f'TF {self.odom_frame}<-{camera_frame} is {gap_s:.3f} s behind the '
-            f'detection stamp -- using the newest available camera pose.',
-            throttle_duration_sec=5.0)
-        return tf
+    def _capture_time(self, msg):
+        return Time.from_msg(msg.header.stamp) - Duration(seconds=self.camera_latency_s)
 
     def on_robot_panels(self, msg: PanelDetectionArray):
-        if not msg.detections:
+        if msg.detections:
+            self._waiting.append((msg, self.get_clock().now()))
+            self._drain()
+
+    def _drain(self):
+        """Process waiting detections, oldest first, once TF covers each capture time."""
+        while self._waiting:
+            msg, arrival = self._waiting[0]
+            waited_s = (self.get_clock().now() - arrival).nanoseconds / 1e9
+            camera_frame = msg.header.frame_id or 'camera'
+            query_time = self._capture_time(msg) + Duration(seconds=self.pose_latency_s)
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    self.odom_frame, camera_frame, query_time)
+            except TransformException as ex:
+                if waited_s <= self.tf_max_wait_s and self._tf_behind(camera_frame, query_time):
+                    return  # TF hasn't reached the capture time yet
+                self._waiting.popleft()
+                self._tf_drops += 1
+                self.get_logger().error(
+                    f'TF {self.odom_frame}<-{camera_frame} at capture '
+                    f'{query_time.nanoseconds / 1e9:.3f} unavailable after {waited_s:.3f} s '
+                    f'(tf_max_wait_s={self.tf_max_wait_s:.2f}) -- dropping: {ex}',
+                    throttle_duration_sec=1.0)
+                continue
+            self._waiting.popleft()
+            self._tf_waits.append(waited_s)
+            self._update(msg, tf)
+
+    def _tf_behind(self, camera_frame, query_time):
+        """Return True if the newest camera TF is older than query_time (worth waiting for)."""
+        try:
+            newest = self.tf_buffer.lookup_transform(self.odom_frame, camera_frame, Time())
+        except TransformException:
+            return True  # no TF yet at all: the tree may still be coming up
+        return Time.from_msg(newest.header.stamp) < query_time
+
+    def _log_tf_waits(self):
+        if not self._tf_waits and not self._tf_drops:
             return
+        waits = np.array(self._tf_waits) if self._tf_waits else np.zeros(1)
+        self.get_logger().info(
+            f'camera TF wait over {len(self._tf_waits)} detections: mean '
+            f'{waits.mean():.3f} s, max {waits.max():.3f} s; dropped {self._tf_drops}')
+        self._tf_waits = []
+        self._tf_drops = 0
+
+    def _update(self, msg, tf):
         first = msg.detections[0]
-        stamp = Time.from_msg(msg.header.stamp) - Duration(seconds=self.camera_latency_s)
+        stamp = self._capture_time(msg)
 
         max_gap_ns = int(self.track_max_gap_s * 1e9)
         if (self._track_id is None
@@ -203,12 +230,6 @@ class TargetTracker(Node):
             self._reset(first.robot_track_id)
 
         self._last_stamp = stamp
-
-        camera_frame = msg.header.frame_id or 'camera'
-        query_time = stamp + Duration(seconds=self.pose_latency_s)
-        tf = self._lookup_camera_tf(camera_frame, query_time)
-        if tf is None:
-            return
 
         t = tf.transform.translation
         q = tf.transform.rotation
@@ -273,6 +294,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = TargetTracker()
     rclpy.spin(node)
+    node._tf_executor.shutdown()
     node.destroy_node()
     rclpy.shutdown()
 
