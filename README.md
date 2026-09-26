@@ -208,11 +208,14 @@ A missing transform logs an error and drops the detection, with no stale or
 zero fallback. In sim `robot_state_publisher` is always up, so a silent
 fallback would hide a broken TF tree until competition.
 
-A transform that is only behind is recoverable. When the detection stamp is
-newer than the newest TF, `_lookup_camera_tf()` retries at `Time()` and
-accepts it within `tf_future_tolerance_s` (0.25), warning each time. Past that
-it drops the detection and logs the gap. Bearing error is gap times head slew
-rate, so a loose tolerance would trade no output for confident bad aim.
+A transform that is only behind is waited for. Each detection queues until
+TF covers its capture time, then updates the filter with the camera pose from
+that moment. After `tf_max_wait_s` (0.25) it is dropped and the gap logged.
+It is never matched to the newest camera pose instead: the bearing error
+would be the gap times the head's slew rate. That fallback was the rule
+until 2026-09-25, and gz C2 logs showed it using poses 0.12-0.25 s stale
+while the head tracked a moving target. Every 5 s the node logs how long
+detections waited and how many it dropped.
 
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection
@@ -222,6 +225,8 @@ loop, so a 50ms wait per ~60Hz detection starved `/tf`. The buffer then fell
 dropped nearly everything (2026-09-17, measured against a separate listener
 on the same run). Humble's `TransformListener(spin_thread=True)` doesn't help:
 it adds the whole node to a second executor rather than isolating `/tf`.
+So `target_tracker` gives its listener a node of its own
+(`target_tracker_tf`), spun on its own thread.
 
 The target is a 4-panel armor model, the standard RoboMaster anti-spin
 tracker (rm_auto_aim's) reduced to position-only detections. On hardware
