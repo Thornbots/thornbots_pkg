@@ -95,6 +95,11 @@ front-run firing logic unless asked.
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
+- **`target_tracker` is C2's speed ceiling** (2026-09-25): at ~8x on
+  `sim`'s `bench_world` it saturates a core, 46% of its main thread in
+  `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
+  thread. A C++ core would lift it and speed up the Jetson too; the
+  user's call, not started.
 - **Jazzy: drop `setup.py`'s `tests_require`.** The CV tests are part of
   the Jazzy move's done-when bar. `../JAZZY_PLAN.md`.
 
