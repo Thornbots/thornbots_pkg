@@ -100,8 +100,9 @@ front-run firing logic unless asked.
   `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
   thread. A C++ core would lift it and speed up the Jetson too; the
   user's call, not started.
-- **Jazzy: drop `setup.py`'s `tests_require`.** The CV tests are part of
-  the Jazzy move's done-when bar. `../JAZZY_PLAN.md`.
+- **Jazzy (this branch): ported.** The CV tests pass on stock
+  `osrf/ros:jazzy-desktop` (numpy 1.26, Python 3.12); nothing ran on
+  hardware or in sim yet. `../JAZZY_PLAN.md` steps 4 and 5.
 
 ## Committing
 
