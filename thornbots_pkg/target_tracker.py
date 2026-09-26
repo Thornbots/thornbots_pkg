@@ -29,6 +29,7 @@ import threading
 from dji_serial_bridge.msg import PanelDetectionArray, TargetState
 import numpy as np
 import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
@@ -137,7 +138,9 @@ class TargetTracker(Node):
         self.pub = self.create_publisher(TargetState, self.output_topic, 10)
         self.sub = self.create_subscription(
             PanelDetectionArray, self.robot_panels_topic, self.on_robot_panels, 10)
-        self.create_timer(0.005, self._drain)
+        # Retries on the wall clock: a bench that holds sim time until this
+        # node publishes would otherwise never let a sim-time retry fire.
+        self.create_timer(0.005, self._drain, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.create_timer(5.0, self._log_tf_waits)
 
         self._track_id = None

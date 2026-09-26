@@ -215,7 +215,9 @@ It is never matched to the newest camera pose instead: the bearing error
 would be the gap times the head's slew rate. That fallback was the rule
 until 2026-09-25, and gz C2 logs showed it using poses 0.12-0.25 s stale
 while the head tracked a moving target. Every 5 s the node logs how long
-detections waited and how many it dropped.
+detections waited and how many it dropped. Waiting detections are retried
+every 5 ms of wall time, not sim time: C2's `bench_world` holds sim time
+until this node publishes, so a sim-time retry would never fire.
 
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection
