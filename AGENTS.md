@@ -52,15 +52,13 @@ front-run firing logic unless asked.
   RPLIDAR's 0 deg points relative to the gun. Capture `/scan_raw` on the
   robot, find its 0 deg direction and the head's real shadow, and fix the
   `lidar` frame's yaw or the sector to match.
-- **`auto.launch.py` should bring up the CV stack too, and doesn't yet.**
-  Decided 2026-07-27: this package owns launching the whole stack, since it
-  already owns pose/TF ownership and the `real_hardware`/`localization_mode`
-  sim-vs-real toggle. It needs a new arg that starts either `sim`'s
-  `spawn_target`/`target_driver`/`cv_target_emulator` nodes (sim path) or the
-  `realsense-yolov8-nitros-bridge` chain (hardware path), mirroring how
-  `real_hardware` already switches `pose_emulator` against the real Type-C
-  driver. Until it lands, `sim.launch.py spawn_target:=true` plus a hand-run
-  `point_to_cv_target` works standalone.
+- **`auto.launch.py` starts `target_selector`, `target_tracker` and
+  `point_to_cv_target`, but not what feeds them.** Decided 2026-07-27: this
+  package owns launching the whole stack. It still needs an arg that starts
+  either `sim`'s `target_driver`/`cv_target_emulator` (sim path) or the
+  `realsense-yolov8-nitros-bridge` chain plus `roi_depth_node` (hardware
+  path), the way `real_hardware` switches `pose_emulator` against the real
+  Type-C driver.
 - **Firing logic is partial.** `point_to_cv_target` aims and fires per
   publish tick, at most `fire_rate_hz`, and times shots against a spinning
   target with `CVTarget.delay_ms`. No HP/heat/power gating, and the MCB
@@ -69,29 +67,16 @@ front-run firing logic unless asked.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
-- **Part 1 (`point_to_cv_target`) passes `sim`'s gz-free aim bench 10/10**
-  (2026-09-24, chase mode: 94-98% of shots hit at every tick, 99% stationary).
-  The old misses split between the halves:
-  - Part 1's, now fixed: aiming at panel 0 not the facing one, one height,
-    no acceleration, and the lead taken from the firmware latency, not the
-    gimbal's lag.
-  - Part 2's, still open: the 2-4 cm sideways offset is gone on the
-    perfect model, so it comes from the tracker or gz geometry.
-- **`ArmorEKF` gained acceleration and a single-panel yaw measurement**
-  (2026-09-25), state `[pos, vel, acc, yaw, w, r, dz]` by named slices.
-  Unit-tested; on gz C2, moving cells read 0.12-0.51 m facing p95 and
-  vary 2x between runs. Where it stopped and what's next: `../CV_SPLIT_PLAN.md` "Where
-  this stopped".
-  - A still hypothesis (2026-09-25) gives a parked, non-spinning target
-    exactly zero velocity and spin (gz C2: facing p95 1.3 cm flat, 2.8 cm
-    staggered). Drive-off costs ~0.23 s at up to 9 cm in a unit-test
-    probe; C2 has no drive-off cell yet.
-  - gz's shots land 1.6 cm low on every case, likely the chassis sagging
-    on its placeholder springs while TF keeps `root` at z = 0. Not traced.
-- **Part 1 now aims for our own motion** (2026-09-25): the shot leaves
-  where we are at the aim horizon and carries our velocity. On the aim
-  bench at `shooter_speed:=1.0`, 95-99%, at most 1.5 points under a still
-  shooter.
+- **Part 1 (`point_to_cv_target`) is done on `sim`'s aim bench (C1)**:
+  per-cell floors for still and moving shooters, 95-99% hit in chase mode.
+  It aims for our own motion. The 2-4 cm sideways offset seen with the
+  tracker in the loop is gone on the perfect model, so it is Part 2's.
+- **`ArmorEKF`** state is `[pos, vel, acc, yaw, w, r, dz]` by named slices,
+  with a single-panel yaw measurement and a still hypothesis for a parked,
+  non-spinning target. Unit-tested. On C2 moving cells still read
+  0.17-0.31 m facing p95 medians with one outlier past 0.7 m per run; what's
+  next is in `../CV_SPLIT_PLAN.md` "Where this stands". C2 has no drive-off
+  cell yet (a unit-test probe: ~0.23 s at up to 9 cm).
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
@@ -100,9 +85,9 @@ front-run firing logic unless asked.
   `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
   thread. A C++ core would lift it and speed up the Jetson too; the
   user's call, not started.
-- **Jazzy (this branch): ported.** The CV tests pass on stock
-  `osrf/ros:jazzy-desktop` (numpy 1.26, Python 3.12); nothing ran on
-  hardware or in sim yet. `../JAZZY_PLAN.md` steps 4 and 5.
+- **Jazzy (this branch):** the CV tests pass in the Isaac ROS 4.6
+  container, and C1 and C2 give Humble's results on the laptop. Nothing has
+  run on hardware yet (`../JAZZY_PLAN.md` step 5).
 
 ## Committing
 
