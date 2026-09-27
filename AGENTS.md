@@ -64,6 +64,10 @@ front-run firing logic unless asked.
   target with `CVTarget.delay_ms`. No HP/heat/power gating, and the MCB
   firmware's `CVData` struct hasn't grown the merged fire fields yet, so the
   timing only works in sim.
+- **`CVTarget` is documented as an `odom` point, and `point_to_cv_target`
+  still sends `root`** (2026-09-27). Publish `aim_odom` with `frame_id =
+  odom`, in step with `sim`'s readers; `../CV_SPLIT_PLAN.md` W.3's open
+  issues, including which `odom` the MCB can share.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
