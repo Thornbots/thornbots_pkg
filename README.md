@@ -18,7 +18,7 @@ root-frame `CVTarget`. Localization backends are in
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
-| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model) |
+| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in) |
 | `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, root frame, aim + fire decision) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
@@ -215,9 +215,16 @@ It is never matched to the newest camera pose instead: the bearing error
 would be the gap times the head's slew rate. That fallback was the rule
 until 2026-09-25, and gz C2 logs showed it using poses 0.12-0.25 s stale
 while the head tracked a moving target. Every 5 s the node logs how long
-detections waited and how many it dropped. Waiting detections are retried
-every 5 ms of wall time, not sim time: C2's `bench_world` holds sim time
-until this node publishes, so a sim-time retry would never fire.
+detections waited, how many it dropped, and the sim time from capture to
+the filter update. Waiting detections are retried every 5 ms of wall time,
+not sim time: C2's `bench_world` holds sim time until this node has folded
+in each frame's detection, so a sim-time retry would never fire.
+
+`TargetState` is stamped at publish time, so it can't show a backlog: a
+tracker ten frames behind still publishes "now". `/cv/tracker/measurement`
+echoes each folded-in detection's header, and `bench_world` paces on that.
+Pacing on `/cv/target_state` let the tracker sit 0.12-0.21 s behind at
+`real_time_factor:=0` (2026-09-26), its KeepLast(10) queue full.
 
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection
