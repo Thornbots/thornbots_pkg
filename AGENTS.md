@@ -73,14 +73,14 @@ front-run firing logic unless asked.
   tracker in the loop is gone on the perfect model, so it is Part 2's.
 - **`ArmorEKF`** state is `[pos, vel, acc, yaw, w, r, dz]` by named slices,
   with a single-panel yaw measurement and a still hypothesis for a parked,
-  non-spinning target. Unit-tested. On C2 moving cells still read
-  0.17-0.31 m facing p95 medians with one outlier past 0.7 m per run; what's
-  next is in `../CV_SPLIT_PLAN.md` "Where this stands". C2 has no drive-off
-  cell yet (a unit-test probe: ~0.23 s at up to 9 cm).
+  non-spinning target. Unit-tested. On C2 moving cells read 0.08-0.17 m
+  facing p95 medians (2026-09-26); what's next is in `../CV_SPLIT_PLAN.md`
+  "Where this stands". C2 has no drive-off cell yet (a unit-test probe:
+  ~0.23 s at up to 9 cm).
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
-- **`target_tracker` is C2's speed ceiling** (2026-09-25): at ~8x on
+- **`target_tracker` is C2's slowest node** (2026-09-25): at ~8x on
   `sim`'s `bench_world` it saturates a core, 46% of its main thread in
   `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
   thread. A C++ core would lift it and speed up the Jetson too; the
