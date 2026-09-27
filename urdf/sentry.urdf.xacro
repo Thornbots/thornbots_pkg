@@ -151,6 +151,54 @@
     <child link="wheel_3"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
+  <!-- Armor faces from the CAD, as sim/urdf/sentry_v2/sentry_v2.urdf generates them:
+       origin at the face centre, +x the outward normal (canted 15 deg up), +y
+       horizontal. The face is 0.135 (y) by 0.125 (z) m: the Small Armor
+       Module, the only size in ARCC 2026. -->
+  <link name="armor_0">
+    <visual>
+      <geometry><box size="0.003 0.135 0.125"/></geometry>
+      <material name="armor"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
+  </link>
+  <joint name="armor_0link" type="fixed">
+    <parent link="root"/>
+    <child link="armor_0"/>
+    <origin xyz="0.178162 0.178426 0.230361" rpy="0 -0.261856 0.785329"/>
+  </joint>
+  <link name="armor_1">
+    <visual>
+      <geometry><box size="0.003 0.135 0.125"/></geometry>
+      <material name="armor"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
+  </link>
+  <joint name="armor_1link" type="fixed">
+    <parent link="root"/>
+    <child link="armor_1"/>
+    <origin xyz="-0.177935 0.177863 0.135661" rpy="0 -0.261856 2.35613"/>
+  </joint>
+  <link name="armor_2">
+    <visual>
+      <geometry><box size="0.003 0.135 0.125"/></geometry>
+      <material name="armor"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
+  </link>
+  <joint name="armor_2link" type="fixed">
+    <parent link="root"/>
+    <child link="armor_2"/>
+    <origin xyz="-0.178505 -0.178235 0.230361" rpy="0 -0.261856 -2.35627"/>
+  </joint>
+  <link name="armor_3">
+    <visual>
+      <geometry><box size="0.003 0.135 0.125"/></geometry>
+      <material name="armor"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
+  </link>
+  <joint name="armor_3link" type="fixed">
+    <parent link="root"/>
+    <child link="armor_3"/>
+    <origin xyz="0.177593 -0.177673 0.135661" rpy="0 -0.261856 -0.785464"/>
+  </joint>
   <link name="lidar"/>
   <joint name="lidarlink" type="fixed">
     <parent link="head"/>
