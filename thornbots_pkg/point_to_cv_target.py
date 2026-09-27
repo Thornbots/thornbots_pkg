@@ -31,13 +31,6 @@ def _quat_to_rot(x, y, z, w):
     ]
 
 
-def _apply(R, T, p):
-    x, y, z = p
-    return (R[0][0] * x + R[0][1] * y + R[0][2] * z + T[0],
-            R[1][0] * x + R[1][1] * y + R[1][2] * z + T[1],
-            R[2][0] * x + R[2][1] * y + R[2][2] * z + T[2])
-
-
 def _rotate(R, v):
     x, y, z = v
     return (R[0][0] * x + R[0][1] * y + R[0][2] * z,
@@ -47,10 +40,10 @@ def _rotate(R, v):
 
 class PointToCvTarget(Node):
     """
-    Turn target_tracker's target state into a root-frame aim point.
+    Turn target_tracker's target state into a world-frame aim point.
 
-    /cv/target_state (armor model, odom) -> /cv/target (root-frame aim
-    point carrying its own fire decision), via
+    /cv/target_state (armor model, odom) -> /cv/target (odom aim point,
+    held by the MCB as we move, carrying its own fire decision), via
     point_to_cv_target_core.plan_shot. Each cv_target_publish_rate_hz tick
     aims, and sets fire/delay_ms (at most fire_rate_hz) with the delay that
     times a spinning target's panel to the shot. Liveness, confidence and
@@ -135,13 +128,13 @@ class PointToCvTarget(Node):
         self.target_active = False
 
         self.latest_state = None  # last TargetState received
-        self.chassis_vel_root = (0.0, 0.0, 0.0)  # from RobotPose, root-frame
+        self.chassis_vel_root = (0.0, 0.0, 0.0)  # from RobotPose, root frame
         self.latency_stat = LatencyStat()
 
         self.get_logger().info(
             f'point_to_cv_target ready\n'
             f'  {self.target_state_topic} + {self.robot_pose_topic}\n'
-            f'  -> {self.output_topic} (CVTarget, ROOT frame, aim + fire, '
+            f'  -> {self.output_topic} (CVTarget, {self.odom_frame} frame, aim + fire, '
             f'@ {publish_rate_hz:.1f}Hz)\n'
             f'  lead_enabled={self.lead_enabled} v_muzzle={self.v_muzzle} '
             f'firmware_latency_s={self.firmware_latency_s} gimbal_lag_s={self.gimbal_lag_s}\n'
@@ -206,16 +199,17 @@ class PointToCvTarget(Node):
         now = self.get_clock().now()
         out = CVTarget()
         out.header.stamp = now.to_msg()
+        out.header.frame_id = self.odom_frame
 
         if not self.target_active:
             self.pub.publish(out)  # all-zero: confidence=0, no fire
             return
 
-        aim_root = self._compute_aim_point()
-        if aim_root is None:
+        aim = self._compute_aim_point()
+        if aim is None:
             self.pub.publish(out)  # still all-zero
             return
-        aim_pos, lead_applied, track_valid, fire_delay_s = aim_root
+        aim_pos, lead_applied, track_valid, fire_delay_s = aim
 
         out.x, out.y, out.z = (float(v) for v in aim_pos)
         out.confidence = float(self.latest_state.confidence)
@@ -226,9 +220,9 @@ class PointToCvTarget(Node):
 
     def _compute_aim_point(self):
         """
-        Return the root-frame aim point, or None if none is available yet.
+        Return the odom aim point, or None if none is available yet.
 
-        Returns (aim_pos_root, lead_applied, track_valid, fire_delay_s or
+        Returns (aim_pos_odom, lead_applied, track_valid, fire_delay_s or
         None), or None if the newest target_state is stale or TF fails
         (logged loudly, never silently) -- caller emits zero-confidence.
         """
@@ -243,25 +237,10 @@ class PointToCvTarget(Node):
                 throttle_duration_sec=1.0)
             return None
 
-        try:
-            tf = self.tf_buffer.lookup_transform(
-                self.root_frame, self.odom_frame, Time())
-        except TransformException as ex:
-            self.get_logger().error(
-                f'TF lookup {self.root_frame}<-{self.odom_frame} failed: {ex}',
-                throttle_duration_sec=1.0)
-            return None
-
-        t = tf.transform.translation
-        q = tf.transform.rotation
-        R = _quat_to_rot(q.x, q.y, q.z, q.w)
-        T = (t.x, t.y, t.z)
-
         if not state.valid:
             # Unconverged: aim at the measured panel, no lead, no fire.
             self.spinning = False
-            panel_odom = (state.panel.x, state.panel.y, state.panel.z)
-            return _apply(R, T, panel_odom), False, False, None
+            return (state.panel.x, state.panel.y, state.panel.z), False, False, None
 
         try:
             tf_shooter = self.tf_buffer.lookup_transform(
@@ -298,10 +277,7 @@ class PointToCvTarget(Node):
             shooter_vel=shooter_vel_odom, chase_settle_s=self.chase_settle_s,
             chase_margin_s=self.chase_margin_s,
             accel=(state.acceleration.x, state.acceleration.y, state.acceleration.z))
-
-        # The gun vector, not the point: we move between now and the shot.
-        gun_odom = tuple(aim_odom[i] - shooter_pos_odom[i] for i in range(3))
-        return _rotate(R, gun_odom), self.lead_enabled, True, fire_delay_s
+        return aim_odom, self.lead_enabled, True, fire_delay_s
 
 
 def main(args=None):

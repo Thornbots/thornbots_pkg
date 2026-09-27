@@ -438,13 +438,18 @@ def test_node_subscribes_to_target_state_and_robot_pose_only():
     assert sorted(subscribed) == ['RobotPose', 'TargetState']
 
 
+def _exit(horizon, shooter_vel):
+    return tuple(SHOOTER[i] + shooter_vel[i] * horizon for i in range(3))
+
+
 def _fly(gun, horizon, shooter_vel, t):
-    # A shot leaving shooter(horizon) toward gun - SHOOTER at V_MUZZLE, carrying
-    # our velocity, t seconds later: what the aiming bench's harness flies.
-    d = [gun[i] - SHOOTER[i] for i in range(3)]
+    # A shot leaving shooter(horizon) toward the odom point gun at V_MUZZLE,
+    # carrying our velocity, t seconds later: what the aiming bench's harness
+    # flies.
+    start = _exit(horizon, shooter_vel)
+    d = [gun[i] - start[i] for i in range(3)]
     n = math.hypot(*d)
-    return tuple(SHOOTER[i] + shooter_vel[i] * (horizon + t)
-                 + V_MUZZLE * d[i] / n * t for i in range(3))
+    return tuple(start[i] + (shooter_vel[i] + V_MUZZLE * d[i] / n) * t for i in range(3))
 
 
 @pytest.mark.parametrize('shooter_vel', [(0.0, 1.0, 0.0), (0.0, -2.0, 0.0),
@@ -457,11 +462,11 @@ def test_plan_moving_shooter_lands_on_the_panel(shooter_vel, target_vel):
     state = _armor(vel=target_vel)
     gun, _ = _plan(state, horizon, False, iterations=50, shooter_vel=shooter_vel)
     still, _ = _plan(state, horizon, False, iterations=50)
-    t = math.dist(gun, SHOOTER) / V_MUZZLE
+    t = math.dist(gun, _exit(horizon, shooter_vel)) / V_MUZZLE
     panel = (2.7 + target_vel[0] * (horizon + t), target_vel[1] * (horizon + t), 0.3)
     assert math.dist(_fly(gun, horizon, shooter_vel, t), panel) < 1e-6
     # Aiming as if still misses by our motion to impact: many panel widths.
-    t_still = math.dist(still, SHOOTER) / V_MUZZLE
+    t_still = math.dist(still, _exit(horizon, shooter_vel)) / V_MUZZLE
     assert math.dist(_fly(still, horizon, shooter_vel, t_still), panel) > 0.1
 
 
@@ -472,7 +477,7 @@ def test_plan_moving_shooter_chase_lands_on_a_facing_panel():
                            gimbal_lag_s=0.02 - TICK_S / 2.0, firmware_latency_s=0.05,
                            iterations=50, shooter_vel=sv, chase_settle_s=0.0)
     assert delay is not None
-    t = math.dist(gun, SHOOTER) / V_MUZZLE
+    t = math.dist(gun, _exit(0.02, sv)) / V_MUZZLE
     t_impact = 0.02 + t
     center = (3.0, t_impact, 0.3)
     shot = _fly(gun, 0.02, sv, t)
