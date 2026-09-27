@@ -67,26 +67,26 @@ front-run firing logic unless asked.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
-- **Part 1 (`point_to_cv_target`) is done on `sim`'s aim bench (C1)**:
+- **Part 1 (`point_to_cv_target`) is done on `sim`'s aiming bench**:
   per-cell floors for still and moving shooters, 95-99% hit in chase mode.
   It aims for our own motion. The 2-4 cm sideways offset seen with the
   tracker in the loop is gone on the perfect model, so it is Part 2's.
 - **`ArmorEKF`** state is `[pos, vel, acc, yaw, w, r, dz]` by named slices,
   with a single-panel yaw measurement and a still hypothesis for a parked,
-  non-spinning target. Unit-tested. On C2 moving cells read 0.08-0.17 m
+  non-spinning target. Unit-tested. On the estimation bench moving cells read 0.08-0.17 m
   facing p95 medians (2026-09-26); what's next is in `../CV_SPLIT_PLAN.md`
-  "Where this stands". C2 has no drive-off cell yet (a unit-test probe:
+  "Where this stands". The estimation bench has no drive-off cell yet (a unit-test probe:
   ~0.23 s at up to 9 cm).
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
-- **`target_tracker` is C2's slowest node** (2026-09-25): at ~8x on
+- **`target_tracker` is the estimation bench's slowest node** (2026-09-25): at ~8x on
   `sim`'s `bench_world` it saturates a core, 46% of its main thread in
   `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
   thread. A C++ core would lift it and speed up the Jetson too; the
   user's call, not started.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
-  container, and C1 and C2 give Humble's results on the laptop. Nothing has
+  container, and the aiming and estimation benches give Humble's results on the laptop. Nothing has
   run on hardware yet (`../JAZZY_PLAN.md` step 5).
 
 ## Committing

@@ -440,7 +440,7 @@ def test_node_subscribes_to_target_state_and_robot_pose_only():
 
 def _fly(gun, horizon, shooter_vel, t):
     # A shot leaving shooter(horizon) toward gun - SHOOTER at V_MUZZLE, carrying
-    # our velocity, t seconds later: what the aim bench's harness flies.
+    # our velocity, t seconds later: what the aiming bench's harness flies.
     d = [gun[i] - SHOOTER[i] for i in range(3)]
     n = math.hypot(*d)
     return tuple(SHOOTER[i] + shooter_vel[i] * (horizon + t)
