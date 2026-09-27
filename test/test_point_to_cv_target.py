@@ -429,7 +429,7 @@ NODE_SRC = os.path.join(os.path.dirname(__file__), '..', 'thornbots_pkg',
 
 
 def test_node_subscribes_to_target_state_and_robot_pose_only():
-    # The CV split's seam (CV_SPLIT_PLAN.md 1.0): Part 1 aims from
+    # The CV split's seam (CV_SPLIT_PLAN.md): Part 1 aims from
     # TargetState alone, so a truth publisher can replace the whole of Part 2.
     tree = ast.parse(open(NODE_SRC).read())
     subscribed = [call.args[0].id for call in ast.walk(tree)
