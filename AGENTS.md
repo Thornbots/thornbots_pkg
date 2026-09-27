@@ -85,7 +85,7 @@ front-run firing logic unless asked.
   `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
   thread. A C++ core would lift it and speed up the Jetson too; the
   user's call, not started.
-- **Jazzy (this branch):** the CV tests pass in the Isaac ROS 4.6
+- **Jazzy:** the CV tests pass in the Isaac ROS 4.6
   container, and C1 and C2 give Humble's results on the laptop. Nothing has
   run on hardware yet (`../JAZZY_PLAN.md` step 5).
 
