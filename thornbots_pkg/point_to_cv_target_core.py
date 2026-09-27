@@ -36,7 +36,7 @@ def solve_intercept(target_pos, target_vel, shooter_pos, tau, v_muzzle,
     in). shooter_vel is the sentry's own chassis velocity (RobotPose
     vel_x/vel_y rotated into odom, z=0) -- a small second-order correction
     since the sentry itself keeps moving during the flight; defaults to
-    stationary. Filter in odom, emit in root.
+    stationary. Filter and emit in odom.
     tau: total pipeline+firmware latency already elapsed/expected (s).
     v_muzzle: projectile speed (m/s).
     iterations: fixed-point iteration count (2-3 converges in practice for
@@ -84,9 +84,10 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
     the facing panel, fire mid-hold if the panel a shot meets has faced us
     chase_settle_s and will for chase_margin_s more.
     lead=False: aim at the current estimate, fire now. Returns (aim_pos,
-    delay_s or None): the gun points from shooter_pos toward aim_pos, the
-    intercept less our motion from the stamp to impact, since the shot
-    carries our velocity. A still shooter aims at the intercept itself.
+    delay_s or None): aim_pos is the odom point a gun leaving from
+    shooter(aim horizon) points through, the intercept less our motion over
+    the flight, since the shot carries our velocity. A still shooter aims
+    at the intercept itself.
     """
     xc, yc, zc, vx, vy, vz, yaw, w = (float(v) for v in state)
     ax, ay, az = (float(v) for v in accel)
@@ -121,13 +122,13 @@ def plan_shot(state, radius, z_offset, age_s, shooter_pos, v_muzzle, spinning, t
         # Fixed point on the target's true path (curved by acceleration and
         # spin), not a straight-line extrapolation: t <- |path(h + t) -
         # shooter(h + t)| / v_muzzle, the muzzle leaving at h and the shot
-        # moving with it. Returns the gun point for that shot, and t.
+        # moving with it. Returns the gun's world point for that shot, and t.
         t = 0.0
         for _ in range(max(1, iterations)):
             t = math.dist(path(aim_horizon_s + t),
                           shooter(aim_horizon_s + t)) / v_muzzle if v_muzzle > 0.0 else 0.0
-        hit, s = path(aim_horizon_s + t), shooter(aim_horizon_s + t)
-        return tuple(hit[i] - s[i] + shooter_pos[i] for i in range(3)), t
+        hit = path(aim_horizon_s + t)
+        return tuple(hit[i] - shooter_vel[i] * t for i in range(3)), t
 
     def facing_panel(t):
         return panel(facing(t), t)

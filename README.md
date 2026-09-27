@@ -5,7 +5,7 @@ ARC 2026 Sentry. It puts `/pose` (hardware or `sim`) and `/scan` on the graph,
 runs `robot_state_publisher` off `urdf/sentry.urdf.xacro` (the `sentry_v2`
 CAD's frames, with its meshes in `meshes/sentry_v2/`), republishes the
 `odom->root` pose from `sentry_localization`, and turns detections into a
-root-frame `CVTarget`. Localization backends are in
+world-frame (`odom`) `CVTarget`. Localization backends are in
 `sentry_localization/README.md`; game rules are in
 `../ARCC_2026_SENTRY_CONTEXT.md`.
 
@@ -19,7 +19,7 @@ root-frame `CVTarget`. Localization backends are in
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in) |
-| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, root frame, aim + fire decision) |
+| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -35,7 +35,7 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
-/cv/target_state (armor model, confidence, track id) --[point_to_cv_target]--> /cv/target (root frame)
+/cv/target_state (armor model, confidence, track id) --[point_to_cv_target]--> /cv/target (odom frame)
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
            \-[sim's cv_head_aim]--> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
@@ -372,9 +372,10 @@ trusting it.
 
 ### point_to_cv_target.py
 
-`/cv/target` `x/y/z` is a root-frame point Type-C aims at, where it used to be
-a camera-relative vector. See `CVTarget.msg` and
-`ros2_dji_serial_bridge/README.md`'s wire-format history.
+`/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
+and aims at from wherever the chassis is, since 2026-09-27. It was a
+root-frame point before that and a camera-relative vector before that. See
+`CVTarget.msg` and `ros2_dji_serial_bridge/README.md`'s wire-format history.
 
 The node reads `/cv/target_state` and `/pose` and nothing else, so anything
 that publishes a `TargetState` can drive it: `target_tracker` on hardware,
@@ -390,7 +391,7 @@ tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
   TF failure. Usable means present and younger than `target_timeout_s`.
 - `valid == False`: raw `panel` position, `lead_applied=False`,
   `track_valid=False`, no fire. No extrapolation off an unconverged track.
-- `valid == True`: `plan_shot()`'s aim point in root. See below.
+- `valid == True`: `plan_shot()`'s aim point in odom. See below.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
 mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
@@ -439,17 +440,17 @@ Both horizons start from this tick's `now - state.header.stamp`, not
 up to a tracker period plus tick phase (measured: 20ms mean at arrival, 50ms
 at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
 
-Frames convert by TF: `lookup_transform(root_frame, odom_frame, Time())`. For
-lead, the reverse lookup gives shooter position in odom, and
-`RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
+The output needs no transform. For lead,
+`lookup_transform(odom_frame, root_frame, Time())` gives shooter position in
+odom, and `RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
 latest transform, and the position is carried at that velocity to the state's
 stamp, which is `plan_shot()`'s time zero.
 
 Our own motion: the shot leaves where we are at the aim horizon and carries
-our velocity, so `plan_shot()` returns a gun point, the intercept less our
-motion from the stamp to impact, and the node sends `gun - shooter` rotated
-into root rather than the intercept transformed. At 1 m/s and 3 m the
-difference is ~0.15 m, three panel half-widths. A still shooter gets the intercept itself.
+our velocity, so `plan_shot()` returns the intercept less our motion over
+the flight: the odom point a gun at our exit position points through. At
+1 m/s and 3 m the difference is ~0.15 m, three panel half-widths. A still
+shooter gets the intercept itself.
 `solve_intercept()` is no longer on the node's path; only its tests use it.
 
 Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and

@@ -134,7 +134,7 @@ def generate_launch_description():
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         'enable_cv_target_bridge', default_value='true',
         description="Launch point_to_cv_target to turn target_tracker's "
-        '/cv/target_state into the root-frame /cv/target aim '
+        '/cv/target_state into the odom-frame /cv/target aim '
         'point. '
         'Independent of real_hardware -- consumed by mcb_relay '
         "when real_hardware:=true, and by sim's cv_head_aim "
@@ -276,7 +276,7 @@ def generate_launch_description():
         additional_env=shm_env,
     )
 
-    # Turns target_tracker's /cv/target_state into the root-frame CVTarget
+    # Turns target_tracker's /cv/target_state into the odom-frame CVTarget
     # published on /cv/target -- consumed by mcb_relay (real_hardware:=true)
     # and/or sim's cv_head_aim node (real_hardware:=false), so this runs in
     # both modes; enable_cv_target_bridge lets you disable it if you intend
