@@ -21,7 +21,9 @@ rate, both pairs' radii and heights, from target_tracker_core.ArmorTracker.
 A panel seen alone also measures yaw (it faces us). Capture time
 is the detection stamp less camera_latency_s; each detection waits (up to
 tf_max_wait_s) for the camera's TF at that time, and the state is predicted to
-its publish time and stamped with it. See README.md's ### target_tracker.py.
+its publish time and stamped with it. /cv/tracker/measurement (Header) echoes
+each folded-in detection's header, so a bench can pace on the tracker's input.
+See README.md's ### target_tracker.py.
 """
 from collections import deque
 import threading
@@ -34,6 +36,7 @@ from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.time import Time
+from std_msgs.msg import Header
 import tf2_ros
 from tf2_ros import TransformException
 
@@ -58,6 +61,7 @@ class TargetTracker(Node):
 
         self.declare_parameter('robot_panels_topic', '/cv/robot_panels')
         self.declare_parameter('output_topic', '/cv/target_state')
+        self.declare_parameter('measurement_topic', '/cv/tracker/measurement')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('pose_latency_s', 0.01)
         # Capture time = detection stamp - camera_latency_s. Unmeasured on
@@ -98,6 +102,7 @@ class TargetTracker(Node):
         gp = self.get_parameter
         self.robot_panels_topic = gp('robot_panels_topic').value
         self.output_topic = gp('output_topic').value
+        self.measurement_topic = gp('measurement_topic').value
         self.odom_frame = gp('odom_frame').value
         self.pose_latency_s = float(gp('pose_latency_s').value)
         self.camera_latency_s = float(gp('camera_latency_s').value)
@@ -133,9 +138,11 @@ class TargetTracker(Node):
 
         self._waiting = deque()  # (PanelDetectionArray, arrival Time) awaiting TF
         self._tf_waits = []  # seconds each processed detection waited for TF
+        self._lags = []  # seconds from capture to processing, TF wait included
         self._tf_drops = 0
 
         self.pub = self.create_publisher(TargetState, self.output_topic, 10)
+        self.measurement_pub = self.create_publisher(Header, self.measurement_topic, 10)
         self.sub = self.create_subscription(
             PanelDetectionArray, self.robot_panels_topic, self.on_robot_panels, 10)
         # Retries on the wall clock: a bench that holds sim time until this
@@ -215,10 +222,13 @@ class TargetTracker(Node):
         if not self._tf_waits and not self._tf_drops:
             return
         waits = np.array(self._tf_waits) if self._tf_waits else np.zeros(1)
+        lags = np.array(self._lags) if self._lags else np.zeros(1)
         self.get_logger().info(
             f'camera TF wait over {len(self._tf_waits)} detections: mean '
-            f'{waits.mean():.3f} s, max {waits.max():.3f} s; dropped {self._tf_drops}')
+            f'{waits.mean():.3f} s, max {waits.max():.3f} s; dropped {self._tf_drops}; '
+            f'capture to update mean {lags.mean():.3f} s, max {lags.max():.3f} s')
         self._tf_waits = []
+        self._lags = []
         self._tf_drops = 0
 
     def _update(self, msg, tf):
@@ -268,6 +278,7 @@ class TargetTracker(Node):
 
         # TargetState describes the target now: predict to the publish time.
         now = max(self.get_clock().now(), stamp)
+        self._lags.append((now - stamp).nanoseconds / 1e9)
         state, P = self._ekf.predicted(now.nanoseconds / 1e9)
         out = TargetState()
         out.header.stamp = now.to_msg()
@@ -291,6 +302,7 @@ class TargetTracker(Node):
         out.valid = self._n_updates >= 2
 
         self.pub.publish(out)
+        self.measurement_pub.publish(msg.header)
 
 
 def main(args=None):
