@@ -213,11 +213,11 @@ TF covers its capture time, then updates the filter with the camera pose from
 that moment. After `tf_max_wait_s` (0.25) it is dropped and the gap logged.
 It is never matched to the newest camera pose instead: the bearing error
 would be the gap times the head's slew rate. That fallback was the rule
-until 2026-09-25, and gz C2 logs showed it using poses 0.12-0.25 s stale
+until 2026-09-25, and the gz estimation bench logs showed it using poses 0.12-0.25 s stale
 while the head tracked a moving target. Every 5 s the node logs how long
 detections waited, how many it dropped, and the sim time from capture to
 the filter update. Waiting detections are retried every 5 ms of wall time,
-not sim time: C2's `bench_world` holds sim time until this node has folded
+not sim time: the estimation bench's `bench_world` holds sim time until this node has folded
 in each frame's detection, so a sim-time retry would never fire.
 
 `TargetState` is stamped at publish time, so it can't show a backlog: a
@@ -305,16 +305,16 @@ non-spinning target: velocity, acceleration and `w` pinned at exactly 0,
 the centre and yaw random-walking at `still_process_noise_pos` (0.02
 m/sqrt(s)) and `still_process_noise_yaw` (0.05 rad/sqrt(s)). The moving
 filters read a still target's noise as motion (velocity p95 0.19 m/s on
-gz C2), which Part 1 turned into lead. The still filter
+the gz estimation bench), which Part 1 turned into lead. The still filter
 takes the lead at a 0.25 margin rather than 1.0, since it wins by only
 ~0.6 per sample, and hands it back once a CUSUM of the per-sample
 log-likelihood ratio against the best moving filter passes
 `still_exit_llr` (15). A single gated detection adds ~13, so one misfire
-can't knock it out. On gz C2 the parked cells read velocity and spin
+can't knock it out. On the gz estimation bench the parked cells read velocity and spin
 exactly 0 and facing-panel p95 1.3 cm (flat), from 4.1 cm. A target that
 pulls away at 6 m/s^2 is handed over after about 0.23 s, with up to 9 cm
 error in between (4 cm without the still model); that came from a
-unit-test probe, and C2 has no drive-off cell to confirm it yet.
+unit-test probe, and the estimation bench has no drive-off cell to confirm it yet.
 
 The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
 It publishes on every `/cv/robot_panels` message it can place in odom, from
@@ -378,7 +378,7 @@ a camera-relative vector. See `CVTarget.msg` and
 
 The node reads `/cv/target_state` and `/pose` and nothing else, so anything
 that publishes a `TargetState` can drive it: `target_tracker` on hardware,
-`sim`'s `target_state_truth` on the aim bench. Liveness is the state's age
+`sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
 the message.
 

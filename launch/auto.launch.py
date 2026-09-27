@@ -156,7 +156,7 @@ def generate_launch_description():
         'firmware_latency_s', default_value='0.05',
         description='point_to_cv_target: static delay from fire decision '
         'to projectile exit, added to the state age before time of flight. '
-        '0.05 matches the shot-hit bench; measure it on hardware.'
+        '0.05 matches the aiming bench; measure it on hardware.'
     )
     v_muzzle_arg = DeclareLaunchArgument(
         'v_muzzle', default_value='25.0',
