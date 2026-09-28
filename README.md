@@ -75,7 +75,7 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 and setting it false keeps the launch off the real serial devices.
 
 `localization_mode` (`amcl` default, `slam`, `mapping`, `none`) picks the
-`map->odom` owner. `use_ekf` (default `true`) picks whether `odom->root` is
+`map->odom` owner. `use_rf2o` (default `true`) picks whether `odom->root` is
 EKF-fused, with any mode; on `true` it also starts `rf2o_laser_odometry_node`,
 which scan-matches `/scan` into the `/scan_odom` the EKF fuses with `/odom`.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
@@ -83,7 +83,7 @@ Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
-ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_ekf:=false
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_rf2o:=false
 ```
 
 `dds_transport` picks the DDS transport per node. On `default`, most nodes use
@@ -331,7 +331,7 @@ Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
 
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
 for it. `relocalize` compares `/localization/odom` (published in every
-`localization_mode` and `use_ekf` combination) with the MCB's raw `/odom`,
+`localization_mode` and `use_rf2o` combination) with the MCB's raw `/odom`,
 using no TF and no backend assumptions. When they differ by more than
 `error_threshold_meters` (0.05) and raw speed is under `max_move_speed`
 (0.05 m/s, so the correction is still current when the MCB applies it), it
