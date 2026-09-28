@@ -332,12 +332,24 @@ Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
 for it. `relocalize` compares `/localization/odom` (published in every
 `localization_mode` and `use_rf2o` combination) with the MCB's raw `/odom`,
-using no TF and no backend assumptions. When they differ by more than
-`error_threshold_meters` (0.05) and raw speed is under `max_move_speed`
-(0.05 m/s, so the correction is still current when the MCB applies it), it
-publishes the localized `(x, y)` as a `PointStamped` on `~/relocalize`,
-with the localization pose's stamp and frame. The bridge
-packs that into a `RelocalizePayload` and the MCB resets its odometry origin.
+using no TF and no backend assumptions (`mcb_relay_core.Relocalizer`).
+
+- The offset is `loc(t) - odom(t)` at the localization stamp, with `/odom`
+  interpolated there from a 1 s buffer.
+- It is added to where the MCB's odometry will read when it applies the
+  frame: the latest `/odom` extrapolated at its velocity by its age, two
+  UART legs (`uart_latency_s`, 5 ms; `/odom` is stamped on arrival) and
+  `mcb_read_delay_s` (2 ms). Both are placeholders until measured on the
+  robot. The point is stamped with that apply time.
+- It is sent only when confident: the localization's xy std, combined with
+  speed x `latency_std_s` (3 ms), stays under `max_std_m` (0.02), and the
+  offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
+  that std. The EKF's std reads ~1 mm at rest and ~7 mm at 1 m/s in sim.
+- After a send it waits `hold_off_s` (0.3 s) for `/odom` to show the jump.
+
+The bridge packs the point into a `RelocalizePayload` and the MCB resets its
+odometry origin.
+
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
 

@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
-
 from dji_serial_bridge.msg import CVTarget
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+
+from thornbots_pkg.mcb_relay_core import Relocalizer
 
 
 class McbRelay(Node):
@@ -30,8 +31,9 @@ class McbRelay(Node):
     to dji_serial_bridge directly. See README.md for design rationale.
 
     relocalize: publishes corrected (x, y) on relocalize_output_topic when
-    localization_odom_topic and raw_odom_topic drift apart while stationary,
-    stamped and framed as the localization pose it came from.
+    localization_odom_topic and raw_odom_topic drift apart and the offset is
+    confident, compensated for UART lag and the MCB's read delay
+    (mcb_relay_core.Relocalizer). Stamped with when the MCB should adopt it.
     cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
     The aim point carries the fire decision (fire, delay_ms), so this is the
     only CV relay -- it is what reaches dji_serial_bridge_node and the real
@@ -45,22 +47,29 @@ class McbRelay(Node):
         self.declare_parameter('raw_odom_topic', '/odom')
         self.declare_parameter('relocalize_output_topic', '/dji_serial_bridge/relocalize')
         self.declare_parameter('error_threshold_meters', 0.05)
-        self.declare_parameter('max_move_speed', 0.05)
+        self.declare_parameter('n_sigma', 3.0)  # offset must clear this many std
+        self.declare_parameter('max_std_m', 0.02)  # EKF reads ~0.001 still, ~0.007 moving
+        # Placeholders, unmeasured: one UART leg (USB-serial latency timer
+        # included), the MCB's poll of its RX buffer, and their spread.
+        self.declare_parameter('uart_latency_s', 0.005)
+        self.declare_parameter('mcb_read_delay_s', 0.002)
+        self.declare_parameter('latency_std_s', 0.003)
+        self.declare_parameter('hold_off_s', 0.3)  # after a send, for /odom to show it
         self.declare_parameter('cv_target_input_topic', '/cv/target')
         self.declare_parameter('cv_target_output_topic', '/dji_serial_bridge/cv_target')
 
         localization_odom_topic = self.get_parameter('localization_odom_topic').value
         raw_odom_topic = self.get_parameter('raw_odom_topic').value
         relocalize_out = self.get_parameter('relocalize_output_topic').value
-        self._error_threshold = self.get_parameter('error_threshold_meters').value
-        self._max_move_speed = self.get_parameter('max_move_speed').value
+        gp = self.get_parameter
+        self._relocalizer = Relocalizer(
+            error_threshold_m=gp('error_threshold_meters').value,
+            n_sigma=gp('n_sigma').value, max_std_m=gp('max_std_m').value,
+            uart_latency_s=gp('uart_latency_s').value,
+            mcb_read_delay_s=gp('mcb_read_delay_s').value,
+            latency_std_s=gp('latency_std_s').value, hold_off_s=gp('hold_off_s').value)
         cv_target_in = self.get_parameter('cv_target_input_topic').value
         cv_target_out = self.get_parameter('cv_target_output_topic').value
-
-        self._raw_x = 0.0
-        self._raw_y = 0.0
-        self._raw_speed = 0.0
-        self._have_raw_odom = False
 
         self.relocalize_pub = self.create_publisher(PointStamped, relocalize_out, 10)
         self.raw_odom_sub = self.create_subscription(
@@ -77,38 +86,37 @@ class McbRelay(Node):
         self.get_logger().info(
             f'mcb_relay ready\n'
             f'  {localization_odom_topic} vs {raw_odom_topic} -> {relocalize_out}'
-            f' (threshold={self._error_threshold}m, max_move_speed={self._max_move_speed}m/s)\n'
+            f' (threshold={self._relocalizer.error_threshold_m}m,'
+            f' max_std={self._relocalizer.max_std_m}m)\n'
             f'  {cv_target_in} -> {cv_target_out} (aim + fire decision)'
         )
 
     def _raw_odom_callback(self, msg):
-        self._raw_x = msg.pose.pose.position.x
-        self._raw_y = msg.pose.pose.position.y
-        self._raw_speed = math.hypot(
+        # Twist is in the child frame; the chassis holds its heading, so
+        # it reads as odom (the old speed gate relied on the same).
+        self._relocalizer.add_odom(
+            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9,
+            msg.pose.pose.position.x, msg.pose.pose.position.y,
             msg.twist.twist.linear.x, msg.twist.twist.linear.y)
-        self._have_raw_odom = True
 
     def _localization_odom_callback(self, msg):
-        # Abort if we haven't seen raw odom yet, or the chassis is moving too
-        # fast for a relocalize correction to still be valid by the time the
-        # MCB applies it.
-        if not self._have_raw_odom or self._raw_speed > self._max_move_speed:
+        cov = msg.pose.covariance
+        now = self.get_clock().now()
+        out = self._relocalizer.decide(
+            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9,
+            msg.pose.pose.position.x, msg.pose.pose.position.y,
+            max(cov[0], cov[7]), now.nanoseconds * 1e-9)
+        if out is None:
             return
-
-        loc_x = msg.pose.pose.position.x
-        loc_y = msg.pose.pose.position.y
-        error = math.hypot(loc_x - self._raw_x, loc_y - self._raw_y)
-        if error <= self._error_threshold:
-            return
-
-        point = PointStamped(header=msg.header)
-        point.point.x, point.point.y = loc_x, loc_y
+        x, y, apply_t, error, std = out
+        point = PointStamped()
+        point.header.stamp = Time(nanoseconds=int(apply_t * 1e9)).to_msg()
+        point.header.frame_id = msg.header.frame_id
+        point.point.x, point.point.y = x, y
         self.relocalize_pub.publish(point)
         self.get_logger().info(
-            f'Localization drifted {error:.3f}m from raw odom - sent '
-            f'relocalize correction x={loc_x:.3f} y={loc_y:.3f}',
-            throttle_duration_sec=1.0,
-        )
+            f'Localization {error:.3f}m (std {std:.3f}m) from raw odom - sent '
+            f'relocalize x={x:.3f} y={y:.3f}', throttle_duration_sec=1.0)
 
 
 def main(args=None):

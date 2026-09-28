@@ -67,6 +67,11 @@ front-run firing logic unless asked.
 - **`CVTarget` is an `odom` point since 2026-09-27**, and the firmware
   still reads it as `root`. Which `odom` the MCB can share is open:
   `../CV_SPLIT_PLAN.md` W.3's open issues.
+- **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
+  UART legs (USB-serial latency timer included) and the MCB's RX poll on
+  the robot, then set `uart_latency_s`, `mcb_read_delay_s` and
+  `latency_std_s` (README.md `### mcb_relay.py`). Only unit-tested: sim
+  runs no bridge, so nothing consumes `~/relocalize` there.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
