@@ -119,11 +119,11 @@ def generate_launch_description():
         'localization.launch.py module docstring for what each '
         'value launches.'
     )
-    use_ekf_arg = DeclareLaunchArgument(
-        'use_ekf', default_value='true',
-        description='Forwarded to sentry_localization -- whether odom->root '
-        'is EKF-fused (ekf_node + rf2o_laser_odometry_node on '
-        '/scan) instead of passed through raw from /odom. True '
+    use_rf2o_arg = DeclareLaunchArgument(
+        'use_rf2o', default_value='true',
+        description='Forwarded to sentry_localization -- whether rf2o scan '
+        'odometry is fused into odom->root (rf2o_laser_odometry_node on '
+        '/scan, fused by ekf_node) instead of passing /odom through raw. True '
         'by default so scan-matched odometry is always in the '
         'fusion; set false for raw /odom passthrough. '
         'Independent of localization_mode. See '
@@ -435,7 +435,7 @@ def generate_launch_description():
             'load_map': LaunchConfiguration('load_map'),
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
-            'use_ekf': LaunchConfiguration('use_ekf'),
+            'use_rf2o': LaunchConfiguration('use_rf2o'),
         }.items(),
     )
 
@@ -444,7 +444,7 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, dds_transport_arg,
         load_map_arg, map_file_arg, localization_mode_arg,
-        use_ekf_arg,
+        use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
         cv_target_publish_rate_hz_arg,
