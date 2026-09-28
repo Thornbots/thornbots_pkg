@@ -15,7 +15,7 @@
 import math
 
 from dji_serial_bridge.msg import CVTarget
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
@@ -30,7 +30,8 @@ class McbRelay(Node):
     to dji_serial_bridge directly. See README.md for design rationale.
 
     relocalize: publishes corrected (x, y) on relocalize_output_topic when
-    localization_odom_topic and raw_odom_topic drift apart while stationary.
+    localization_odom_topic and raw_odom_topic drift apart while stationary,
+    stamped and framed as the localization pose it came from.
     cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
     The aim point carries the fire decision (fire, delay_ms), so this is the
     only CV relay -- it is what reaches dji_serial_bridge_node and the real
@@ -61,7 +62,7 @@ class McbRelay(Node):
         self._raw_speed = 0.0
         self._have_raw_odom = False
 
-        self.relocalize_pub = self.create_publisher(Point, relocalize_out, 10)
+        self.relocalize_pub = self.create_publisher(PointStamped, relocalize_out, 10)
         self.raw_odom_sub = self.create_subscription(
             Odometry, raw_odom_topic, self._raw_odom_callback, 10)
         self.localization_odom_sub = self.create_subscription(
@@ -100,7 +101,8 @@ class McbRelay(Node):
         if error <= self._error_threshold:
             return
 
-        point = Point(x=loc_x, y=loc_y, z=0.0)
+        point = PointStamped(header=msg.header)
+        point.point.x, point.point.y = loc_x, loc_y
         self.relocalize_pub.publish(point)
         self.get_logger().info(
             f'Localization drifted {error:.3f}m from raw odom - sent '

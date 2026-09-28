@@ -335,7 +335,8 @@ for it. `relocalize` compares `/localization/odom` (published in every
 using no TF and no backend assumptions. When they differ by more than
 `error_threshold_meters` (0.05) and raw speed is under `max_move_speed`
 (0.05 m/s, so the correction is still current when the MCB applies it), it
-publishes the localized `(x, y)` as a `Point` on `~/relocalize`. The bridge
+publishes the localized `(x, y)` as a `PointStamped` on `~/relocalize`,
+with the localization pose's stamp and frame. The bridge
 packs that into a `RelocalizePayload` and the MCB resets its odometry origin.
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
