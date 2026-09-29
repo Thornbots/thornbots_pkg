@@ -242,9 +242,16 @@ class PointToCvTarget(Node):
             self.spinning = False
             return (state.panel.x, state.panel.y, state.panel.z), False, False, None
 
+        # Our pose at the state's stamp; if TF hasn't reached it yet, the
+        # newest one, carried forward below.
+        state_stamp = Time.from_msg(state.header.stamp)
         try:
-            tf_shooter = self.tf_buffer.lookup_transform(
-                self.odom_frame, self.root_frame, Time())
+            if self.tf_buffer.can_transform(self.odom_frame, self.root_frame, state_stamp):
+                tf_shooter = self.tf_buffer.lookup_transform(
+                    self.odom_frame, self.root_frame, state_stamp)
+            else:
+                tf_shooter = self.tf_buffer.lookup_transform(
+                    self.odom_frame, self.root_frame, Time())
         except TransformException as ex:
             self.get_logger().error(
                 f'TF lookup {self.odom_frame}<-{self.root_frame} failed: {ex}',
@@ -256,7 +263,7 @@ class PointToCvTarget(Node):
         shooter_R = _quat_to_rot(sq.x, sq.y, sq.z, sq.w)
         shooter_vel_odom = _rotate(shooter_R, self.chassis_vel_root)
         # plan_shot wants us at the state's stamp, not the transform's.
-        tf_to_state_s = (Time.from_msg(state.header.stamp)
+        tf_to_state_s = (state_stamp
                          - Time.from_msg(tf_shooter.header.stamp)).nanoseconds / 1e9
         shooter_pos_odom = (st.x + shooter_vel_odom[0] * tf_to_state_s,
                             st.y + shooter_vel_odom[1] * tf_to_state_s,

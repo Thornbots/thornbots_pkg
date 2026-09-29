@@ -468,11 +468,13 @@ Both horizons start from this tick's `now - state.header.stamp`, not
 up to a tracker period plus tick phase (measured: 20ms mean at arrival, 50ms
 at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
 
-The output needs no transform. For lead,
-`lookup_transform(odom_frame, root_frame, Time())` gives shooter position in
-odom, and `RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. Both use the
-latest transform, and the position is carried at that velocity to the state's
-stamp, which is `plan_shot()`'s time zero.
+The output needs no transform. For lead, `odom->root` at the state's stamp,
+`plan_shot()`'s time zero, gives shooter position in odom, and
+`RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. The state is
+stamped at the tracker's publish time, usually past the newest `odom->root`
+(the EKF runs at 30 Hz), so then the newest transform is used and its
+position is carried at that velocity to the state's stamp. The lookup never
+waits: a wait in a callback starves `/tf`.
 
 Our own motion: the shot leaves where we are at the aim horizon and carries
 our velocity, so `plan_shot()` returns the intercept less our motion over
