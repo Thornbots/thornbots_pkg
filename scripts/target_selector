@@ -1,4 +1,5 @@
-# Copyright 2026 RHIT Thornbots
+#!/usr/bin/env python3
+# Copyright 2026 Thornbots
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run ament_pep257 over the package; see setup.cfg for the pytest config."""
-from ament_pep257.main import main
-import pytest
+"""Entry point for thornbots_pkg.target_selector."""
+from thornbots_pkg.target_selector import main
 
-
-@pytest.mark.linter
-@pytest.mark.pep257
-def test_pep257():
-    rc = main(argv=['launch', 'scripts', 'thornbots_pkg', 'test'])
-    assert rc == 0, 'Found code style errors / warnings'
+if __name__ == '__main__':
+    main()
