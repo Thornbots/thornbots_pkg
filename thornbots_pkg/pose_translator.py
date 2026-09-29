@@ -92,8 +92,8 @@ class PoseTranslator(Node):
                 self._warned_zero_stamp = True
             stamp = self.get_clock().now().to_msg()
 
-        # Chassis is holonomic and does not rotate; head_yaw is gimbal-only
-        # heading, not chassis heading, so chassis orientation stays identity.
+        # root is heading-fixed: chassis yaw goes out as the chassis_yaw
+        # joint, never into /odom, so localization doesn't see it. README.md.
         q_chassis = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
 
         odom = Odometry()
@@ -113,8 +113,8 @@ class PoseTranslator(Node):
 
         js = JointState()
         js.header.stamp = stamp
-        js.name = ['headlink', 'headpitch']
-        js.position = [float(msg.head_yaw), float(msg.head_pitch)]
+        js.name = ['chassis_yaw', 'headlink', 'headpitch']
+        js.position = [float(msg.chassis_yaw), float(msg.head_yaw), float(msg.head_pitch)]
         self.joint_pub.publish(js)
 
 
