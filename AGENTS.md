@@ -88,11 +88,11 @@ front-run firing logic unless asked.
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
-- **`target_tracker` is the estimation bench's slowest node** (2026-09-25): at ~8x on
-  `sim`'s `bench_world` it saturates a core, 46% of its main thread in
-  `ArmorTracker.step`'s small-matrix numpy and 27% in its TF listener
-  thread. A C++ core would lift it and speed up the Jetson too; the
-  user's call, not started.
+- **`target_tracker` is C++ since 2026-09-28** (the user's call), the rest
+  Python; the package is `ament_cmake` + `ament_cmake_python`, so a new
+  Python node needs a `scripts/<name>` wrapper. The port matched the Python
+  core to 1e-13 on shared inputs. Per detection: 0.056 ms on the Orin
+  (3.1 ms in Python), 0.011 ms on the Mac.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
   container, and the aiming and estimation benches give Humble's results on the laptop. Nothing has
   run on hardware yet (`../JAZZY_PLAN.md` step 5).

@@ -25,7 +25,8 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
-`enable_cv_target_bridge`) and a rclpy-free `*_core.py` half for unit tests.
+`enable_cv_target_bridge`) and a ROS-free core for unit tests: `*_core.py`, or
+`armor_tracker.cpp` for `target_tracker`, the one C++ node (`src/`).
 
 ```
 /pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
@@ -119,20 +120,21 @@ come back empty (sim's nodes show up too while `sim.launch.py` runs).
 
 ## Testing
 
-The unit tests exercise the `*_core.py` halves on synthetic input and need no
-running graph:
+The unit tests exercise the ROS-free cores on synthetic input and need no
+running graph. `colcon test` runs them all, gtest and pytest:
 
 ```bash
-cd /workspaces/isaac_ros-dev/src/thornbots_pkg
-python3 -m pytest test/test_target_selector.py test/test_target_tracker.py test/test_point_to_cv_target.py
+cd /workspaces/isaac_ros-dev
+colcon test --packages-select thornbots_pkg && colcon test-result --verbose
+./build/thornbots_pkg/test_armor_tracker   # the tracker's gtest alone
 ```
 
-`test_target_selector.py` covers scoring, centrality, grouping and hysteresis;
-`test_target_tracker.py` the spin detector, KF and radial correction;
-`test_point_to_cv_target.py` the intercept solve, shot planner, latency stat,
-and the node's subscriptions: `TargetState` and `RobotPose`, nothing else.
-`pytest test/` also picks up the ament copyright, flake8 and pep257 checks,
-which `colcon test --packages-select thornbots_pkg` runs too.
+`test_armor_tracker.cpp` covers the armor EKF, the hypothesis bank, handoffs,
+gating and the still hypothesis; `test_target_selector.py` scoring,
+centrality, grouping and hysteresis; `test_point_to_cv_target.py` the
+intercept solve, shot planner, latency stat, and the node's subscriptions:
+`TargetState` and `RobotPose`, nothing else. The pytest run also picks up
+the ament copyright, flake8 and pep257 checks.
 
 The localization drift suite is `ros2 launch sim
 localization_tests.launch.py`, which launches `auto.launch.py`; see
@@ -194,7 +196,7 @@ transforming the prediction every frame or clustering in `odom`, both real
 design changes. The last-centroid hold is a zero-order stand-in that is weaker
 across long handoff gaps.
 
-### target_tracker.py
+### target_tracker
 
 The filter runs in `odom`. `root` moves with the sentry, which breaks constant
 velocity under acceleration, and the camera also rotates with the gimbal.
@@ -232,10 +234,13 @@ callback, and `Buffer.lookup_transform(timeout=...)` sleeps in a wall-clock
 loop, so a 50ms wait per ~60Hz detection starved `/tf`. The buffer then fell
 0.6-1.7s behind detections that TF itself was ~60ms ahead of, and the tracker
 dropped nearly everything (2026-09-17, measured against a separate listener
-on the same run). Humble's `TransformListener(spin_thread=True)` doesn't help:
-it adds the whole node to a second executor rather than isolating `/tf`.
-So `target_tracker` gives its listener a node of its own
-(`target_tracker_tf`), spun on its own thread.
+on the same run). So `target_tracker` spins its listener on its own thread:
+rclcpp's `TransformListener(spin_thread=true)` gives `/tf` a callback group
+and executor of its own (rclpy's added the whole node to a second executor,
+so the Python node used a separate `target_tracker_tf` node). A lookup that
+fails while TF is behind waits; one that fails after TF caught up is retried
+once before the detection is dropped, since the listener thread can catch up
+between the two (2026-09-28: ~20 needless drops a run at ~27x).
 
 The target is a 4-panel armor model, the standard RoboMaster anti-spin
 tracker (rm_auto_aim's) reduced to position-only detections. On hardware
@@ -244,7 +249,7 @@ can't come from handoffs; it has to come from geometry. The old `SpinDetector`
 counted `class_id` changes and only worked because the emulator faked them.
 
 `ArmorEKF` state is the centre's position, velocity and acceleration
-(3-vectors, `POS`/`VEL`/`ACC` in `target_tracker_core.py`), the tracked
+(3-vectors at `POS`/`VEL`/`ACC` in `armor_tracker.hpp`), the tracked
 panel's normal yaw,
 spin rate `w`, that panel's radius and its pair's height `dz` above the
 centre, with the other pair's radius kept aside and its height at `-dz`. A
@@ -323,7 +328,7 @@ shorter than one spin period; consumers should weigh `variance` and
 `yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
 position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
 `acceleration` the centre's. Each state is
-`ArmorTracker.predicted()` at the publish time and stamped with it, as
+`ArmorTracker::predicted()` at the publish time and stamped with it, as
 `TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
 Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
 
