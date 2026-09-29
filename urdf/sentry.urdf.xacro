@@ -1,8 +1,12 @@
 <?xml version="1.0"?>
 <!-- The sentry as robot_state_publisher publishes it: sim/urdf/sentry_v2/sentry_v2.urdf's
      frames and meshes, with the wheel and suspension joints fixed because
-     /joint_states only carries headlink and headpitch. sim's
-     test_urdf_constants.py pins the chain to the sim model. -->
+     /joint_states only carries chassis_yaw, headlink and headpitch. sim's
+     test_urdf_constants.py pins the chain to the sim model.
+     root is heading-fixed (odom->root carries no yaw): the chassis turns
+     under it on chassis_yaw, and the head hangs off root with headlink at
+     the MCB's world head yaw, so lidar and camera never see chassis yaw.
+     The yaw bearing sits 0.2 mm off root's z axis; that offset is ignored. -->
 <robot name="sentry">
   <link name="root">
     <visual>
@@ -13,10 +17,11 @@
     </visual>
   </link>
   <link name="body"/>
-  <joint name="fastened_2" type="fixed">
+  <joint name="chassis_yaw" type="continuous">
     <parent link="root"/>
     <child link="body"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="-0 -0 -1"/>
   </joint>
   <link name="head">
     <visual>
@@ -27,7 +32,7 @@
     </visual>
   </link>
   <joint name="headlink" type="continuous">
-    <parent link="body"/>
+    <parent link="root"/>
     <child link="head"/>
     <origin xyz="-0.000171242 9.52126e-05 0.248293" rpy="0 0 0"/>
     <axis xyz="-0 -0 -1"/>
@@ -162,7 +167,7 @@
     </visual>
   </link>
   <joint name="armor_0link" type="fixed">
-    <parent link="root"/>
+    <parent link="body"/>
     <child link="armor_0"/>
     <origin xyz="0.178162 0.178426 0.230361" rpy="0 -0.261856 0.785329"/>
   </joint>
@@ -173,7 +178,7 @@
     </visual>
   </link>
   <joint name="armor_1link" type="fixed">
-    <parent link="root"/>
+    <parent link="body"/>
     <child link="armor_1"/>
     <origin xyz="-0.177935 0.177863 0.135661" rpy="0 -0.261856 2.35613"/>
   </joint>
@@ -184,7 +189,7 @@
     </visual>
   </link>
   <joint name="armor_2link" type="fixed">
-    <parent link="root"/>
+    <parent link="body"/>
     <child link="armor_2"/>
     <origin xyz="-0.178505 -0.178235 0.230361" rpy="0 -0.261856 -2.35627"/>
   </joint>
@@ -195,7 +200,7 @@
     </visual>
   </link>
   <joint name="armor_3link" type="fixed">
-    <parent link="root"/>
+    <parent link="body"/>
     <child link="armor_3"/>
     <origin xyz="0.177593 -0.177673 0.135661" rpy="0 -0.261856 -0.785464"/>
   </joint>
