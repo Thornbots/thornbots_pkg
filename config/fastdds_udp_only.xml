@@ -47,7 +47,7 @@ editing both files.
                         <!-- ts-nano-hero -->
                         <locator><udpv4><address>100.89.195.53</address></udpv4></locator>
                         <!-- ts-nano-sentry -->
-                        <locator><udpv4><address>100.87.215.118</address></udpv4></locator>
+                        <locator><udpv4><address>100.110.38.3</address></udpv4></locator>
                     </initialPeersList>
                 </builtin>
             </rtps>
