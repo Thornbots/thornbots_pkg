@@ -18,7 +18,7 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
-| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in) |
+| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
@@ -237,6 +237,14 @@ tracker ten frames behind still publishes "now". `/cv/tracker/measurement`
 echoes each folded-in detection's header, and `bench_world` paces on that.
 Pacing on `/cv/target_state` let the tracker sit 0.12-0.21 s behind at
 `real_time_factor:=0` (2026-09-26), its KeepLast(10) queue full.
+
+The publish-time stamp is `now()`, which reads `/clock` on its own thread,
+so a detection arriving just after a `/clock` update could be stamped with
+that tick or the one before, and repeat runs of the estimation bench
+diverged. With `clock_ack_topic` set (the bench sets
+`/cv/tracker/clock_ack`; off by default), the node echoes every clock
+update once `now()` reads it, and `bench_world` sends a step's detections
+only after the echo of the last tick arrives.
 
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection

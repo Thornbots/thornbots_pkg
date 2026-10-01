@@ -95,7 +95,21 @@ public:
 
     pub_ = create_publisher<TargetState>(output_topic_, 10);
     measurement_pub_ = create_publisher<std_msgs::msg::Header>(measurement_topic_, 10);
-    sub_ = create_subscription<PanelDetectionArray>(
+    // Set by the estimation bench only: echo each /clock update once now()
+    // reads it, so a lockstep bench sends detections only after it lands.
+    const auto clock_ack_topic = declare_parameter("clock_ack_topic", std::string(""));
+    if (!clock_ack_topic.empty()) {
+      clock_ack_pub_ = create_publisher<std_msgs::msg::Header>(clock_ack_topic, 10);
+      rcl_jump_threshold_t every_update{};
+      every_update.min_forward.nanoseconds = 1;
+      clock_jump_ = get_clock()->create_jump_callback(
+        nullptr, [this](const rcl_time_jump_t &) {
+          std_msgs::msg::Header h;
+          h.stamp = now();
+          clock_ack_pub_->publish(h);
+        }, every_update);
+    }
+    sub_ =create_subscription<PanelDetectionArray>(
       robot_panels_topic_, 10, [this](PanelDetectionArray::ConstSharedPtr msg) {
         if (!msg->detections.empty()) {
           waiting_.emplace_back(msg, now());
@@ -291,7 +305,8 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<TargetState>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr measurement_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr measurement_pub_, clock_ack_pub_;
+  rclcpp::JumpHandler::SharedPtr clock_jump_;
   rclcpp::Subscription<PanelDetectionArray>::SharedPtr sub_;
   rclcpp::TimerBase::SharedPtr drain_timer_, log_timer_;
 
