@@ -167,9 +167,11 @@ body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 ### target_selector.py
 
 Team colour comes from `RefSysStatus.is_on_blue_team`: on blue it drops class
-IDs 0-3, on red 4-7. Until the first `RefSysStatus` arrives (always, in sim
-without a referee) it passes every detection through, so it can pick an allied
-robot.
+IDs 0-3, on red 4-7. With no colour given it passes every detection through
+and shoots at all targets, allies included: before the first `RefSysStatus`
+(always, in sim without a referee), and while `robot_id` is 0. That's
+taproot's `RobotId::INVALID`, which the MCB sends until the referee assigns
+an ID, with the blue bit reading 0, so the colour bit alone would read red.
 
 Scoring is ported from the old C++ `detection_picker_node`: confidence +
 `center_weight`*centrality + `priority_class_bonus` for `priority_class_ids`,
