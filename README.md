@@ -427,10 +427,10 @@ A timer publishes at `cv_target_publish_rate_hz` (30) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `_compute_aim_point()` handles three cases per tick:
 
-- No usable state, or TF fails: zero confidence, with a throttled `ERROR` on
+- No usable state, or TF fails: `flags` 0 (no target), with a throttled `ERROR` on
   TF failure. Usable means present and younger than `target_timeout_s`.
-- `valid == False`: raw `panel` position, `flags` 0 (no lead, no
-  valid track, no fire). No extrapolation off an unconverged track.
+- `valid == False`: raw `panel` position, `flags` `FLAG_TARGET`
+  only (no lead, no valid track, no fire). No extrapolation off an unconverged track.
 - `valid == True`: `plan_shot()`'s aim point in odom. See below.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin

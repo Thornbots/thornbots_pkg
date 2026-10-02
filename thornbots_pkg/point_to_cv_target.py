@@ -192,7 +192,7 @@ class PointToCvTarget(Node):
         self.target_active = False
         self.get_logger().info(
             f"Newest '{self.target_state_topic}' is {age_s:.2f} s old - publishing "
-            f'zero-confidence CVTarget until the next one arrives.'
+            f'no-target CVTarget (flags 0) until the next one arrives.'
         )
 
     def on_publish_tick(self):
@@ -202,7 +202,7 @@ class PointToCvTarget(Node):
         out.header.frame_id = self.odom_frame
 
         if not self.target_active:
-            self.pub.publish(out)  # all-zero: confidence=0, no fire
+            self.pub.publish(out)  # all-zero: no FLAG_TARGET, no fire
             return
 
         aim = self._compute_aim_point()
@@ -212,9 +212,9 @@ class PointToCvTarget(Node):
         aim_pos, lead_applied, track_valid, fire_delay_s = aim
 
         out.x, out.y, out.z = (float(v) for v in aim_pos)
-        out.confidence = float(self.latest_state.confidence)
         fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
-        out.flags = ((CVTarget.FLAG_LEAD_APPLIED if lead_applied else 0)
+        out.flags = (CVTarget.FLAG_TARGET
+                     | (CVTarget.FLAG_LEAD_APPLIED if lead_applied else 0)
                      | (CVTarget.FLAG_TRACK_VALID if track_valid else 0)
                      | (CVTarget.FLAG_FIRE if fire else 0))
         self.pub.publish(out)
@@ -225,7 +225,7 @@ class PointToCvTarget(Node):
 
         Returns (aim_pos_odom, lead_applied, track_valid, fire_delay_s or
         None), or None if the newest target_state is stale or TF fails
-        (logged loudly, never silently) -- caller emits zero-confidence.
+        (logged loudly, never silently) -- caller emits a no-target CVTarget.
         """
         state = self.latest_state
         now = self.get_clock().now()
