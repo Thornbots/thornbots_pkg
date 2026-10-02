@@ -17,6 +17,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from std_msgs.msg import Header
 import tf2_ros
 from tf2_ros import TransformException
 
@@ -81,6 +82,8 @@ class PointToCvTarget(Node):
         # < 0: shotgating, hold the center line and time the fire. README.md.
         self.declare_parameter('chase_settle_s', 0.0)
         self.declare_parameter('chase_margin_s', 0.0)
+        # Bench only: a Header per publish tick, sent or not, for lockstep.
+        self.declare_parameter('tick_topic', '')
 
         gp = self.get_parameter
         self.target_state_topic = gp('target_state_topic').value
@@ -116,6 +119,9 @@ class PointToCvTarget(Node):
             CVTarget, self.output_topic, qos_profile_sensor_data)
         self.target_state_sub = self.create_subscription(
             TargetState, self.target_state_topic, self.on_target_state, 10)
+        tick_topic = gp('tick_topic').value
+        self.tick_pub = (self.create_publisher(Header, tick_topic, 10)
+                         if tick_topic else None)
         self.robot_pose_sub = self.create_subscription(
             RobotPose, self.robot_pose_topic, self.on_robot_pose, qos_profile_sensor_data)
 
@@ -192,40 +198,30 @@ class PointToCvTarget(Node):
         self.target_active = False
         self.get_logger().info(
             f"Newest '{self.target_state_topic}' is {age_s:.2f} s old - publishing "
-            f'no-target CVTarget (flags 0) until the next one arrives.'
+            f'no CVTarget until the next one arrives.'
         )
 
     def on_publish_tick(self):
         now = self.get_clock().now()
-        out = CVTarget()
-        out.header.stamp = now.to_msg()
-        out.header.frame_id = self.odom_frame
-
-        if not self.target_active:
-            self.pub.publish(out)  # all-zero: no FLAG_TARGET, no fire
-            return
-
-        aim = self._compute_aim_point()
-        if aim is None:
-            self.pub.publish(out)  # still all-zero
-            return
-        aim_pos, lead_applied, track_valid, fire_delay_s = aim
-
-        out.x, out.y, out.z = (float(v) for v in aim_pos)
-        fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
-        out.flags = (CVTarget.FLAG_TARGET
-                     | (CVTarget.FLAG_LEAD_APPLIED if lead_applied else 0)
-                     | (CVTarget.FLAG_TRACK_VALID if track_valid else 0)
-                     | (CVTarget.FLAG_FIRE if fire else 0))
-        self.pub.publish(out)
+        aim = self._compute_aim_point() if self.target_active else None
+        if aim is not None:  # no target: send nothing, the MCB holds still
+            aim_pos, fire_delay_s = aim
+            out = CVTarget()
+            out.header.stamp = now.to_msg()
+            out.header.frame_id = self.odom_frame
+            out.x, out.y, out.z = (float(v) for v in aim_pos)
+            out.fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
+            self.pub.publish(out)
+        if self.tick_pub is not None:
+            self.tick_pub.publish(Header(stamp=now.to_msg()))
 
     def _compute_aim_point(self):
         """
         Return the odom aim point, or None if none is available yet.
 
-        Returns (aim_pos_odom, lead_applied, track_valid, fire_delay_s or
-        None), or None if the newest target_state is stale or TF fails
-        (logged loudly, never silently) -- caller emits a no-target CVTarget.
+        Returns (aim_pos_odom, fire_delay_s or None), or None if the newest
+        target_state is stale or TF fails (logged loudly, never silently) --
+        caller sends no CVTarget.
         """
         state = self.latest_state
         now = self.get_clock().now()
@@ -241,7 +237,7 @@ class PointToCvTarget(Node):
         if not state.valid:
             # Unconverged: aim at the measured panel, no lead, no fire.
             self.spinning = False
-            return (state.panel.x, state.panel.y, state.panel.z), False, False, None
+            return (state.panel.x, state.panel.y, state.panel.z), None
 
         # Our pose at the state's stamp; if TF hasn't reached it yet, the
         # newest one, carried forward below.
@@ -285,7 +281,7 @@ class PointToCvTarget(Node):
             shooter_vel=shooter_vel_odom, chase_settle_s=self.chase_settle_s,
             chase_margin_s=self.chase_margin_s,
             accel=(state.acceleration.x, state.acceleration.y, state.acceleration.z))
-        return aim_odom, self.lead_enabled, True, fire_delay_s
+        return aim_odom, fire_delay_s
 
 
 def main(args=None):

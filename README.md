@@ -19,7 +19,7 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision) |
+| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision); `tick_topic` if set (bench only) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -427,10 +427,12 @@ A timer publishes at `cv_target_publish_rate_hz` (30) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `_compute_aim_point()` handles three cases per tick:
 
-- No usable state, or TF fails: `flags` 0 (no target), with a throttled `ERROR` on
-  TF failure. Usable means present and younger than `target_timeout_s`.
-- `valid == False`: raw `panel` position, `flags` `FLAG_TARGET`
-  only (no lead, no valid track, no fire). No extrapolation off an unconverged track.
+- No usable state, or TF fails: no `CVTarget`, so the MCB holds still, with
+  a throttled `ERROR` on TF failure. Usable means present and younger than
+  `target_timeout_s`. With `tick_topic` set (the lockstep benches), a
+  `Header` still goes out every tick.
+- `valid == False`: raw `panel` position, no lead, no fire. No
+  extrapolation off an unconverged track.
 - `valid == True`: `plan_shot()`'s aim point in odom. See below.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
