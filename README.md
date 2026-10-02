@@ -500,3 +500,7 @@ shooter gets the intercept itself.
 Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
 only above `fire_confidence_threshold`, so a failed TF lookup or stale state
 holds fire. HP, heat and power gating are not built.
+
+Every aim point also carries `type_c_based_patrol` and `turn_to_hit`, both
+parameters defaulting to true: whether the MCB may patrol on its own and turn
+toward where it got hit. They only reach the MCB with an aim point.
