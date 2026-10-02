@@ -174,7 +174,7 @@ def generate_launch_description():
         'Type-C computes the real ballistic flight time.'
     )
     cv_target_publish_rate_hz_arg = DeclareLaunchArgument(
-        'cv_target_publish_rate_hz', default_value='30.0',
+        'cv_target_publish_rate_hz', default_value='40.0',
         description='point_to_cv_target: /cv/target publish rate, '
         'decoupled from the ~60Hz detection rate.'
     )

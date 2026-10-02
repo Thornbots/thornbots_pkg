@@ -423,7 +423,7 @@ that publishes a `TargetState` can drive it: `target_tracker` on hardware,
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
 the message.
 
-A timer publishes at `cv_target_publish_rate_hz` (30) from cached state. The
+A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `_compute_aim_point()` handles three cases per tick:
 
@@ -501,6 +501,7 @@ Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
 only above `fire_confidence_threshold`, so a failed TF lookup or stale state
 holds fire. HP, heat and power gating are not built.
 
-Every aim point also carries `type_c_based_patrol` and `turn_to_hit`, both
-parameters defaulting to true: whether the MCB may patrol on its own and turn
-toward where it got hit. They only reach the MCB with an aim point.
+Every aim point also carries `type_c_based_patrol` (default false: the MCB
+doesn't patrol on its own) and `turn_to_hit` (default true: it may turn toward
+where it got hit). They only reach the MCB with an aim point, so between
+targets it does what it last heard, or its own default (MCBV3#78).
