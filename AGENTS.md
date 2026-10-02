@@ -64,6 +64,12 @@ front-run firing logic unless asked.
   target with `CVTarget.delay_ms`. No HP/heat/power gating, and the MCB
   firmware's `CVData` struct hasn't grown the merged fire fields yet, so the
   timing only works in sim.
+- **`point_to_cv_target` patrols when there's no target** (2026-10-02,
+  `patrol_enabled`, README.md). It never fires on a patrol frame, but any
+  firmware that fires on every frame would fire all through the patrol;
+  run `patrol_enabled:=false` until MCBV3#77 fires on the bit. Not checked
+  on the robot: the sweep rate, which way `hit_angle_sign` should go, and
+  whether YOLO picks up targets mid-sweep.
 - **`CVTarget` is an `odom` point since 2026-09-27**, and the firmware
   still reads it as `root`. Which `odom` the MCB can share is open:
   `../CV_SPLIT_PLAN.md` W.3's open issues.

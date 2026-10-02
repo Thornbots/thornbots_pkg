@@ -19,7 +19,7 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision); `tick_topic` if set (bench only) |
+| `point_to_cv_target` | `/cv/target_state`, `/pose`, `/dji_serial_bridge/ref_sys` (hits) | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -417,8 +417,8 @@ and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See
 `CVTarget.msg` and `ros2_dji_serial_bridge/README.md`'s wire-format history.
 
-The node reads `/cv/target_state` and `/pose` and nothing else, so anything
-that publishes a `TargetState` can drive it: `target_tracker` on hardware,
+The node aims from `/cv/target_state` and `/pose` alone (`ref_sys` only
+steers the patrol), so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
 `sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
 the message.
@@ -503,5 +503,28 @@ holds fire. HP, heat and power gating are not built.
 
 Every aim point also carries `type_c_based_patrol` (default false: the MCB
 doesn't patrol on its own) and `turn_to_hit` (default true: it may turn toward
-where it got hit). They only reach the MCB with an aim point, so between
-targets it does what it last heard, or its own default (MCBV3#78).
+where it got hit).
+
+The Jetson patrols itself (`patrol_enabled`, default true; `auto.launch.py`
+arg of the same name). After `patrol_after_s` (0.2) with no aim point it
+sends patrol points at the publish rate, never with `fire` set: a point
+`patrol_range_m` (3.0) out from the `muzzle` frame, `patrol_pitch_down_rad`
+(0.05) below level, its yaw starting at the gun's and turning at
+`patrol_rate_rad_s` (-2.0, clockwise). That copies the MCB's own patrol in
+`AutoAimAndFireCommand.cpp`: -0.002 rad per 1 ms cycle, pitch 0.05. The yaw
+is integrated on itself, not on the gun's, so a gun that lags can't stall
+the sweep. With `turn_to_hit`, a `RefSysStatus.delta_angle_got_hit_in` other
+than 123 (not hit) faces `gun yaw + hit_angle_sign * delta` for
+`hit_turn_s` (0.5), then the sweep goes on from there.
+`hit_angle_sign` -1 copies the firmware's `currentYaw - angle`; neither sign
+has been checked on the robot.
+
+Why the Jetson and not the MCB: a patrol frame keeps a `CV_TARGET` going
+between targets, so the MCB hears the flags all the time and never patrols
+on its own. MCBV3#78 found the other way broken: the MCB only patrols with
+no frame coming, the one time it hears no flags. A patrol frame is just an
+aim point with `fire` clear, so the wire is unchanged. That only holds if
+the firmware fires on `fire` alone (MCBV3#77). Under today's rule (any frame
+within 60 deg of the gun, bridge README item 3) it would fire all through
+the patrol. The aiming benches and E1 run with `patrol_enabled:=false`,
+since E1's scorer fires on every frame by that rule.

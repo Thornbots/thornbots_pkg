@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Pure intercept-solve math for point_to_cv_target.py.
+Pure intercept-solve and patrol math for point_to_cv_target.py.
 
 point_to_cv_target_core.py -- pure intercept-solve math for
 point_to_cv_target.py (no rclpy import), unit-tested standalone in
@@ -185,3 +185,58 @@ class LatencyStat:
     def add(self, sample_s):
         self.count += 1
         self.mean += (sample_s - self.mean) / self.count
+
+
+def wrap_to_pi(a):
+    """Wrap an angle to [-pi, pi)."""
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+
+class Patrol:
+    """
+    Where the gun looks with no target: sweep, or face the last hit.
+
+    Starts after_s after the last target, from the gun's own yaw, and turns
+    at rate_rad_s. A hit holds its yaw for hit_turn_s, then the sweep goes on
+    from there. Mirrors the MCB's own patrol (AutoAimAndFireCommand.cpp).
+    Times in seconds, yaws in odom radians.
+    """
+
+    def __init__(self, rate_rad_s, after_s, hit_turn_s):
+        self.rate_rad_s = rate_rad_s
+        self.after_s = after_s
+        self.hit_turn_s = hit_turn_s
+        self.last_target_s = None
+        self.yaw = None  # commanded yaw; None until patrol starts
+        self.last_step_s = None
+        self.hit_yaw = None
+        self.hit_until_s = None
+
+    def target_seen(self, now_s):
+        self.last_target_s = now_s
+        self.yaw = None
+
+    def hit(self, yaw, now_s):
+        self.hit_yaw = yaw
+        self.hit_until_s = now_s + self.hit_turn_s
+
+    def step(self, now_s, gun_yaw):
+        """Return this tick's patrol yaw, or None while a target is recent."""
+        if self.last_target_s is not None and now_s - self.last_target_s < self.after_s:
+            return None
+        if self.hit_until_s is not None and now_s < self.hit_until_s:
+            self.yaw = self.hit_yaw
+        elif self.yaw is None:
+            self.yaw = gun_yaw
+        else:
+            self.yaw += self.rate_rad_s * (now_s - self.last_step_s)
+        self.last_step_s = now_s
+        self.yaw = wrap_to_pi(self.yaw)
+        return self.yaw
+
+
+def patrol_point(gun_pos, yaw, range_m, pitch_down_rad):
+    """Odom point range_m out from gun_pos along yaw, pitch_down_rad below level."""
+    return (gun_pos[0] + range_m * math.cos(yaw),
+            gun_pos[1] + range_m * math.sin(yaw),
+            gun_pos[2] - range_m * math.tan(pitch_down_rad))
