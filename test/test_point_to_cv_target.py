@@ -28,7 +28,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.point_to_cv_target_core import (  # noqa: E402
-    LatencyStat, plan_shot, solve_intercept,
+    LatencyStat, Patrol, patrol_point, plan_shot, solve_intercept,
 )
 
 V_MUZZLE = 25.0
@@ -428,14 +428,15 @@ NODE_SRC = os.path.join(os.path.dirname(__file__), '..', 'thornbots_pkg',
                         'point_to_cv_target.py')
 
 
-def test_node_subscribes_to_target_state_and_robot_pose_only():
+def test_node_subscribes_to_target_state_robot_pose_and_ref_sys_only():
     # The CV split's seam (CV_SPLIT_PLAN.md): Part 1 aims from
     # TargetState alone, so a truth publisher can replace the whole of Part 2.
+    # RefSysStatus only turns the patrol toward a hit.
     tree = ast.parse(open(NODE_SRC).read())
     subscribed = [call.args[0].id for call in ast.walk(tree)
                   if isinstance(call, ast.Call)
                   and getattr(call.func, 'attr', None) == 'create_subscription']
-    assert sorted(subscribed) == ['RobotPose', 'TargetState']
+    assert sorted(subscribed) == ['RefSysStatus', 'RobotPose', 'TargetState']
 
 
 def _exit(horizon, shooter_vel):
@@ -485,3 +486,46 @@ def test_plan_moving_shooter_chase_lands_on_a_facing_panel():
                                 center[1] + RADII[k % 2] * math.sin(yaw_k), 0.3))
                for k in range(4) for yaw_k in [state[6] + w * t_impact + k * math.pi / 2.0])
     assert miss < 1e-6
+
+
+# ── patrol ────────────────────────────────────────────────────────────────
+
+def test_patrol_starts_at_once_with_no_target_ever():
+    assert Patrol(-2.0, 0.2, 0.5).step(10.0, 1.0) == pytest.approx(1.0)
+
+
+def test_patrol_waits_after_s_then_starts_from_the_gun_yaw():
+    p = Patrol(-2.0, 0.2, 0.5)
+    p.target_seen(10.0)
+    assert p.step(10.1, 1.0) is None
+    assert p.step(10.25, 1.0) == pytest.approx(1.0)
+
+
+def test_patrol_sweeps_at_its_rate_from_its_own_yaw_and_wraps():
+    p = Patrol(-2.0, 0.2, 0.5)
+    p.step(0.0, -3.0)
+    # The command integrates on itself, so a lagging gun can't stall it.
+    assert p.step(0.1, 0.0) == pytest.approx(-3.2 + 2.0 * math.pi)
+
+
+def test_patrol_faces_a_hit_for_hit_turn_s_then_sweeps_on_from_it():
+    p = Patrol(-2.0, 0.2, 0.5)
+    p.step(0.0, 0.0)
+    p.hit(2.0, 0.05)
+    assert p.step(0.1, 0.0) == pytest.approx(2.0)
+    assert p.step(0.5, 1.0) == pytest.approx(2.0)
+    assert p.step(0.6, 2.0) == pytest.approx(2.0 - 0.2)
+
+
+def test_patrol_restarts_from_the_gun_after_a_target():
+    p = Patrol(-2.0, 0.2, 0.5)
+    p.step(0.0, 0.0)
+    p.step(1.0, 0.0)
+    p.target_seen(2.0)
+    assert p.step(2.3, 0.7) == pytest.approx(0.7)
+
+
+def test_patrol_point_is_range_out_along_yaw_and_pitched_down():
+    x, y, z = patrol_point((1.0, 2.0, 0.4), math.pi / 2, 3.0, 0.05)
+    assert (x, y) == pytest.approx((1.0, 5.0))
+    assert z == pytest.approx(0.4 - 3.0 * math.tan(0.05))

@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dji_serial_bridge.msg import CVTarget, RobotPose, TargetState
+import math
+
+from dji_serial_bridge.msg import CVTarget, RefSysStatus, RobotPose, TargetState
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -21,7 +23,12 @@ from std_msgs.msg import Header
 import tf2_ros
 from tf2_ros import TransformException
 
-from thornbots_pkg.point_to_cv_target_core import LatencyStat, plan_shot
+from thornbots_pkg.point_to_cv_target_core import (
+    LatencyStat, Patrol, patrol_point, plan_shot,
+)
+
+# RefSysStatus.delta_angle_got_hit_in when not hit (HitRing::PLACEHOLDER_ANGLE).
+NOT_HIT = 123.0
 
 
 def _quat_to_rot(x, y, z, w):
@@ -47,9 +54,9 @@ class PointToCvTarget(Node):
     held by the MCB as we move, carrying its own fire decision), via
     point_to_cv_target_core.plan_shot. Each cv_target_publish_rate_hz tick
     aims, and sets fire/delay_ms (at most fire_rate_hz) with the delay that
-    times a spinning target's panel to the shot. Liveness, confidence and
-    track id come off TargetState too; it subscribes nothing else but
-    RobotPose. See README.md's ### point_to_cv_target.py Notes.
+    times a spinning target's panel to the shot. With no target it patrols:
+    sweeps, or faces the last hit off RefSysStatus, never firing. See
+    README.md's ### point_to_cv_target.py Notes.
     """
 
     def __init__(self):
@@ -86,6 +93,19 @@ class PointToCvTarget(Node):
         # (off: the Jetson owns where it looks), and turn toward a hit (on).
         self.declare_parameter('type_c_based_patrol', False)
         self.declare_parameter('turn_to_hit', True)
+        # Jetson patrol with no target, mirroring the MCB's own (README.md):
+        # sweep at patrol_rate_rad_s (MCB's -0.002 rad per 1 ms cycle), a
+        # point patrol_range_m out and patrol_pitch_down_rad below level.
+        self.declare_parameter('patrol_enabled', True)
+        self.declare_parameter('patrol_after_s', 0.2)
+        self.declare_parameter('patrol_rate_rad_s', -2.0)
+        self.declare_parameter('patrol_range_m', 3.0)
+        self.declare_parameter('patrol_pitch_down_rad', 0.05)
+        # Face a hit for hit_turn_s: hit yaw = gun yaw + sign * delta angle.
+        self.declare_parameter('hit_turn_s', 0.5)
+        self.declare_parameter('hit_angle_sign', -1.0)
+        self.declare_parameter('muzzle_frame', 'muzzle')
+        self.declare_parameter('ref_sys_topic', '/dji_serial_bridge/ref_sys')
         # Bench only: a Header per publish tick, sent or not, for lockstep.
         self.declare_parameter('tick_topic', '')
 
@@ -112,6 +132,14 @@ class PointToCvTarget(Node):
         self.chase_margin_s = float(gp('chase_margin_s').value)
         self.type_c_based_patrol = bool(gp('type_c_based_patrol').value)
         self.turn_to_hit = bool(gp('turn_to_hit').value)
+        self.patrol = (Patrol(float(gp('patrol_rate_rad_s').value),
+                              float(gp('patrol_after_s').value),
+                              float(gp('hit_turn_s').value))
+                       if gp('patrol_enabled').value else None)
+        self.patrol_range_m = float(gp('patrol_range_m').value)
+        self.patrol_pitch_down_rad = float(gp('patrol_pitch_down_rad').value)
+        self.hit_angle_sign = float(gp('hit_angle_sign').value)
+        self.muzzle_frame = gp('muzzle_frame').value
 
         self.tf_buffer = tf2_ros.Buffer()
         # /tf shares this node's executor, so every lookup below is
@@ -130,6 +158,11 @@ class PointToCvTarget(Node):
                          if tick_topic else None)
         self.robot_pose_sub = self.create_subscription(
             RobotPose, self.robot_pose_topic, self.on_robot_pose, qos_profile_sensor_data)
+        if self.patrol is not None and self.turn_to_hit:
+            # Matches dji_serial_bridge_node's ~/ref_sys SensorDataQoS publisher.
+            self.ref_sys_sub = self.create_subscription(
+                RefSysStatus, gp('ref_sys_topic').value, self.on_ref_sys,
+                qos_profile_sensor_data)
 
         self.watchdog_timer = self.create_timer(0.1, self.check_timeout)
         self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.on_publish_tick)
@@ -152,7 +185,9 @@ class PointToCvTarget(Node):
             f'firmware_latency_s={self.firmware_latency_s} gimbal_lag_s={self.gimbal_lag_s}\n'
             f'  target_timeout_s={self.target_timeout_s:.2f}\n'
             f'  fire <= {self.fire_rate_hz:.2f}Hz, spin-timed above '
-            f'{self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold}'
+            f'{self.spin_enter_rad_s} rad/s, confidence >= {self.fire_confidence_threshold}\n'
+            f'  patrol: ' + (f'{self.patrol.rate_rad_s} rad/s, turn_to_hit={self.turn_to_hit}'
+                             if self.patrol is not None else 'off')
         )
 
     def on_target_state(self, msg):
@@ -174,6 +209,40 @@ class PointToCvTarget(Node):
 
     def on_robot_pose(self, msg):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
+
+    def on_ref_sys(self, msg):
+        delta = msg.delta_angle_got_hit_in
+        if delta == NOT_HIT or not abs(delta) <= math.pi + 1e-3:
+            return
+        gun = self._gun_pose()
+        if gun is None:
+            return
+        hit_yaw = gun[1] + self.hit_angle_sign * delta
+        self.patrol.hit(hit_yaw, self.get_clock().now().nanoseconds / 1e9)
+        self.get_logger().info(
+            f'hit at {delta:+.2f} rad from the gun: facing odom yaw {hit_yaw:+.2f}')
+
+    def _gun_pose(self):
+        """Return the muzzle's newest odom (position, yaw), or None."""
+        try:
+            tf = self.tf_buffer.lookup_transform(self.odom_frame, self.muzzle_frame, Time())
+        except TransformException as ex:
+            self.get_logger().error(
+                f'TF lookup {self.odom_frame}<-{self.muzzle_frame} failed: {ex}',
+                throttle_duration_sec=1.0)
+            return None
+        t, q = tf.transform.translation, tf.transform.rotation
+        R = _quat_to_rot(q.x, q.y, q.z, q.w)
+        return (t.x, t.y, t.z), math.atan2(R[1][0], R[0][0])
+
+    def _patrol_point(self, now):
+        gun = self._gun_pose()
+        if gun is None:
+            return None
+        yaw = self.patrol.step(now.nanoseconds / 1e9, gun[1])
+        if yaw is None:
+            return None
+        return patrol_point(gun[0], yaw, self.patrol_range_m, self.patrol_pitch_down_rad)
 
     def _fire_decision(self, delay_s, now):
         """
@@ -210,7 +279,12 @@ class PointToCvTarget(Node):
     def on_publish_tick(self):
         now = self.get_clock().now()
         aim = self._compute_aim_point() if self.target_active else None
-        if aim is not None:  # no target: send nothing, the MCB holds still
+        if aim is not None and self.patrol is not None:
+            self.patrol.target_seen(now.nanoseconds / 1e9)
+        elif aim is None and self.patrol is not None:
+            point = self._patrol_point(now)
+            aim = (point, None) if point is not None else None
+        if aim is not None:  # no target and no patrol: send nothing, the MCB holds still
             aim_pos, fire_delay_s = aim
             out = CVTarget()
             out.header.stamp = now.to_msg()

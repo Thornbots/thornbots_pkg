@@ -178,6 +178,12 @@ def generate_launch_description():
         description='point_to_cv_target: /cv/target publish rate, '
         'decoupled from the ~60Hz detection rate.'
     )
+    patrol_enabled_arg = DeclareLaunchArgument(
+        'patrol_enabled', default_value='true',
+        description='point_to_cv_target: with no target, sweep the gun and '
+        'face hits off ref_sys, never firing. false sends nothing between '
+        'targets.'
+    )
 
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
@@ -313,6 +319,10 @@ def generate_launch_description():
             'cv_target_publish_rate_hz': ParameterValue(
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
+            'patrol_enabled': ParameterValue(
+                LaunchConfiguration('patrol_enabled'), value_type=bool
+            ),
+            'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
     )
@@ -457,7 +467,7 @@ def generate_launch_description():
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
-        cv_target_publish_rate_hz_arg,
+        cv_target_publish_rate_hz_arg, patrol_enabled_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
