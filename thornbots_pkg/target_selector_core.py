@@ -24,6 +24,19 @@ clustering-rule tradeoff and scoring history.
 import math
 
 
+def team_from_ref_sys(robot_id, is_on_blue_team):
+    """
+    Return our team colour from a RefSysStatus: True blue, False red, None unknown.
+
+    robot_id 0 is taproot's RobotId::INVALID, what the MCB sends before the
+    referee assigns an ID (or with no referee at all). Its blue bit then reads
+    0, so without this check no colour would look like red.
+    """
+    if robot_id == 0:
+        return None
+    return bool(is_on_blue_team)
+
+
 def is_excluded_by_team(class_id, is_blue_team):
     """
     Report whether class_id belongs to our own team.

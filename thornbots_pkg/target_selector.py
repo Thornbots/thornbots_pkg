@@ -43,7 +43,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from thornbots_pkg.target_selector_core import (
     centrality_3d, cluster_centroid, compute_score, eligible,
-    group_panels, RobotHysteresis,
+    group_panels, RobotHysteresis, team_from_ref_sys,
 )
 
 
@@ -83,7 +83,7 @@ class TargetSelector(Node):
             switch_margin=float(gp('switch_margin').value),
             switch_hold_frames=int(gp('switch_hold_frames').value))
 
-        self.is_blue_team = None  # None until first RefSysStatus
+        self.is_blue_team = None  # None until a RefSysStatus carries a robot ID
 
         self.pub = self.create_publisher(PanelDetection, panel_topic, 10)
         self.robot_panels_pub = self.create_publisher(
@@ -106,11 +106,15 @@ class TargetSelector(Node):
         )
 
     def on_ref_sys(self, msg):
-        new_val = bool(msg.is_on_blue_team)
-        if self.is_blue_team is None or self.is_blue_team != new_val:
-            self.get_logger().info(
-                f"Team colour set to {'BLUE' if new_val else 'RED'} "
-                f"(excluding class IDs {'0-3' if new_val else '4-7'})")
+        new_val = team_from_ref_sys(msg.robot_id, msg.is_on_blue_team)
+        if new_val != self.is_blue_team:
+            if new_val is None:
+                self.get_logger().info(
+                    'Team colour unknown (robot_id 0): passing all detections through')
+            else:
+                self.get_logger().info(
+                    f"Team colour set to {'BLUE' if new_val else 'RED'} "
+                    f"(excluding class IDs {'0-3' if new_val else '4-7'})")
         self.is_blue_team = new_val
 
     def on_array(self, msg):
@@ -133,7 +137,7 @@ class TargetSelector(Node):
         if not candidates:
             if self.is_blue_team is None and msg.detections:
                 self.get_logger().warn(
-                    f"No RefSysStatus on '{self.ref_sys_topic}' yet -- "
+                    f"No robot ID on '{self.ref_sys_topic}' yet -- "
                     'team colour unknown, passing all detections through',
                     throttle_duration_sec=5.0)
             return

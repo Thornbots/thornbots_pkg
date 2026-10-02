@@ -31,8 +31,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from thornbots_pkg.target_selector_core import (  # noqa: E402
     centrality_3d, cluster_centroid, compute_score, eligible,
-    group_panels, is_excluded_by_team, RobotHysteresis,
+    group_panels, is_excluded_by_team, RobotHysteresis, team_from_ref_sys,
 )
+
+
+# ── team_from_ref_sys ────────────────────────────────────────────────────
+
+def test_team_unknown_without_robot_id_even_if_blue_bit_reads_red():
+    assert team_from_ref_sys(0, False) is None
+    assert team_from_ref_sys(0, True) is None
+
+
+def test_team_from_blue_bit_once_robot_id_is_set():
+    assert team_from_ref_sys(7, True) is True
+    assert team_from_ref_sys(7, False) is False
 
 
 # ── is_excluded_by_team ──────────────────────────────────────────────────
