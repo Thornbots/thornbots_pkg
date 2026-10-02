@@ -213,9 +213,10 @@ class PointToCvTarget(Node):
 
         out.x, out.y, out.z = (float(v) for v in aim_pos)
         out.confidence = float(self.latest_state.confidence)
-        out.lead_applied = lead_applied
-        out.track_valid = track_valid
-        out.fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
+        fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
+        out.flags = ((CVTarget.FLAG_LEAD_APPLIED if lead_applied else 0)
+                     | (CVTarget.FLAG_TRACK_VALID if track_valid else 0)
+                     | (CVTarget.FLAG_FIRE if fire else 0))
         self.pub.publish(out)
 
     def _compute_aim_point(self):
