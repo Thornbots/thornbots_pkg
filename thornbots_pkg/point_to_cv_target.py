@@ -82,6 +82,10 @@ class PointToCvTarget(Node):
         # < 0: shotgating, hold the center line and time the fire. README.md.
         self.declare_parameter('chase_settle_s', 0.0)
         self.declare_parameter('chase_margin_s', 0.0)
+        # Sent with every aim point: whether the MCB may patrol on its own,
+        # and turn toward where it got hit.
+        self.declare_parameter('type_c_based_patrol', True)
+        self.declare_parameter('turn_to_hit', True)
         # Bench only: a Header per publish tick, sent or not, for lockstep.
         self.declare_parameter('tick_topic', '')
 
@@ -106,6 +110,8 @@ class PointToCvTarget(Node):
         chase_settle_s = float(gp('chase_settle_s').value)
         self.chase_settle_s = chase_settle_s if chase_settle_s >= 0.0 else None
         self.chase_margin_s = float(gp('chase_margin_s').value)
+        self.type_c_based_patrol = bool(gp('type_c_based_patrol').value)
+        self.turn_to_hit = bool(gp('turn_to_hit').value)
 
         self.tf_buffer = tf2_ros.Buffer()
         # /tf shares this node's executor, so every lookup below is
@@ -211,6 +217,8 @@ class PointToCvTarget(Node):
             out.header.frame_id = self.odom_frame
             out.x, out.y, out.z = (float(v) for v in aim_pos)
             out.fire, out.delay_ms = self._fire_decision(fire_delay_s, now)
+            out.type_c_based_patrol = self.type_c_based_patrol
+            out.turn_to_hit = self.turn_to_hit
             self.pub.publish(out)
         if self.tick_pub is not None:
             self.tick_pub.publish(Header(stamp=now.to_msg()))
