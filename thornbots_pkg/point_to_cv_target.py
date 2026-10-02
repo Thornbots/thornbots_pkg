@@ -71,7 +71,7 @@ class PointToCvTarget(Node):
         self.declare_parameter('gimbal_lag_s', 0.05)
         self.declare_parameter('v_muzzle', 25.0)
         self.declare_parameter('tof_iterations', 3)
-        self.declare_parameter('cv_target_publish_rate_hz', 30.0)
+        self.declare_parameter('cv_target_publish_rate_hz', 40.0)
         # Spin mode (shotgating, or chase) above enter, back to panel
         # aim below exit, in |yaw_rate| rad/s.
         self.declare_parameter('spin_enter_rad_s', 3.0)
@@ -82,9 +82,9 @@ class PointToCvTarget(Node):
         # < 0: shotgating, hold the center line and time the fire. README.md.
         self.declare_parameter('chase_settle_s', 0.0)
         self.declare_parameter('chase_margin_s', 0.0)
-        # Sent with every aim point: whether the MCB may patrol on its own,
-        # and turn toward where it got hit.
-        self.declare_parameter('type_c_based_patrol', True)
+        # Sent with every aim point: whether the MCB may patrol on its own
+        # (off: the Jetson owns where it looks), and turn toward a hit (on).
+        self.declare_parameter('type_c_based_patrol', False)
         self.declare_parameter('turn_to_hit', True)
         # Bench only: a Header per publish tick, sent or not, for lockstep.
         self.declare_parameter('tick_topic', '')
