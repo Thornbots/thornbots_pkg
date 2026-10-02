@@ -429,8 +429,8 @@ tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 
 - No usable state, or TF fails: zero confidence, with a throttled `ERROR` on
   TF failure. Usable means present and younger than `target_timeout_s`.
-- `valid == False`: raw `panel` position, `lead_applied=False`,
-  `track_valid=False`, no fire. No extrapolation off an unconverged track.
+- `valid == False`: raw `panel` position, `flags` 0 (no lead, no
+  valid track, no fire). No extrapolation off an unconverged track.
 - `valid == True`: `plan_shot()`'s aim point in odom. See below.
 
 `plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
