@@ -92,11 +92,20 @@ def generate_launch_description():
         'nodes or the camera launch, which keep the container default.'
     )
 
+    # mapping starts blank by default, so its map frame is the boot pose.
     load_map_arg = DeclareLaunchArgument(
-        'load_map', default_value='true',
+        'load_map', default_value=PythonExpression(
+            ["'false' if '", LaunchConfiguration('localization_mode'),
+             "' == 'mapping' else 'true'"]),
         description='Forwarded to sentry_localization -- see '
         "sentry_localization's localization.launch.py for what "
-        'this controls.'
+        'this controls. Default false under mapping, else true.'
+    )
+    autosave_map_arg = DeclareLaunchArgument(
+        'autosave_map', default_value=LaunchConfiguration('real_hardware'),
+        description='Forwarded to sentry_localization: under mapping, save '
+        'the map every 30 s to /workspaces/isaac_ros-dev/maps/<boot time>/. '
+        'Default real_hardware.'
     )
     map_file_arg = DeclareLaunchArgument(
         'map_file', default_value=os.path.join(
@@ -112,7 +121,7 @@ def generate_launch_description():
     )
 
     localization_mode_arg = DeclareLaunchArgument(
-        'localization_mode', default_value='amcl',
+        'localization_mode', default_value='mapping',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
         "map->odom. See sentry_localization's "
@@ -436,6 +445,7 @@ def generate_launch_description():
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
+            'autosave_map': LaunchConfiguration('autosave_map'),
         }.items(),
     )
 
@@ -443,7 +453,7 @@ def generate_launch_description():
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, dds_transport_arg,
-        load_map_arg, map_file_arg, localization_mode_arg,
+        localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,

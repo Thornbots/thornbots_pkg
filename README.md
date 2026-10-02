@@ -75,8 +75,10 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 `real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`),
 and setting it false keeps the launch off the real serial devices.
 
-`localization_mode` (`amcl` default, `slam`, `mapping`, `none`) picks the
-`map->odom` owner. `use_rf2o` (default `true`) picks whether `odom->root` is
+`localization_mode` (`mapping` default since 2026-10-02, `slam`, `amcl`,
+`none`) picks the `map->odom` owner. Under `mapping`, `load_map` defaults
+false (a blank map from the boot pose) and `autosave_map` defaults to
+`real_hardware`. `use_rf2o` (default `true`) picks whether `odom->root` is
 EKF-fused, with any mode; on `true` it also starts `rf2o_laser_odometry_node`,
 which scan-matches `/scan` into the `/scan_odom` the EKF fuses with `/odom`.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
