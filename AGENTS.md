@@ -62,9 +62,9 @@ front-run firing logic unless asked.
   Type-C driver.
 - **Firing logic is partial.** `point_to_cv_target` aims and fires per
   publish tick, at most `fire_rate_hz`, and times shots against a spinning
-  target with `CVTarget.delay_ms`. No HP/heat/power gating, and the MCB
-  firmware's `CVData` struct hasn't grown the merged fire fields yet, so the
-  timing only works in sim.
+  target with `CVTarget.delay_ms`. No HP/heat/power gating. MCBV3
+  `position-based-cv` acts on the fire fields (fires `delay_ms` after
+  receipt when flags bit 0 is set); not yet timed on the sentry.
 - **`point_to_cv_target` patrols when there's no target** (2026-10-02,
   `patrol_enabled`, README.md). It never fires on a patrol frame, but any
   firmware that fires on every frame would fire all through the patrol;
