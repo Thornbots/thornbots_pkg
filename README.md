@@ -158,7 +158,9 @@ source. Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in
 `RobotPose.chassis_yaw` (0 until the firmware sends it) goes out only as the
 URDF's `chassis_yaw` joint, which turns `body`, the wheels and the armor
 under `root`. The head hangs off `root` with `headlink` at the MCB's world
-head yaw, so `root->lidar` and `root->camera` don't depend on chassis yaw,
+head yaw (both joints turn about +z, counter-clockwise from above like
+`head_yaw`; they turned about -z until 2026-10-03, which mirrored the camera
+whenever the gimbal was off zero), so `root->lidar` and `root->camera` don't depend on chassis yaw,
 and a spinning chassis can't reach localization. `vel_x/vel_y` are the
 MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
