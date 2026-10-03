@@ -248,8 +248,8 @@ class PointToCvTarget(Node):
         """
         Return (fire, delay_ms) for this tick's CVTarget.
 
-        The delay is measured from the message's own header.stamp, so aim
-        and fire cross the wire as one frame -- see UART_PROTOCOL.md.
+        The MCB runs the delay from receiving this frame, so aim and fire
+        cross the wire as one frame -- see UART_PROTOCOL.md.
         Rate-limited to fire_rate_hz; delay_ms is clamped to the uint16 field.
         """
         if delay_s is None or self.fire_rate_hz <= 0.0:

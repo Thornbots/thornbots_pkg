@@ -46,7 +46,8 @@ front-run firing logic unless asked.
 
 - **The URDF is now `sentry_v2`'s frames and meshes** (`meshes/sentry_v2/`),
   with a `muzzle` frame on `head_pitch`. Wheel and suspension joints are
-  fixed, since `/joint_states` only carries `headlink` and `headpitch`.
+  fixed, since `/joint_states` only carries `chassis_yaw`, `headlink` and
+  `headpitch`.
 - **Measure the real lidar's blind sector.** `lidar_self_filter`'s 0.09-1.41
   rad comes from the CAD (README.md), and nobody has measured where the real
   RPLIDAR's 0 deg points relative to the gun. Capture `/scan_raw` on the
