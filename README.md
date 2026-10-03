@@ -135,7 +135,7 @@ colcon test --packages-select thornbots_pkg && colcon test-result --verbose
 gating and the still hypothesis; `test_target_selector.py` scoring,
 centrality, grouping and hysteresis; `test_point_to_cv_target.py` the
 intercept solve, shot planner, latency stat, and the node's subscriptions:
-`TargetState` and `RobotPose`, nothing else. The pytest run also picks up
+`TargetState`, `RobotPose` and `RefSysStatus` (patrol only), nothing else. The pytest run also picks up
 the ament copyright, flake8 and pep257 checks.
 
 The localization drift suite is `ros2 launch sim
@@ -289,8 +289,9 @@ spin for seconds. `PanelDetection.corners` stay unused:
 `roi_depth_node.cpp`'s `deprojectDetection()` puts all four at one
 `mean_depth_m`, so real corners carry no panel tilt.
 
-Noise: `R` stddev is `meas_noise_base_m + meas_noise_range_coeff * range_m^2`
-(depth error grows with z^2). `process_noise_accel` (2.0 m/s^2) drives the
+Noise: `R`'s stddev along the camera ray is
+`meas_noise_base_m + meas_noise_range_coeff * range_m^2` (depth error grows
+with z^2); across it, `meas_noise_lateral_m` (0.04). `process_noise_accel` (2.0 m/s^2) drives the
 centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
 `process_noise_radius` (0.02) the radius, which clamps to 0.18-0.45m. These
 came from a sweep against an emulator-shaped target; the higher yaw
@@ -475,8 +476,9 @@ no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
 aims at the current estimate and fires untimed.
 
 `fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
-MCB in the same frame as the aim it was solved for, measured from that
-frame's `header.stamp` (see `ros2_dji_serial_bridge/UART_PROTOCOL.md`). The
+MCB in the same frame as the aim it was solved for, and the MCB runs
+`delay_ms` from receiving that frame (no stamp crosses the wire; see
+`ros2_dji_serial_bridge/UART_PROTOCOL.md`). The
 firmware struct still has to grow to match before hardware timing works.
 
 Both horizons start from this tick's `now - state.header.stamp`, not
