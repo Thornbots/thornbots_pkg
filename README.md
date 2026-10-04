@@ -527,8 +527,7 @@ Why the Jetson and not the MCB: a patrol frame keeps a `CV_TARGET` going
 between targets, so the MCB hears the flags all the time and never patrols
 on its own. MCBV3#78 found the other way broken: the MCB only patrols with
 no frame coming, the one time it hears no flags. A patrol frame is just an
-aim point with `fire` clear, so the wire is unchanged. That only holds if
-the firmware fires on `fire` alone (MCBV3#77). Under today's rule (any frame
-within 60 deg of the gun, bridge README item 3) it would fire all through
-the patrol. The aiming benches and E1 run with `patrol_enabled:=false`,
+aim point with `fire` clear, so the wire is unchanged. That holds because
+MCBV3 `position-based-cv` fires on `fire` alone (MCBV3#77,
+`AutoAimAndFireCommand.cpp`). The aiming benches and E1 run with `patrol_enabled:=false`,
 since E1's scorer fires on every frame by that rule.
