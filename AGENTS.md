@@ -71,9 +71,10 @@ front-run firing logic unless asked.
   run `patrol_enabled:=false` until MCBV3#77 fires on the bit. Not checked
   on the robot: the sweep rate, which way `hit_angle_sign` should go, and
   whether YOLO picks up targets mid-sweep.
-- **`CVTarget` is an `odom` point since 2026-09-27**, and the firmware
-  still reads it as `root`. Which `odom` the MCB can share is open:
-  `../CV_SPLIT_PLAN.md` W.3's open issues.
+- **`mcb_x_right` (default `real_hardware`) works around the MCB's x-right
+  odometry** (README.md `### MCB axes`). Graph-checked in the container,
+  not on the robot. Turn it off in the same change that moves to a
+  firmware sending REP-105 POSE, or the aim turns 90 deg.
 - **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
   UART legs (USB-serial latency timer included) and the MCB's RX poll on
   the robot, then set `uart_latency_s`, `mcb_read_delay_s` and

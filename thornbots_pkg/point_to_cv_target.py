@@ -23,6 +23,7 @@ from std_msgs.msg import Header
 import tf2_ros
 from tf2_ros import TransformException
 
+from thornbots_pkg.mcb_axes import from_mcb
 from thornbots_pkg.point_to_cv_target_core import (
     LatencyStat, Patrol, patrol_point, plan_shot,
 )
@@ -64,6 +65,7 @@ class PointToCvTarget(Node):
 
         self.declare_parameter('target_state_topic', '/cv/target_state')
         self.declare_parameter('robot_pose_topic', '/dji_serial_bridge/pose')
+        self.declare_parameter('mcb_x_right', False)  # as pose_translator's
         self.declare_parameter('output_topic', '/cv/target')
         self.declare_parameter('target_timeout_s', 0.5)
         self.declare_parameter('fire_confidence_threshold', 0.5)
@@ -112,6 +114,7 @@ class PointToCvTarget(Node):
         gp = self.get_parameter
         self.target_state_topic = gp('target_state_topic').value
         self.robot_pose_topic = gp('robot_pose_topic').value
+        self.mcb_x_right = gp('mcb_x_right').value
         self.output_topic = gp('output_topic').value
         self.target_timeout_s = float(gp('target_timeout_s').value)
         self.fire_confidence_threshold = float(gp('fire_confidence_threshold').value)
@@ -208,7 +211,10 @@ class PointToCvTarget(Node):
                 throttle_duration_sec=10.0)
 
     def on_robot_pose(self, msg):
-        self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
+        vx, vy = msg.vel_x, msg.vel_y
+        if self.mcb_x_right:
+            vx, vy = from_mcb(vx, vy)
+        self.chassis_vel_root = (vx, vy, 0.0)
 
     def on_ref_sys(self, msg):
         delta = msg.delta_angle_got_hit_in

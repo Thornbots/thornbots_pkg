@@ -84,6 +84,10 @@ which scan-matches `/scan` into the `/scan_odom` the EKF fuses with `/odom`.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 `sentry_localization`.
 
+`mcb_x_right` (default `real_hardware`) says POSE's x/y is the MCB's x
+right, y forward, as MCBV3 `position-based-cv` `0885a69` sends it. Set it
+false once the firmware sends REP-105 (`### MCB axes` below).
+
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=none use_rf2o:=false
@@ -165,6 +169,26 @@ and a spinning chassis can't reach localization. `vel_x/vel_y` are the
 MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 `root` would mean freeing rf2o's heading and fusing a yaw into the EKF.
+
+### MCB axes
+
+MCBV3 `position-based-cv` `0885a69` keeps odometry x right, y forward of
+the boot heading, and its aim reads `CV_TARGET` x/y less that odometry as
+REP-105 (`../ros2_dji_serial_bridge/README.md` "Where the firmware
+stands"). With `mcb_x_right` true, `mcb_axes.py` converts at every edge:
+
+- `pose_translator` and `point_to_cv_target` turn POSE x/y and velocity to
+  REP-105 (`(y, -x)`), so `/odom`, rf2o's prior and the EKF agree.
+- `mcb_relay` sends `RELOCALIZE` back in the MCB's axes (`(-y, x)`).
+- `mcb_relay` sends the aim point `t` as `t - o + (-o.y, o.x)`, with `o`
+  our `/odom` extrapolated to when the MCB reads it. The firmware's
+  `t - odometry` is then the REP-105 offset `t - o`. Its error is our
+  `/odom` against the MCB's odometry at that moment, mostly the 11 ms
+  between POSE frames. With no `/odom` in the last 0.1 s it drops the frame.
+
+Once the firmware fix ("Asked" item 1) lands, POSE is REP-105 and the
+firmware subtracts it as is: set `mcb_x_right` false. Leaving it true
+then turns everything 90 deg.
 
 ### target_selector.py
 
@@ -380,8 +404,8 @@ using no TF and no backend assumptions (`mcb_relay_core.Relocalizer`).
 The bridge packs the point into a `RelocalizePayload` and the MCB resets its
 odometry origin.
 
-`cv_target` is a straight republish, and carries the fire decision with the
-aim point it was solved for.
+`cv_target` carries the fire decision with the aim point it was solved
+for: a straight republish, shifted only under `mcb_x_right` (`### MCB axes`).
 
 ### lidar_self_filter.py
 

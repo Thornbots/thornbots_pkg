@@ -59,6 +59,7 @@ def generate_launch_description():
         "arg, they're the same knob."
     )
     real_hardware = LaunchConfiguration('real_hardware')
+    mcb_x_right = ParameterValue(LaunchConfiguration('mcb_x_right'), value_type=bool)
     use_sim_time = PythonExpression(
         ["'false' if '", real_hardware, "' == 'true' else 'true'"]
     )
@@ -106,6 +107,13 @@ def generate_launch_description():
         description='Forwarded to sentry_localization: under mapping, save '
         'the map every 30 s to /workspaces/isaac_ros-dev/maps/<boot time>/. '
         'Default real_hardware.'
+    )
+    mcb_x_right_arg = DeclareLaunchArgument(
+        'mcb_x_right', default_value=LaunchConfiguration('real_hardware'),
+        description="POSE x/y is the MCB's x right, y forward (MCBV3 "
+        'position-based-cv 0885a69): pose_translator, point_to_cv_target and '
+        'mcb_relay convert to and from REP-105. False once the firmware sends '
+        'REP-105. Default real_hardware. See README.md.'
     )
     map_file_arg = DeclareLaunchArgument(
         'map_file', default_value=os.path.join(
@@ -284,6 +292,7 @@ def generate_launch_description():
         executable='mcb_relay',
         name='mcb_relay',
         output='screen',
+        parameters=[{'mcb_x_right': mcb_x_right}],
         condition=IfCondition(real_hardware),
         additional_env=shm_env,
     )
@@ -304,6 +313,7 @@ def generate_launch_description():
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('odom_frame'),
+            'mcb_x_right': mcb_x_right,
             'lead_enabled': ParameterValue(
                 LaunchConfiguration('lead_enabled'), value_type=bool
             ),
@@ -412,6 +422,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
+            'mcb_x_right': mcb_x_right,
         }],
         additional_env=udp_env,
     )
@@ -461,6 +472,7 @@ def generate_launch_description():
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
+        mcb_x_right_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
