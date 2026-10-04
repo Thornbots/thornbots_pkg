@@ -113,11 +113,10 @@ def generate_launch_description():
             'map', 'clean_map'
         ),
         description='Forwarded to sentry_localization -- path (no '
-        'extension) to the map to use. Default is clean_map; '
-        'pass map_file:=<sentry_localization share>/map/ARCC26 '
-        'explicitly for localization_mode:=slam/mapping until '
-        'clean_map has a real posegraph (see '
-        "sentry_localization's localization.launch.py)."
+        'extension) to the map to use, in the field frame. Default is '
+        'clean_map, an image only: localization_mode:=slam (or mapping '
+        'with load_map:=true) needs the map_file of a pose graph a '
+        "mapping run saved (see sentry_localization's localization.launch.py)."
     )
 
     localization_mode_arg = DeclareLaunchArgument(
