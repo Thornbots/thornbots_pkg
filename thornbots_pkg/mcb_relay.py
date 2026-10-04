@@ -20,7 +20,6 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 
-from thornbots_pkg.mcb_axes import aim_to_mcb, to_mcb
 from thornbots_pkg.mcb_relay_core import Relocalizer
 
 
@@ -39,7 +38,6 @@ class McbRelay(Node):
     The aim point carries the fire decision (fire, delay_ms), so this is the
     only CV relay -- it is what reaches dji_serial_bridge_node and the real
     launcher hardware.
-    mcb_x_right: both go out in the MCB's odometry axes (mcb_axes.py).
     """
 
     def __init__(self):
@@ -59,7 +57,6 @@ class McbRelay(Node):
         self.declare_parameter('hold_off_s', 0.3)  # after a send, for /odom to show it
         self.declare_parameter('cv_target_input_topic', '/cv/target')
         self.declare_parameter('cv_target_output_topic', '/dji_serial_bridge/cv_target')
-        self.declare_parameter('mcb_x_right', False)  # as pose_translator's
 
         localization_odom_topic = self.get_parameter('localization_odom_topic').value
         raw_odom_topic = self.get_parameter('raw_odom_topic').value
@@ -73,7 +70,6 @@ class McbRelay(Node):
             latency_std_s=gp('latency_std_s').value, hold_off_s=gp('hold_off_s').value)
         cv_target_in = self.get_parameter('cv_target_input_topic').value
         cv_target_out = self.get_parameter('cv_target_output_topic').value
-        self._x_right = self.get_parameter('mcb_x_right').value
 
         self.relocalize_pub = self.create_publisher(PointStamped, relocalize_out, 10)
         self.raw_odom_sub = self.create_subscription(
@@ -85,30 +81,15 @@ class McbRelay(Node):
         self.cv_target_pub = self.create_publisher(
             CVTarget, cv_target_out, qos_profile_sensor_data)
         self.cv_target_sub = self.create_subscription(
-            CVTarget, cv_target_in, self._cv_target_callback, qos_profile_sensor_data)
+            CVTarget, cv_target_in, self.cv_target_pub.publish, qos_profile_sensor_data)
 
         self.get_logger().info(
             f'mcb_relay ready\n'
             f'  {localization_odom_topic} vs {raw_odom_topic} -> {relocalize_out}'
             f' (threshold={self._relocalizer.error_threshold_m}m,'
             f' max_std={self._relocalizer.max_std_m}m)\n'
-            f'  {cv_target_in} -> {cv_target_out} (aim + fire decision)\n'
-            f'  mcb_x_right={self._x_right}'
+            f'  {cv_target_in} -> {cv_target_out} (aim + fire decision)'
         )
-
-    def _cv_target_callback(self, msg):
-        if self._x_right:
-            # The MCB subtracts its odometry as it reads the frame.
-            rel = self._relocalizer
-            o = rel.odom_at(self.get_clock().now().nanoseconds * 1e-9
-                            + rel.uart_latency_s + rel.mcb_read_delay_s)
-            if o is None:
-                self.get_logger().warn(
-                    'no recent /odom: dropping cv_target, the MCB would '
-                    'aim it in the wrong axes', throttle_duration_sec=1.0)
-                return
-            msg.x, msg.y = aim_to_mcb(msg.x, msg.y, *o)
-        self.cv_target_pub.publish(msg)
 
     def _raw_odom_callback(self, msg):
         # Twist is in the child frame; the chassis holds its heading, so
@@ -131,7 +112,7 @@ class McbRelay(Node):
         point = PointStamped()
         point.header.stamp = Time(nanoseconds=int(apply_t * 1e9)).to_msg()
         point.header.frame_id = msg.header.frame_id
-        point.point.x, point.point.y = to_mcb(x, y) if self._x_right else (x, y)
+        point.point.x, point.point.y = x, y
         self.relocalize_pub.publish(point)
         self.get_logger().info(
             f'Localization {error:.3f}m (std {std:.3f}m) from raw odom - sent '

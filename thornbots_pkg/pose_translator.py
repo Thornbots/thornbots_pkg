@@ -20,8 +20,6 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
-from thornbots_pkg.mcb_axes import from_mcb
-
 
 class PoseTranslator(Node):
     """
@@ -41,10 +39,6 @@ class PoseTranslator(Node):
 
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'root')
-        # POSE x/y in the MCB's x right, y forward (MCBV3 0885a69); off for
-        # REP-105 senders (sim's pose_emulator). README.md.
-        self.declare_parameter('mcb_x_right', False)
-        self._x_right = self.get_parameter('mcb_x_right').value
 
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -107,16 +101,13 @@ class PoseTranslator(Node):
         odom.header.frame_id = odom_frame
         odom.child_frame_id = base_frame
 
-        x, y, vx, vy = msg.x, msg.y, msg.vel_x, msg.vel_y
-        if self._x_right:
-            (x, y), (vx, vy) = from_mcb(x, y), from_mcb(vx, vy)
-        odom.pose.pose.position.x = float(x)
-        odom.pose.pose.position.y = float(y)
+        odom.pose.pose.position.x = float(msg.x)
+        odom.pose.pose.position.y = float(msg.y)
         odom.pose.pose.orientation = q_chassis
         odom.pose.covariance = self._pose_covariance
 
-        odom.twist.twist.linear.x = float(vx)
-        odom.twist.twist.linear.y = float(vy)
+        odom.twist.twist.linear.x = float(msg.vel_x)
+        odom.twist.twist.linear.y = float(msg.vel_y)
         odom.twist.covariance = self._twist_covariance
         self.odom_pub.publish(odom)
 
