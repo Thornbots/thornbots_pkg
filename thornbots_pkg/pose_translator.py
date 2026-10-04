@@ -23,9 +23,9 @@ from sensor_msgs.msg import JointState
 
 class PoseTranslator(Node):
     """
-    Turn /pose into /odom and /joint_states.
+    Turn /dji_serial_bridge/pose into /odom and /joint_states.
 
-    Turns /pose (dji_serial_bridge/msg/RobotPose, from real hardware or
+    Turns /dji_serial_bridge/pose (dji_serial_bridge/msg/RobotPose, from real hardware or
     sim/pose_emulator.py) into /odom and /joint_states -- raw, uncorrected
     wheel odometry, not the localized odom->root pose. sentry_localization
     consumes /odom and publishes the corrected result on /localization/odom;
@@ -49,7 +49,7 @@ class PoseTranslator(Node):
         # pose_emulator, which publishes the same topic/message)
         self.sub = self.create_subscription(
             RobotPose,
-            '/pose',
+            '/dji_serial_bridge/pose',
             self.pose_callback,
             qos_profile
         )

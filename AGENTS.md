@@ -31,7 +31,7 @@ run.
 
 ## Scope
 
-- Owns `/pose` consumption, `odom->root` republish, the URDF, and the
+- Owns `/dji_serial_bridge/pose` consumption, `odom->root` republish, the URDF, and the
   `mcb_relay` boundary to `dji_serial_bridge`. No other node may touch that
   bridge's topics.
 - Localization backends (SLAM/AMCL/EKF) belong to `sentry_localization`; gz-sim

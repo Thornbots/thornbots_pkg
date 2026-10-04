@@ -15,7 +15,7 @@
 """
 Launch thornbots_pkg's core nodes and hand off to sentry_localization.
 
-Gets /pose and /scan onto the graph, owns the robot description, then
+Gets /dji_serial_bridge/pose and /scan onto the graph, owns the robot description, then
 hands off to sentry_localization for odom->root/map->odom localization.
 See README.md for design rationale and per-node breakdown.
 
@@ -48,11 +48,11 @@ def generate_launch_description():
 
     real_hardware_arg = DeclareLaunchArgument(
         'real_hardware', default_value='true',
-        description="Launch dji_serial_bridge_node (the Type-C board's /pose "
+        description="Launch dji_serial_bridge_node (the Type-C board's /dji_serial_bridge/pose "
         "source) and sllidar_ros2's driver (/scan) directly. "
         'True by default since running against real hardware is '
         'now the default; set false when running against sim, '
-        'which provides /pose (via pose_emulator) and /scan '
+        'which provides /dji_serial_bridge/pose (via pose_emulator) and /scan '
         'itself. Also drives use_sim_time (false when '
         'real_hardware is true -- wall clock -- true otherwise, '
         'since sim publishes /clock): no separate use_sim_time '
@@ -268,11 +268,8 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(real_hardware),
         parameters=[{'use_sim_time': use_sim_time}],
-        # The node publishes ~/pose, i.e. /dji_serial_bridge/pose, but
-        # pose_translator and point_to_cv_target read /pose -- the topic sim's
-        # pose_emulator publishes. Remap so one graph name works in both modes.
-        # ~/ref_sys is left alone: target_selector reads the namespaced name.
-        remappings=[('~/pose', '/pose')],
+        # No remaps: ~/pose stays /dji_serial_bridge/pose, which sim's
+        # pose_emulator publishes too. /pose is slam_toolbox's.
         additional_env=udp_env,
     )
 

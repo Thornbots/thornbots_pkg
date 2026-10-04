@@ -1,7 +1,7 @@
 # thornbots_pkg
 
 Hardware interface, robot description, and CV target selection for the Thornbots
-ARC 2026 Sentry. It puts `/pose` (hardware or `sim`) and `/scan` on the graph,
+ARC 2026 Sentry. It puts `/dji_serial_bridge/pose` (hardware or `sim`) and `/scan` on the graph,
 runs `robot_state_publisher` off `urdf/sentry.urdf.xacro` (the `sentry_v2`
 CAD's frames, with its meshes in `meshes/sentry_v2/`), republishes the
 `odom->root` pose from `sentry_localization`, and turns detections into a
@@ -13,13 +13,13 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 
 | Node | In | Out |
 | --- | --- | --- |
-| `pose_translator` | `/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
+| `pose_translator` | `/dji_serial_bridge/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
 | `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/pose`, `/dji_serial_bridge/ref_sys` (hits) | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
+| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose`, `/dji_serial_bridge/ref_sys` (hits) | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
 
 `mcb_relay` is the only node allowed on the bridge's topics, and only launches
 with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
@@ -29,7 +29,7 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 `armor_tracker.cpp` for `target_tracker`, the one C++ node (`src/`).
 
 ```
-/pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
+/dji_serial_bridge/pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
                           \-> /joint_states --[robot_state_publisher]--> rest of TF tree
 /scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->odom TF owned by slam_toolbox/amcl there)
 
@@ -68,7 +68,7 @@ launch itself.
 # Real hardware (default): also starts dji_serial_bridge_node and sllidar_ros2, wall-clock time.
 ros2 launch thornbots_pkg auto.launch.py
 
-# Sim: start `ros2 launch sim sim.launch.py` first; it provides /pose and /scan.
+# Sim: start `ros2 launch sim sim.launch.py` first; it provides /dji_serial_bridge/pose and /scan.
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 ```
 
@@ -420,7 +420,7 @@ and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See
 `CVTarget.msg` and `ros2_dji_serial_bridge/README.md`'s wire-format history.
 
-The node aims from `/cv/target_state` and `/pose` alone (`ref_sys` only
+The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone (`ref_sys` only
 steers the patrol), so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
 `sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off

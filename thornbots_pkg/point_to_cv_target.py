@@ -63,7 +63,7 @@ class PointToCvTarget(Node):
         super().__init__('point_to_cv_target')
 
         self.declare_parameter('target_state_topic', '/cv/target_state')
-        self.declare_parameter('robot_pose_topic', '/pose')
+        self.declare_parameter('robot_pose_topic', '/dji_serial_bridge/pose')
         self.declare_parameter('output_topic', '/cv/target')
         self.declare_parameter('target_timeout_s', 0.5)
         self.declare_parameter('fire_confidence_threshold', 0.5)
