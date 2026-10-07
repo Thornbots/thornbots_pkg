@@ -112,3 +112,11 @@ This package is a submodule of `thornbots_workspace`, on branch `main`. Commit
 and push here first, then bump this gitlink in `../` — one logical change, one
 bump, never a gitlink pointing at an unpushed commit. Full rule in
 `../CLAUDE.md` § Packages.
+
+## CI
+
+GitHub CI runs on pushes and PRs outside frozen Humble branches. Shared lint
+is pinned to workspace `13d5965558a3`. Existing diagnostics are recorded in
+`.github/quality-baseline.json`; new diagnostics fail. Do not expand the
+baseline to hide regressions. Syntax errors always fail.
+Jazzy CI builds the portable stack and runs this package's registered tests.
