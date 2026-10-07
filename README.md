@@ -536,3 +536,12 @@ aim point with `fire` clear, so the wire is unchanged. That holds because
 MCBV3 `position-based-cv` fires on `fire` alone (MCBV3#77,
 `AutoAimAndFireCommand.cpp`). The aiming benches and E1 run with `patrol_enabled:=false`,
 since E1's scorer fires on every frame by that rule.
+
+
+### Initial field position
+
+`auto.launch.py initial_x:=4.625 initial_y:=0.0` seeds the EKF and AMCL
+at a known team spawn; the default stays `(0, 0)`. `root` remains heading-fixed.
+Scan odometry initializes from the first `/odom` pose so it shares the
+firmware's origin. Starting the EKF at zero with a nonzero firmware pose
+would otherwise make `mcb_relay` immediately reset the firmware to zero.

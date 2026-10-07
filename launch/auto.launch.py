@@ -451,11 +451,17 @@ def generate_launch_description():
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
+            'initial_x': LaunchConfiguration('initial_x'),
+            'initial_y': LaunchConfiguration('initial_y'),
             'autosave_map': LaunchConfiguration('autosave_map'),
         }.items(),
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'initial_x', default_value='0.0', description='Known initial field X, meters'),
+        DeclareLaunchArgument(
+            'initial_y', default_value='0.0', description='Known initial field Y, meters'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, dds_transport_arg,
