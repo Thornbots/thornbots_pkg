@@ -41,6 +41,17 @@ arg (`enable_target_selector`, `enable_target_tracker`,
            \-[sim's cv_head_aim]--> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
 
+## CV interface
+
+The [TargetState](../ros2_dji_serial_bridge/msg/TargetState.msg) boundary lets
+the [aiming bench](../sim/README.md#run-the-tests) replace perception with
+perfect state. [target_tracker](#target_tracker) owns correction up to the
+state's publish-time stamp; [point_to_cv_target](#point_to_cv_targetpy)
+extrapolates to the fire horizon. Target and aim use continuous `odom`, since
+`map` corrections can jump mid-shot; `map` is for strategy. See
+[firmware/frame coordination](../ros2_dji_serial_bridge/README.md#shared-aim-frame)
+and [remaining work](../ROADMAP.md#b-hit-while-we-move).
+
 ## Build and launch
 
 In a container terminal, build:
@@ -355,7 +366,7 @@ position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
 `acceleration` the centre's. Each state is
 `ArmorTracker::predicted()` at the publish time and stamped with it, as
 `TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
-Part 2 owns every delay up to that stamp (`../CV_SPLIT_PLAN.md`, Estimation).
+See the [CV interface](#cv-interface) for correction ownership.
 
 ### mcb_relay.py
 

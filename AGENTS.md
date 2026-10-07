@@ -71,9 +71,7 @@ front-run firing logic unless asked.
   run `patrol_enabled:=false` until MCBV3#77 fires on the bit. Not checked
   on the robot: the sweep rate, which way `hit_angle_sign` should go, and
   whether YOLO picks up targets mid-sweep.
-- **`CVTarget` is an `odom` point since 2026-09-27**, and the firmware
-  still reads it as `root`. Which `odom` the MCB can share is open:
-  `../CV_SPLIT_PLAN.md` W.3's open issues.
+- Firmware/frame coordination: [shared aim frame](../ros2_dji_serial_bridge/README.md#shared-aim-frame).
 - **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
   UART legs (USB-serial latency timer included) and the MCB's RX poll on
   the robot, then set `uart_latency_s`, `mcb_read_delay_s` and
@@ -89,8 +87,8 @@ front-run firing logic unless asked.
 - **`ArmorEKF`** state is `[pos, vel, acc, yaw, w, r, dz]` by named slices,
   with a single-panel yaw measurement and a still hypothesis for a parked,
   non-spinning target. Unit-tested. On the estimation bench moving cells read 0.08-0.17 m
-  facing p95 medians (2026-09-26); what's next is in `../CV_SPLIT_PLAN.md`
-  "Where this stands". The estimation bench has no drive-off cell yet (a unit-test probe:
+  facing p95 medians (2026-09-26); remaining work is in
+  [ROADMAP track G](../ROADMAP.md#g-estimation-accuracy). The estimation bench has no drive-off cell yet (a unit-test probe:
   ~0.23 s at up to 9 cm).
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
