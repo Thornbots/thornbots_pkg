@@ -100,7 +100,7 @@ front-run firing logic unless asked.
   (3.1 ms in Python), 0.011 ms on the Mac.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
   container, and the aiming and estimation benches give Humble's results
-  on the laptop. Robot validation: [hardware status](../JAZZY_PLAN.md#hardware-status).
+  on the laptop. Robot validation: [hardware status](../JAZZY_FLASH.md#hardware-status).
 
 ## Committing
 
