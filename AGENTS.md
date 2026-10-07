@@ -101,8 +101,8 @@ front-run firing logic unless asked.
   core to 1e-13 on shared inputs. Per detection: 0.056 ms on the Orin
   (3.1 ms in Python), 0.011 ms on the Mac.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
-  container, and the aiming and estimation benches give Humble's results on the laptop. Nothing has
-  run on hardware yet (`../JAZZY_PLAN.md` step 5).
+  container, and the aiming and estimation benches give Humble's results
+  on the laptop. Robot validation: [hardware status](../JAZZY_PLAN.md#hardware-status).
 
 ## Committing
 
