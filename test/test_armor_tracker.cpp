@@ -95,10 +95,11 @@ std::optional<Vector3d> seen_panel(const Vector3d & centre, double yaw, double s
 Vector3d noise(std::mt19937 & rng, double std)
 {
   std::normal_distribution<double> n(0.0, std);
-  Vector3d sample;
-  // Sequence draws explicitly: constructor argument order differs across platforms.
-  for (int axis = 0; axis < 3; ++axis) {sample[axis] = n(rng);}
-  return sample;
+  // Sequence draws by axis: constructor argument evaluation differs across architectures.
+  const double x = n(rng);
+  const double y = n(rng);
+  const double z = n(rng);
+  return Vector3d(x, y, z);
 }
 
 const tp::State & state_of(const tp::ArmorEKF & f) {return f.state;}
