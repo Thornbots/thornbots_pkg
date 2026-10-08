@@ -95,7 +95,11 @@ std::optional<Vector3d> seen_panel(const Vector3d & centre, double yaw, double s
 Vector3d noise(std::mt19937 & rng, double std)
 {
   std::normal_distribution<double> n(0.0, std);
-  return Vector3d(n(rng), n(rng), n(rng));
+  // Sequence draws by axis: constructor argument evaluation differs across architectures.
+  const double x = n(rng);
+  const double y = n(rng);
+  const double z = n(rng);
+  return Vector3d(x, y, z);
 }
 
 const tp::State & state_of(const tp::ArmorEKF & f) {return f.state;}
