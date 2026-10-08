@@ -268,6 +268,14 @@ diverged. With `clock_ack_topic` set (the bench sets
 update once `now()` reads it, and `bench_world` sends a step's detections
 only after the echo of the last tick arrives.
 
+For the estimation bench, `point_to_cv_target` can publish `state_ack_topic`
+(off by default). It echoes each consumed model's Header, retaining the
+model stamp and frame. A `tick_topic` Header records the decision time;
+its frame names the output aim frame when an aim was published, otherwise
+it is empty. The bench waits for model consumption and for the indicated
+output point to arrive before advancing physics. Publication on separate
+DDS topics alone does not establish that ordering.
+
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection
 callback, and `Buffer.lookup_transform(timeout=...)` sleeps in a wall-clock

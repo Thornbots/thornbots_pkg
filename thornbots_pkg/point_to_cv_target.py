@@ -108,6 +108,7 @@ class PointToCvTarget(Node):
         self.declare_parameter('ref_sys_topic', '/dji_serial_bridge/ref_sys')
         # Bench only: a Header per publish tick, sent or not, for lockstep.
         self.declare_parameter('tick_topic', '')
+        self.declare_parameter('state_ack_topic', '')
 
         gp = self.get_parameter
         self.target_state_topic = gp('target_state_topic').value
@@ -156,6 +157,9 @@ class PointToCvTarget(Node):
         tick_topic = gp('tick_topic').value
         self.tick_pub = (self.create_publisher(Header, tick_topic, 10)
                          if tick_topic else None)
+        state_ack_topic = gp('state_ack_topic').value
+        self.state_ack_pub = (self.create_publisher(Header, state_ack_topic, 100)
+                              if state_ack_topic else None)
         self.robot_pose_sub = self.create_subscription(
             RobotPose, self.robot_pose_topic, self.on_robot_pose, qos_profile_sensor_data)
         if self.patrol is not None and self.turn_to_hit:
@@ -206,6 +210,9 @@ class PointToCvTarget(Node):
                 f'{self.latency_stat.mean * 1e3:.1f} ms mean over '
                 f'{self.latency_stat.count} samples',
                 throttle_duration_sec=10.0)
+
+        if self.state_ack_pub is not None:
+            self.state_ack_pub.publish(msg.header)
 
     def on_robot_pose(self, msg):
         self.chassis_vel_root = (msg.vel_x, msg.vel_y, 0.0)
@@ -295,7 +302,9 @@ class PointToCvTarget(Node):
             out.turn_to_hit = self.turn_to_hit
             self.pub.publish(out)
         if self.tick_pub is not None:
-            self.tick_pub.publish(Header(stamp=now.to_msg()))
+            # Empty frame means no aim was published; otherwise name its output frame.
+            self.tick_pub.publish(Header(stamp=now.to_msg(),
+                                         frame_id=out.header.frame_id if aim is not None else ''))
 
     def _compute_aim_point(self):
         """
