@@ -71,11 +71,7 @@ front-run firing logic unless asked.
   run `patrol_enabled:=false` until MCBV3#77 fires on the bit. Not checked
   on the robot: the sweep rate, which way `hit_angle_sign` should go, and
   whether YOLO picks up targets mid-sweep.
-- **Branch `rep-105` needs MCBV3 `rep-105`**: POSE, RELOCALIZE and
-  CV_TARGET in the field frame (README.md), so nothing here converts axes.
-  The start pose (red (-4.625, 0)) isn't measured on the field. MCBV3
-  `position-based-cv` `0885a69` sends x-right POSE from its boot spot: run
-  `main` (its `mcb_x_right`) against that, or the aim turns 90 deg.
+- Firmware/frame coordination: [shared aim frame](../ros2_dji_serial_bridge/README.md#shared-aim-frame).
 - **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
   UART legs (USB-serial latency timer included) and the MCB's RX poll on
   the robot, then set `uart_latency_s`, `mcb_read_delay_s` and
@@ -91,8 +87,8 @@ front-run firing logic unless asked.
 - **`ArmorEKF`** state is `[pos, vel, acc, yaw, w, r, dz]` by named slices,
   with a single-panel yaw measurement and a still hypothesis for a parked,
   non-spinning target. Unit-tested. On the estimation bench moving cells read 0.08-0.17 m
-  facing p95 medians (2026-09-26); what's next is in `../CV_SPLIT_PLAN.md`
-  "Where this stands". The estimation bench has no drive-off cell yet (a unit-test probe:
+  facing p95 medians (2026-09-26); remaining work is in
+  [ROADMAP track G](../ROADMAP.md#g-estimation-accuracy). The estimation bench has no drive-off cell yet (a unit-test probe:
   ~0.23 s at up to 9 cm).
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
@@ -103,8 +99,8 @@ front-run firing logic unless asked.
   core to 1e-13 on shared inputs. Per detection: 0.056 ms on the Orin
   (3.1 ms in Python), 0.011 ms on the Mac.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
-  container, and the aiming and estimation benches give Humble's results on the laptop. Nothing has
-  run on hardware yet (`../JAZZY_PLAN.md` step 5).
+  container, and the aiming and estimation benches give Humble's results
+  on the laptop. Robot validation: [hardware status](../JAZZY_FLASH.md#hardware-status).
 
 ## Committing
 

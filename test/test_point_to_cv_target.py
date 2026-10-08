@@ -429,7 +429,7 @@ NODE_SRC = os.path.join(os.path.dirname(__file__), '..', 'thornbots_pkg',
 
 
 def test_node_subscribes_to_target_state_robot_pose_and_ref_sys_only():
-    # The CV split's seam (CV_SPLIT_PLAN.md): Part 1 aims from
+    # The CV interface (README.md): Part 1 aims from
     # TargetState alone, so a truth publisher can replace the whole of Part 2.
     # RefSysStatus only turns the patrol toward a hit.
     tree = ast.parse(open(NODE_SRC).read())

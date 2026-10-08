@@ -59,7 +59,7 @@ public:
       "measurement_topic", std::string("/cv/tracker/measurement"));
     odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
     pose_latency_s_ = declare_parameter("pose_latency_s", 0.01);
-    // Unmeasured on hardware (CV_SPLIT_PLAN.md, Estimation); match the emulator's in sim.
+    // Unmeasured on hardware (../ROADMAP.md, track B); match the emulator's in sim.
     camera_latency_s_ = declare_parameter("camera_latency_s", 0.0);
     track_max_gap_s_ = declare_parameter("track_max_gap_s", 0.5);
     // How long a detection waits for the camera's TF at its capture time
