@@ -49,7 +49,17 @@ add_executable(mcb_relay src/mcb_relay.cpp)
 target_link_libraries(mcb_relay mcb_relay_core)
 ament_target_dependencies(mcb_relay rclcpp dji_serial_bridge geometry_msgs nav_msgs)
 
-install(TARGETS target_tracker target_selector mcb_relay DESTINATION lib/${PROJECT_NAME})
+add_executable(pose_translator src/pose_translator.cpp)
+ament_target_dependencies(pose_translator rclcpp dji_serial_bridge nav_msgs sensor_msgs)
+
+add_executable(lidar_self_filter src/lidar_self_filter.cpp)
+ament_target_dependencies(lidar_self_filter rclcpp sensor_msgs)
+
+add_executable(odom_tf_broadcaster src/odom_tf_broadcaster.cpp)
+ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
+
+install(TARGETS target_tracker target_selector mcb_relay pose_translator lidar_self_filter
+  odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 ament_python_install_package(${PROJECT_NAME})
 file(GLOB PYTHON_NODES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/*)
