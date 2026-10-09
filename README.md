@@ -21,8 +21,11 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose`, `/dji_serial_bridge/ref_sys` (hits) | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
 
-`mcb_relay` is the only node allowed on the bridge's topics, and only launches
-with `real_hardware:=true`. `point_to_cv_target` runs in both modes because
+`mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
+pose translation, target selection and aiming consume the incoming pose/referee
+topics shown above. `auto.launch.py` starts the relay with
+`real_hardware:=true`; sim's `mcb_*` launches also start it explicitly.
+`point_to_cv_target` runs in both modes because
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
 `enable_cv_target_bridge`) and a ROS-free core for unit tests: `*_core.py`, or
@@ -98,7 +101,8 @@ Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 Every x/y and yaw to and from the MCB is in the field frame, so `odom` is
 too: REP-105, (0, 0) at the field centre, x toward blue's base, y left. The
 MCB boots at its team's start, red (-4.625, 0) facing +x, blue mirrored, and
-adds it to its odometry (MCBV3 branch `rep-105`).
+adds it to its odometry in the workspace-pinned MCBV3 `nightly`. The spawn
+coordinates still need measurement on the real field.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
@@ -552,9 +556,14 @@ between targets, so the MCB hears the flags all the time and never patrols
 on its own. MCBV3#78 found the other way broken: the MCB only patrols with
 no frame coming, the one time it hears no flags. A patrol frame is just an
 aim point with `fire` clear, so the wire is unchanged. That holds because
-MCBV3 `position-based-cv` fires on `fire` alone (MCBV3#77,
-`AutoAimAndFireCommand.cpp`). The aiming benches and E1 run with `patrol_enabled:=false`,
-since E1's scorer fires on every frame by that rule.
+MCBV3 `nightly` requests a shot only when `fire` is set
+(`AutoAimAndFireCommand.cpp`). The aiming and estimation benches disable
+patrol; every `mcb_*` match stage enables it. The old E1 scorer is gone.
+`turn_to_hit` is still sent unchanged with every point, so an enabled
+firmware hit turn can interrupt a live CV aim. Per-frame gating and a
+patrol-point flag remain [ROADMAP short todos](../ROADMAP.md#short-todos).
+For the current firmware behavior and hit-angle limitations, see
+[firmware coordination](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
 
 
 ### Initial field position

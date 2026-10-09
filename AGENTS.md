@@ -32,8 +32,9 @@ run.
 ## Scope
 
 - Owns `/dji_serial_bridge/pose` consumption, `odom->root` republish, the URDF, and the
-  `mcb_relay` boundary to `dji_serial_bridge`. No other node may touch that
-  bridge's topics.
+  `mcb_relay` boundary to `dji_serial_bridge`. Only the relay publishes
+  outgoing aim/relocalization; incoming pose/referee consumers are listed
+  in [the node graph](README.md#nodes).
 - Localization backends (SLAM/AMCL/EKF) belong to `sentry_localization`; gz-sim
   worlds belong to `sim`. Change those there, not here.
 
@@ -63,20 +64,19 @@ front-run firing logic unless asked.
 - **Firing logic is partial.** `point_to_cv_target` aims and fires per
   publish tick, at most `fire_rate_hz`, and times shots against a spinning
   target with `CVTarget.delay_ms`. No HP/heat/power gating. MCBV3
-  `position-based-cv` acts on the fire fields (fires `delay_ms` after
-  receipt when flags bit 0 is set); not yet timed on the sentry.
-- **`point_to_cv_target` patrols when there's no target** (2026-10-02,
-  `patrol_enabled`, README.md). It never fires on a patrol frame, but any
-  firmware that fires on every frame would fire all through the patrol;
-  run `patrol_enabled:=false` until MCBV3#77 fires on the bit. Not checked
-  on the robot: the sweep rate, which way `hit_angle_sign` should go, and
-  whether YOLO picks up targets mid-sweep.
+  `nightly` acts on the fire fields; receipt/indexer timing remains
+  [unverified on hardware](../ROADMAP.md#later-needs-a-robot).
+- Patrol and firmware flags: [point_to_cv_target](README.md#point_to_cv_targetpy).
+  Pinned MCBV3 honors `fire`; match stages enable patrol. Per-frame hit-turn
+  gating and a patrol marker remain [ROADMAP short todos](../ROADMAP.md#short-todos).
+  Hardware acceptance is in [hardware status](../JAZZY_FLASH.md#hardware-status).
 - Firmware/frame coordination: [shared aim frame](../ros2_dji_serial_bridge/README.md#shared-aim-frame).
 - **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
   UART legs (USB-serial latency timer included) and the MCB's RX poll on
   the robot, then set `uart_latency_s`, `mcb_read_delay_s` and
-  `latency_std_s` (README.md `### mcb_relay.py`). Only unit-tested: sim
-  runs no bridge, so nothing consumes `~/relocalize` there.
+  `latency_std_s` ([mcb_relay](README.md#mcb_relaypy)). Sim's `mcb_*` stages
+  exercise the real bridge and firmware RELOCALIZE path; hardware UART
+  buffering and mailbox loss remain unmeasured.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
   before real firing-timing work can start; see
   `../ARCC_2026_SENTRY_CONTEXT.md`.
