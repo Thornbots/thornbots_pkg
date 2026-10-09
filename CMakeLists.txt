@@ -29,7 +29,21 @@ add_executable(target_tracker src/target_tracker.cpp)
 target_link_libraries(target_tracker armor_tracker)
 ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
-install(TARGETS target_tracker DESTINATION lib/${PROJECT_NAME})
+
+# Pure logic (no rclcpp), one small library per node, unit-tested standalone.
+foreach(core target_selector_core)
+  add_library(${core} STATIC src/${core}.cpp)
+  target_compile_features(${core} PUBLIC cxx_std_17)
+  target_include_directories(${core} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  target_link_libraries(${core} PUBLIC Eigen3::Eigen)
+endforeach()
+
+add_executable(target_selector src/target_selector.cpp)
+target_link_libraries(target_selector target_selector_core)
+ament_target_dependencies(target_selector rclcpp dji_serial_bridge geometry_msgs)
+
+install(TARGETS target_tracker target_selector DESTINATION lib/${PROJECT_NAME})
 
 ament_python_install_package(${PROJECT_NAME})
 file(GLOB PYTHON_NODES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/*)
@@ -45,6 +59,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_armor_tracker test/test_armor_tracker.cpp)
   target_link_libraries(test_armor_tracker armor_tracker)
+  ament_add_gtest(test_target_selector_core test/test_target_selector_core.cpp)
+  target_link_libraries(test_target_selector_core target_selector_core)
 
   find_package(ament_cmake_pytest REQUIRED)
   # The image's pip anyio ships a pytest plugin that breaks apt pytest; see setup.cfg.
