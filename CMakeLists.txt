@@ -56,8 +56,15 @@ ament_target_dependencies(mcb_relay rclcpp dji_serial_bridge geometry_msgs nav_m
 add_executable(point_to_cv_target src/point_to_cv_target.cpp)
 target_link_libraries(point_to_cv_target point_to_cv_target_node)
 
+add_library(pose_translator_node STATIC src/pose_translator_node.cpp)
+target_compile_features(pose_translator_node PUBLIC cxx_std_17)
+target_include_directories(pose_translator_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+ament_target_dependencies(pose_translator_node PUBLIC
+  rclcpp dji_serial_bridge nav_msgs sensor_msgs)
+
 add_executable(pose_translator src/pose_translator.cpp)
-ament_target_dependencies(pose_translator rclcpp dji_serial_bridge nav_msgs sensor_msgs)
+target_link_libraries(pose_translator pose_translator_node)
 
 add_executable(lidar_self_filter src/lidar_self_filter.cpp)
 ament_target_dependencies(lidar_self_filter rclcpp sensor_msgs)
@@ -86,6 +93,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_point_to_cv_target_core point_to_cv_target_core)
   ament_add_gtest(test_point_to_cv_target_node test/test_point_to_cv_target_node.cpp)
   target_link_libraries(test_point_to_cv_target_node point_to_cv_target_node)
+  ament_add_gtest(test_pose_translator_node test/test_pose_translator_node.cpp)
+  target_link_libraries(test_pose_translator_node pose_translator_node)
 
   # Python is left for the ament lint checks (launch/, test/).
   find_package(ament_cmake_pytest REQUIRED)

@@ -101,15 +101,21 @@ TEST_F(NodeTest, NoTargetTickDoesNotRequireAnAbsentAimPoint)
 TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
 {
   auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->header.frame_id = "odom";
+  node->on_target_state(model);
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
   node->capture(&points, &ticks);
-  node->set_active(true);
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 1u);
   ASSERT_EQ(ticks.size(), 1u);
   EXPECT_EQ(ticks[0], points[0].header);
   EXPECT_EQ(ticks[0].frame_id, "odom");
+  EXPECT_EQ(rclcpp::Time(points[0].header.stamp).nanoseconds(), 123000000);
+  EXPECT_NE(points[0].header.stamp, model->header.stamp);
+  EXPECT_TRUE(points[0].fire);
 }
 
 TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
