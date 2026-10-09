@@ -54,7 +54,7 @@ namespace
 // Python round(): half to even, then % 4 as a non-negative index.
 int quarter_index(double turns)
 {
-  const long k = std::lround(std::nearbyint(turns));
+  const auto k = std::lround(std::nearbyint(turns));
   return static_cast<int>(((k % 4) + 4) % 4);
 }
 }  // namespace
