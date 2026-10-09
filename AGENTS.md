@@ -66,7 +66,7 @@ front-run firing logic unless asked.
   target with `CVTarget.delay_ms`. No HP/heat/power gating. MCBV3
   `nightly` acts on the fire fields; receipt/indexer timing remains
   [unverified on hardware](../ROADMAP.md#later-needs-a-robot).
-- Patrol and firmware flags: [point_to_cv_target](README.md#point_to_cv_targetpy).
+- Patrol and firmware flags: [point_to_cv_target](README.md#point_to_cv_target).
   Pinned MCBV3 honors `fire`; match stages enable patrol. Per-frame hit-turn
   gating and a patrol marker remain [ROADMAP short todos](../ROADMAP.md#short-todos).
   Hardware acceptance is in [hardware status](../JAZZY_FLASH.md#hardware-status).
@@ -74,7 +74,7 @@ front-run firing logic unless asked.
 - **`mcb_relay`'s relocalize latencies are placeholders.** Measure the
   UART legs (USB-serial latency timer included) and the MCB's RX poll on
   the robot, then set `uart_latency_s`, `mcb_read_delay_s` and
-  `latency_std_s` ([mcb_relay](README.md#mcb_relaypy)). Sim's `mcb_*` stages
+  `latency_std_s` ([mcb_relay](README.md#mcb_relay)). Sim's `mcb_*` stages
   exercise the real bridge and firmware RELOCALIZE path; hardware UART
   buffering and mailbox loss remain unmeasured.
 - **The Referee System UART/data-interface spec has not been sourced.** Needed
@@ -93,11 +93,11 @@ front-run firing logic unless asked.
 - **Chase mode is the default** (`chase_settle_s` 0, since 2026-09-25). It needs the
   gimbal to jump ~7 deg every quarter turn and settle; measure that on
   hardware and set `chase_settle_s` to the settle time.
-- **`target_tracker` is C++ since 2026-09-28** (the user's call), the rest
-  Python; the package is `ament_cmake` + `ament_cmake_python`, so a new
-  Python node needs a `scripts/<name>` wrapper. The port matched the Python
-  core to 1e-13 on shared inputs. Per detection: 0.056 ms on the Orin
-  (3.1 ms in Python), 0.011 ms on the Mac.
+- **Every node is C++** (`target_tracker` since 2026-09-28, the rest ported
+  from Python; only `launch/` is Python). The tracker port matched the
+  Python core to 1e-13 on shared inputs. Per detection: 0.056 ms on the Orin
+  (3.1 ms in Python), 0.011 ms on the Mac. The node-level logic is in `src/`;
+  each ROS-free core is a header in `include/thornbots_pkg/` with a gtest.
 - **Jazzy:** the CV tests pass in the Isaac ROS 4.6
   container, and the aiming and estimation benches give Humble's results
   on the laptop. Robot validation: [hardware status](../JAZZY_FLASH.md#hardware-status).

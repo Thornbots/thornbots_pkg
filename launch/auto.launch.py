@@ -275,7 +275,7 @@ def generate_launch_description():
     # Sole relay onto dji_serial_bridge_node's topics -- sentry_localization
     # (relocalize corrections) and the CV pipeline (targets) publish on this
     # node's input topics instead of touching dji_serial_bridge_node
-    # directly; see thornbots_pkg/mcb_relay.py's docstring. Only meaningful
+    # directly; see thornbots_pkg/src/mcb_relay.cpp's header comment. Only meaningful
     # alongside dji_serial_bridge_node itself, hence the same real_hardware
     # gate.
     mcb_relay_node = Node(

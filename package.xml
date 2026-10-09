@@ -8,7 +8,6 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
@@ -23,7 +22,6 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <depend>rclcpp</depend>
-  <depend>rclpy</depend>
   <depend>ament_index_python</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
@@ -32,7 +30,6 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>eigen</depend>
-  <depend>python3-numpy</depend>
   <depend>dji_serial_bridge</depend>
   <export>
     <build_type>ament_cmake</build_type>

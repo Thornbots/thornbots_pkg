@@ -28,8 +28,9 @@ topics shown above. `auto.launch.py` starts the relay with
 `point_to_cv_target` runs in both modes because
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
-`enable_cv_target_bridge`) and a ROS-free core for unit tests: `*_core.py`, or
-`armor_tracker.cpp` for `target_tracker`, the one C++ node (`src/`).
+`enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
+`armor_tracker.hpp` for `target_tracker`). Every node is C++ (`src/`); only
+`launch/` is Python.
 
 ```
 /dji_serial_bridge/pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
@@ -49,7 +50,7 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 The [TargetState](../ros2_dji_serial_bridge/msg/TargetState.msg) boundary lets
 the [aiming bench](../sim/README.md#run-the-tests) replace perception with
 perfect state. [target_tracker](#target_tracker) owns correction up to the
-state's publish-time stamp; [point_to_cv_target](#point_to_cv_targetpy)
+state's publish-time stamp; [point_to_cv_target](#point_to_cv_target)
 extrapolates to the fire horizon. Target and aim use continuous `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#shared-aim-frame)
@@ -143,7 +144,7 @@ come back empty (sim's nodes show up too while `sim.launch.py` runs).
 ## Testing
 
 The unit tests exercise the ROS-free cores on synthetic input and need no
-running graph. `colcon test` runs them all, gtest and pytest:
+running graph. `colcon test` runs them all, gtest and the pytest lint checks:
 
 ```bash
 cd /workspaces/isaac_ros-dev
@@ -152,11 +153,13 @@ colcon test --packages-select thornbots_pkg && colcon test-result --verbose
 ```
 
 `test_armor_tracker.cpp` covers the armor EKF, the hypothesis bank, handoffs,
-gating and the still hypothesis; `test_target_selector.py` scoring,
-centrality, grouping and hysteresis; `test_point_to_cv_target.py` the
-intercept solve, shot planner, latency stat, and the node's subscriptions:
-`TargetState`, `RobotPose` and `RefSysStatus` (patrol only), nothing else. The pytest run also picks up
-the ament copyright, flake8 and pep257 checks.
+gating and the still hypothesis; `test_target_selector_core.cpp` scoring,
+centrality, grouping and hysteresis; `test_mcb_relay_core.cpp` the relocalize
+decision; `test_point_to_cv_target_core.cpp` the intercept solve, shot planner,
+latency stat and patrol; `test_point_to_cv_target_node.cpp` the publish tick,
+the consumer acknowledgment and the node's subscriptions: `TargetState`,
+`RobotPose` and `RefSysStatus` (patrol only), nothing else. The pytest run is
+the ament copyright, flake8 and pep257 checks of `launch/` and `test/`.
 
 The localization drift suite is `ros2 launch sim
 localization_tests.launch.py`, which launches `auto.launch.py`; see
@@ -166,7 +169,7 @@ localization_tests.launch.py`, which launches `auto.launch.py`; see
 
 Design rationale, kept here so in-code comments stay short.
 
-### pose_translator.py
+### pose_translator
 
 Nobody has measured odom covariance. The placeholder is 1cm stddev on
 position and velocity, everything else zero. It has to be non-zero: at zero,
@@ -186,7 +189,7 @@ MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 `root` would mean freeing rf2o's heading and fusing a yaw into the EKF.
 
-### target_selector.py
+### target_selector
 
 Team colour comes from `RefSysStatus.is_on_blue_team`: on blue it drops class
 IDs 0-3, on red 4-7. With no colour given it passes every detection through
@@ -385,12 +388,12 @@ position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
 `TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
 See the [CV interface](#cv-interface) for correction ownership.
 
-### mcb_relay.py
+### mcb_relay
 
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
 for it. `relocalize` compares `/localization/odom` (published in every
 `localization_mode` and `use_rf2o` combination) with the MCB's raw `/odom`,
-using no TF and no backend assumptions (`mcb_relay_core.Relocalizer`).
+using no TF and no backend assumptions (`Relocalizer` in `mcb_relay_core.hpp`).
 
 - The offset is `loc(t) - odom(t)` at the localization stamp, with `/odom`
   interpolated there from a 1 s buffer.
@@ -411,7 +414,7 @@ odometry origin.
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
 
-### lidar_self_filter.py
+### lidar_self_filter
 
 The lidar is bolted to the head, so the head's blind sector is fixed in the
 lidar frame whatever the yaw, and a static angular filter needs no joint
@@ -441,7 +444,7 @@ part has its local x 30.7 deg counter-clockwise of the gun, which may or may
 not be the sensor's 0 deg. Check the sector against a real `/scan_raw` before
 trusting it.
 
-### point_to_cv_target.py
+### point_to_cv_target
 
 `/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
 and aims at from wherever the chassis is, since 2026-09-27. It was a

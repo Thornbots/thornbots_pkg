@@ -20,5 +20,5 @@ import pytest
 @pytest.mark.copyright
 @pytest.mark.linter
 def test_copyright():
-    rc = main(argv=['include', 'launch', 'scripts', 'src', 'thornbots_pkg', 'test'])
+    rc = main(argv=['include', 'launch', 'src', 'test'])
     assert rc == 0, 'Found errors'
