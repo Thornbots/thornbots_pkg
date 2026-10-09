@@ -15,6 +15,8 @@ find_package(rclcpp REQUIRED)
 find_package(dji_serial_bridge REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -31,7 +33,7 @@ ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core)
+foreach(core target_selector_core mcb_relay_core)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
@@ -43,7 +45,11 @@ add_executable(target_selector src/target_selector.cpp)
 target_link_libraries(target_selector target_selector_core)
 ament_target_dependencies(target_selector rclcpp dji_serial_bridge geometry_msgs)
 
-install(TARGETS target_tracker target_selector DESTINATION lib/${PROJECT_NAME})
+add_executable(mcb_relay src/mcb_relay.cpp)
+target_link_libraries(mcb_relay mcb_relay_core)
+ament_target_dependencies(mcb_relay rclcpp dji_serial_bridge geometry_msgs nav_msgs)
+
+install(TARGETS target_tracker target_selector mcb_relay DESTINATION lib/${PROJECT_NAME})
 
 ament_python_install_package(${PROJECT_NAME})
 file(GLOB PYTHON_NODES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/*)
@@ -61,6 +67,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_armor_tracker armor_tracker)
   ament_add_gtest(test_target_selector_core test/test_target_selector_core.cpp)
   target_link_libraries(test_target_selector_core target_selector_core)
+  ament_add_gtest(test_mcb_relay_core test/test_mcb_relay_core.cpp)
+  target_link_libraries(test_mcb_relay_core mcb_relay_core)
 
   find_package(ament_cmake_pytest REQUIRED)
   # The image's pip anyio ships a pytest plugin that breaks apt pytest; see setup.cfg.
