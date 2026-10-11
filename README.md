@@ -57,7 +57,7 @@ state's publish-time stamp; [point_to_cv_target](#point_to_cv_target)
 extrapolates to the fire horizon. Detections, target state and aim use raw,
 never-relocalized `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
-[firmware/frame coordination](../ros2_dji_serial_bridge/README.md#shared-aim-frame)
+[firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
 and [remaining work](../ROADMAP.md#b-hit-while-we-move).
 
 ## Build and launch
@@ -192,8 +192,7 @@ reanchor raw coordinates, as defined by the [wire owner](../ros2_dji_serial_brid
 `odom`, matching the MCB's translation-only offset. Its pose can change with
 navigation corrections; it is not the continuous odometry frame described by
 [REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst).
-Raw `odom` retains that role after startup initialization. `root` is the
-separate heading-fixed deviation from REP 105's body-fixed `base_link`, below.
+Raw `odom` retains that role after startup initialization.
 
 Nobody has measured raw odom covariance. The placeholder is 1cm stddev on
 position and velocity, everything else zero. It has to be non-zero so the
@@ -204,7 +203,8 @@ The adapter does not transform `/odom` yaw through EKF-derived TF. Its fused
 navigation pose is `nav_odom`; it does not replace raw `/odom` or
 `odom->root`.
 
-`root` is heading-fixed, as rf2o's `fixed_heading` and the EKF assume.
+`root` is heading-fixed, a deviation from REP 105's body-fixed `base_link`,
+as rf2o's `fixed_heading` and the EKF assume.
 `RobotPose.chassis_yaw` (0 until the firmware sends it) goes out only as the
 URDF's `chassis_yaw` joint, which turns `body`, the wheels and the armor
 under `root`. The head hangs off `root` with `headlink` at the MCB's world

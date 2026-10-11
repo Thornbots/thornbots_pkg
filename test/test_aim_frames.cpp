@@ -86,6 +86,21 @@ TEST(AimFrames, ClockResetDropsPendingNavigationFromThePreviousEpoch)
   EXPECT_DOUBLE_EQ(fresh[0].second.translation().x(), 0.5);
 }
 
+TEST(AimFrames, LateOldEpochNavigationCannotBlockTheNewEpoch)
+{
+  thornbots_pkg::AimFrames frames;
+  frames.add_raw(10.0, pose(0.0, 0.0));
+  frames.add_raw(0.5, pose(0.0, 0.0));
+  frames.add_navigation(11000000000, pose(0.5, 0.0));
+  frames.add_navigation(1000000000, pose(0.2, 0.0));
+  frames.add_raw(1.5, pose(0.0, 0.0));
+  const auto fresh = frames.take_navigation();
+  ASSERT_EQ(fresh.size(), 1u);
+  EXPECT_EQ(fresh[0].first, 1000000000);
+  frames.add_raw(11.0, pose(0.0, 0.0));
+  EXPECT_TRUE(frames.take_navigation().empty());
+}
+
 TEST(AimFrames, RejectsMissingStaleAndFutureRawPose)
 {
   thornbots_pkg::AimFrames frames;

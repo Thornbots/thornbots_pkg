@@ -16,7 +16,7 @@
 Launch thornbots_pkg's core nodes and hand off to sentry_localization.
 
 Gets /dji_serial_bridge/pose and /scan onto the graph, owns the robot description, then
-hands off to sentry_localization for odom->root/map->odom localization.
+hands off to sentry_localization for map->nav_odom and navigation pose.
 See README.md for design rationale and per-node breakdown.
 
 real_hardware:=true (default) launches dji_serial_bridge_node + sllidar_ros2

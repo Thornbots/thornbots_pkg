@@ -69,6 +69,10 @@ std::optional<Eigen::Isometry3d> AimFrames::navigation_to_aim(
 
 void AimFrames::add_navigation(int64_t stamp_ns, const Eigen::Isometry3d & pose)
 {
+  // A backwards stamp is a clock reset; a late old-epoch sample would block the queue.
+  if (!pending_.empty() && stamp_ns < pending_.back().first) {
+    pending_.clear();
+  }
   pending_.emplace_back(stamp_ns, pose);
   if (pending_.size() > 100) {
     pending_.pop_front();
