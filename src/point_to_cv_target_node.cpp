@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "tf2/exceptions.h"
@@ -81,6 +82,14 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     chase_settle_s_ = chase_settle_s;
   }
   chase_margin_s_ = declare_parameter("chase_margin_s", 0.0);
+  // Not spinning: keep leading a panel until another faces us this much more
+  // squarely (rad). The 45-degree jitter bench selects this margin; see README.md.
+  panel_switch_margin_rad_ = declare_parameter("panel_switch_margin_rad", 0.3);
+  if (!std::isfinite(panel_switch_margin_rad_) || panel_switch_margin_rad_ < 0.0 ||
+    panel_switch_margin_rad_ >= QUARTER_TURN)
+  {
+    throw std::invalid_argument("panel_switch_margin_rad must be finite and in [0, pi/2)");
+  }
   // Sent with every aim point: whether the MCB may patrol on its own (off: the
   // Jetson owns where it looks), and turn toward a hit (on).
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
@@ -165,12 +174,23 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
+  const rclcpp::Time now = clock_now();
+  const bool stale = latest_state_ && seconds(
+    now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
+    spinning_ = false;
+    held_panel_yaw_.reset();
+  }
+  if (!msg->valid || stale) {
+    spinning_ = false;
+    held_panel_yaw_.reset();
+  }
+  if (std::abs(msg->yaw_rate) > (spinning_ ? spin_exit_rad_s_ : spin_enter_rad_s_)) {
+    held_panel_yaw_.reset();
   }
   latest_state_ = msg;
   target_active_ = true;
-  const rclcpp::Time now = clock_now();
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
     latency_stat_.add(latency_s);
@@ -269,6 +289,8 @@ void PointToCvTarget::check_timeout()
   }
 
   target_active_ = false;
+  spinning_ = false;
+  held_panel_yaw_.reset();
   RCLCPP_INFO(
     get_logger(), "Newest '%s' is %.2f s old - publishing no CVTarget until the next one arrives.",
     target_state_topic_.c_str(), age_s);
@@ -322,6 +344,8 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
   const double state_age_s = seconds(now - state_stamp);
 
   if (state_age_s > target_timeout_s_) {
+    held_panel_yaw_.reset();
+    spinning_ = false;
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 1000,
       "Newest '%s' is %.2f s old (> target_timeout_s=%.2f) -- not aiming on it.",
@@ -332,6 +356,7 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
   if (!state->valid) {
     // Unconverged: aim at the measured panel, no lead, no fire.
     spinning_ = false;
+    held_panel_yaw_.reset();
     return Aim{Vector3d(state->panel.x, state->panel.y, state->panel.z), std::nullopt};
   }
 
@@ -375,11 +400,14 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
   options.chase_settle_s = chase_settle_s_;
   options.chase_margin_s = chase_margin_s_;
   options.accel = Vector3d(state->acceleration.x, state->acceleration.y, state->acceleration.z);
+  options.held_panel_yaw = spinning_ ? std::nullopt : held_panel_yaw_;
+  options.panel_switch_margin_rad = panel_switch_margin_rad_;
   // Age of THIS state at THIS tick, not latency_stat.mean: publishing runs on
   // its own timer over a cached state. See README.md.
   const Shot shot = plan_shot(
     armor, {state->radius[0], state->radius[1]}, {state->z_offset[0], state->z_offset[1]},
     state_age_s, shooter_pos_odom, v_muzzle_, spinning_, tick_s_, options);
+  held_panel_yaw_ = shot.panel_yaw;
   return Aim{shot.aim_pos, shot.delay_s};
 }
 

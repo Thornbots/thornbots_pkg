@@ -59,6 +59,24 @@ int quarter_index(double turns)
 }
 }  // namespace
 
+int choose_panel(
+  double yaw, double bearing, std::optional<double> held_yaw, double margin_rad)
+{
+  std::array<double, 4> off{};
+  int best = 0;
+  for (int k = 0; k < 4; ++k) {
+    off[k] = std::abs(wrap_to_pi(yaw + k * QUARTER_TURN - bearing));
+    if (off[k] < off[best]) {
+      best = k;
+    }
+  }
+  if (!held_yaw) {
+    return best;
+  }
+  const int held = quarter_index((*held_yaw - yaw) / QUARTER_TURN);
+  return off[held] <= off[best] + margin_rad ? held : best;
+}
+
 Shot plan_shot(
   const ArmorState & state, const std::array<double, 2> & radius,
   const std::array<double, 2> & z_offset, double age_s, const Vector3d & shooter_pos,
@@ -115,11 +133,24 @@ Shot plan_shot(
       return {hit - shooter_vel * t, t};
     };
 
-  if (!options.lead) {
+  if (spinning && !options.lead) {
     return {facing_panel(0.0), 0.0};
   }
   if (!spinning) {
-    return {intercept(facing_panel).aim_pos, 0.0};
+    // Choose near impact, a flight past the aim horizon; held_panel_yaw comes
+    // from the same point last tick.
+    const double t_sel = options.lead ? aim_horizon_s +
+      (center(aim_horizon_s) - shooter(aim_horizon_s)).norm() / std::max(v_muzzle, 1e-6) : 0.0;
+    const int k = choose_panel(
+      yaw + w * t_sel, bearing(t_sel), options.held_panel_yaw, options.panel_switch_margin_rad);
+    const double panel_yaw = wrap_to_pi(yaw + w * t_sel + k * QUARTER_TURN);
+    const auto chosen = [&](double t) -> Vector3d {return panel(k, t);};
+    if (!options.lead) {
+      return {chosen(0.0), 0.0, panel_yaw};
+    }
+    const auto hit = intercept(chosen);
+    return {hit.aim_pos, 0.0,
+      wrap_to_pi(yaw + w * (aim_horizon_s + hit.t_flight) + k * QUARTER_TURN)};
   }
   if (options.chase_settle_s) {
     const Intercept hit = intercept(facing_panel);

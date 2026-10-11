@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -51,6 +52,11 @@ public:
 
   void set_active(bool active) {target_active_ = active;}
   bool active() const {return target_active_;}
+  void hold(double yaw) {held_panel_yaw_ = yaw;}
+  bool held() const {return held_panel_yaw_.has_value();}
+  void time_ns(int64_t value) {now_ns_ = value;}
+  using tp::PointToCvTarget::check_timeout;
+  void base_plan() {tp::PointToCvTarget::compute_aim_point();}
   TargetState::ConstSharedPtr latest() const {return latest_state_;}
   void on_target_state_hook(std::function<void(const Header &)> ack) {send_ack_ = ack;}
   void capture(std::vector<CVTarget> * points, std::vector<Header> * ticks)
@@ -65,7 +71,8 @@ protected:
   {
     return {true, 0};
   }
-  rclcpp::Time clock_now() const override {return rclcpp::Time(int64_t{123000000}, RCL_ROS_TIME);}
+  rclcpp::Time clock_now() const override {return rclcpp::Time(now_ns_, RCL_ROS_TIME);}
+  int64_t now_ns_ = 123000000;
 };
 
 class NodeTest : public ::testing::Test
@@ -157,4 +164,61 @@ TEST_F(NodeTest, SubscribesToTargetStateRobotPoseAndRefSysOnly)
     types, (std::set<std::string>{
     "dji_serial_bridge/msg/RefSysStatus", "dji_serial_bridge/msg/RobotPose",
     "dji_serial_bridge/msg/TargetState"}));
+}
+
+TEST_F(NodeTest, PanelHoldSurvivesUpdatesButResetsOnNewTrackInvalidOrSpin)
+{
+  auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->robot_track_id = 1;
+  model->valid = true;
+  node->on_target_state(model);
+  node->hold(1.0);
+  node->on_target_state(std::make_shared<TargetState>(*model));
+  EXPECT_TRUE(node->held());
+  model->robot_track_id = 2;
+  node->on_target_state(model);
+  EXPECT_FALSE(node->held());
+  node->hold(1.0);
+  model->valid = false;
+  node->on_target_state(model);
+  EXPECT_FALSE(node->held());
+  node->hold(1.0);
+  model->valid = true;
+  model->yaw_rate = 4.0;
+  node->on_target_state(model);
+  EXPECT_FALSE(node->held());
+}
+
+TEST_F(NodeTest, PanelHoldResetsOnTimeoutAndLateSameTrackReplacement)
+{
+  auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->valid = true;
+  node->on_target_state(model);
+  node->hold(1.0);
+  node->time_ns(1000000000);
+  auto fresh = std::make_shared<TargetState>(*model);
+  fresh->header.stamp = rclcpp::Time(int64_t{1000000000}, RCL_ROS_TIME);
+  node->on_target_state(fresh);
+  EXPECT_FALSE(node->held());
+  node->hold(1.0);
+  node->time_ns(2000000000);
+  node->base_plan();
+  EXPECT_FALSE(node->held());
+  node->hold(1.0);
+  node->check_timeout();
+  EXPECT_FALSE(node->held());
+  EXPECT_FALSE(node->active());
+}
+
+TEST_F(NodeTest, RejectsInvalidPanelSwitchMargins)
+{
+  for (double margin : {-0.1, tp::QUARTER_TURN, std::numeric_limits<double>::infinity()}) {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("panel_switch_margin_rad", margin);
+    EXPECT_THROW(std::make_shared<Probe>(options), std::invalid_argument);
+  }
 }

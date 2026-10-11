@@ -63,19 +63,32 @@ struct ShotOptions
   std::optional<double> chase_settle_s;  // set: chase the facing panel while spinning
   double chase_margin_s = 0.0;
   Vector3d accel = Vector3d::Zero();  // the center's
+  // Not spinning: Shot::panel_yaw from last tick, kept until another panel
+  // faces us panel_switch_margin_rad more squarely (choose_panel).
+  std::optional<double> held_panel_yaw;
+  double panel_switch_margin_rad = 0.0;
 };
 
 struct Shot
 {
   Vector3d aim_pos;  // odom point a gun leaving from shooter(aim horizon) points through
   std::optional<double> delay_s;  // fire after this long, or nullopt for no shot this tick
+  // Not spinning: odom yaw of the led panel's normal near impact; else nullopt.
+  std::optional<double> panel_yaw = std::nullopt;
 };
+
+// Panel 0-3 to lead on a robot that isn't spinning: the most face-on (normal
+// yaw + k * pi/2 nearest bearing, the odom yaw from the target to us), except
+// that the panel nearest held_yaw stays while no other faces us more than
+// margin_rad more squarely.
+int choose_panel(
+  double yaw, double bearing, std::optional<double> held_yaw, double margin_rad);
 
 // Choose an aim point and fire delay against a TargetState armor model, age_s
 // old. radius, z_offset: per pair, as in TargetState. Each aim holds a tick_s,
 // then the gimbal trails it by gimbal_lag_s; the aim targets the middle of
 // that. The fire is timed over firmware_latency_s.
-// Not spinning: lead the facing panel, fire now. Spinning (shotgating): aim on
+// Not spinning: lead the choose_panel panel, fire now. Spinning (shotgating): aim on
 // the center->shooter line at the arriving pair, fire after the delay that
 // lands it there if under tick_s, else none. With chase_settle_s: chase the
 // facing panel, fire mid-hold if the panel a shot meets has faced us

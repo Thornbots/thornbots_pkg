@@ -335,6 +335,83 @@ TEST(PlanShot, NonSpinningPicksTheFacingPanelAndItsPair)
   EXPECT_LT(dist(plan(armor(a), 0.1, false, STAGGER).aim_pos, {2.76, 0.0, 0.255}), 1e-9);
 }
 
+TEST(ChoosePanel, PicksTheMostFaceOnPanel)
+{
+  // bearing pi: panel k's normal is at k * pi/2 + yaw.
+  EXPECT_EQ(tp::choose_panel(0.0, M_PI, std::nullopt, 0.0), 2);
+  EXPECT_EQ(tp::choose_panel(M_PI / 2.0 + 0.1, M_PI, std::nullopt, 0.0), 1);
+}
+
+TEST(ChoosePanel, HoldsThePanelUntilAnotherIsClearlyBetter)
+{
+  const double margin = 0.2, bearing = M_PI;
+  // Panel 1 (normal at yaw + pi/2) is held while panel 2 faces us more squarely by
+  // up to the margin, whichever way the tracker's yaw jitters across 45 deg.
+  for (double d : {-0.09, 0.0, 0.09}) {
+    const double yaw = M_PI / 4.0 + d;
+    const double held = tp::wrap_to_pi(yaw + M_PI / 2.0);
+    EXPECT_EQ(tp::choose_panel(yaw, bearing, held, margin), 1) << d;
+  }
+  // Past the margin, the better panel takes over.
+  const double yaw = M_PI / 4.0 - 0.11;
+  EXPECT_EQ(tp::choose_panel(yaw, bearing, tp::wrap_to_pi(yaw + M_PI / 2.0), margin), 2);
+}
+
+TEST(ChoosePanel, FollowsTheHeldPanelByWorldYawNotIndex)
+{
+  // The same physical panel, labelled a quarter turn apart by the state's yaw.
+  const double held = M_PI / 2.0 + 0.6;
+  EXPECT_EQ(tp::choose_panel(0.6, M_PI, held, 0.5), 1);
+  EXPECT_EQ(tp::choose_panel(0.6 - M_PI / 2.0, M_PI, held, 0.5), 2);
+}
+
+TEST(PlanShot, NonSpinningHoldsAPanelNear45DegreesAcrossTicks)
+{
+  ShotOptions opt;
+  opt.panel_switch_margin_rad = 0.2;
+  ArmorArgs a;
+  // Panel 1 faces us first; the yaw then jitters either side of 45 deg.
+  a.yaw = M_PI / 4.0 + 0.15;
+  auto s = plan(armor(a), 0.1, false, STAGGER, opt);
+  ASSERT_TRUE(s.panel_yaw);
+  const Vector3d first = s.aim_pos;
+  for (double d : {-0.05, 0.05, -0.08, 0.08}) {
+    a.yaw = M_PI / 4.0 + d;
+    opt.held_panel_yaw = s.panel_yaw;
+    s = plan(armor(a), 0.1, false, STAGGER, opt);
+    EXPECT_NEAR(s.aim_pos.z(), first.z(), 1e-9) << d;  // the same pair's height
+  }
+  // Without the hold the pick flips with the jitter.
+  a.yaw = M_PI / 4.0 - 0.05;
+  EXPECT_NE(plan(armor(a), 0.1, false, STAGGER).aim_pos.z(), first.z());
+}
+
+TEST(PlanShot, SpinningReportsNoPanelYaw)
+{
+  ArmorArgs a;
+  a.w = 9.0;
+  EXPECT_FALSE(plan(armor(a), 0.1, true).panel_yaw);
+}
+
+TEST(PlanShot, SpinningWithoutLeadIgnoresAPreviousPanelHold)
+{
+  ArmorArgs a;
+  a.yaw = M_PI / 4.0 - 0.1;
+  ShotOptions opt;
+  opt.lead = false;
+  opt.held_panel_yaw = M_PI * 3.0 / 4.0;
+  opt.panel_switch_margin_rad = 0.5;
+  const auto spinning = plan(armor(a), 0.1, true, STAGGER, opt);
+  EXPECT_FALSE(spinning.panel_yaw);
+  opt.held_panel_yaw.reset();
+  EXPECT_LT((spinning.aim_pos - plan(armor(a), 0.1, true, STAGGER, opt).aim_pos).norm(), 1e-9);
+}
+
+TEST(ChoosePanel, HeldNormalSurvivesThePiWrap)
+{
+  EXPECT_EQ(tp::choose_panel(-M_PI + 0.02, M_PI, M_PI - 0.02, 0.2), 0);
+}
+
 TEST(PlanShot, NonSpinningCrossingPanelMeetsTheInterceptCondition)
 {
   const double horizon = 0.12;
