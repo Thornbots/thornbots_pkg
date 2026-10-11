@@ -71,8 +71,8 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   if (std_m > p_.max_std_m || error <= std::max(p_.error_threshold_m, p_.n_sigma * std_m)) {
     return std::nullopt;
   }
-  // /odom is stamped on arrival, one UART leg after the MCB read it, and the
-  // frame we send lands one leg plus a read delay from now.
+  // /odom is stamped when the MCB began sending (wire time removed), not on
+  // arrival; the horizon adds two placeholder UART legs and a read delay.
   const double horizon = now - last.t + 2.0 * p_.uart_latency_s + p_.mcb_read_delay_s;
   last_sent_t_ = now;
   const double apply_t = now + p_.uart_latency_s + p_.mcb_read_delay_s;

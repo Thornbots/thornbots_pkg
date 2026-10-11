@@ -127,7 +127,8 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 
 `lidar_serial_port` and `lidar_baudrate` (`/dev/ttyUSB0`, `115200`) configure
 the RPLIDAR A2M8 on hardware. The docstring at the top of
-`launch/auto.launch.py` documents every arg.
+`launch/auto.launch.py` documents only `real_hardware`; the other args are
+described in their `DeclareLaunchArgument` `description=` strings.
 
 This package has no rviz config; `sim` does, and `sim.launch.py` opens rviz2
 itself. For a hardware run, build `sim` too and then:
@@ -156,10 +157,12 @@ colcon test --packages-select thornbots_pkg && colcon test-result --verbose
 gating and the still hypothesis; `test_target_selector_core.cpp` scoring,
 centrality, grouping and hysteresis; `test_mcb_relay_core.cpp` the relocalize
 decision; `test_point_to_cv_target_core.cpp` the intercept solve, shot planner,
-latency stat and patrol; `test_point_to_cv_target_node.cpp` the publish tick,
+latency stat and patrol; `test_pose_translator_node.cpp` the stamp, frame,
+joint and covariance mapping; `test_point_to_cv_target_node.cpp` the publish tick,
 the consumer acknowledgment and the node's subscriptions: `TargetState`,
 `RobotPose` and `RefSysStatus` (patrol only), nothing else. The pytest run is
-the ament copyright, flake8 and pep257 checks of `launch/` and `test/`.
+the ament copyright check of `include/`, `launch/`, `src/` and `test/`, and
+the flake8 and pep257 checks of `launch/` and `test/`.
 
 The localization drift suite is `ros2 launch sim
 localization_tests.launch.py`, which launches `auto.launch.py`; see
@@ -175,7 +178,8 @@ Nobody has measured odom covariance. The placeholder is 1cm stddev on
 position and velocity, everything else zero. It has to be non-zero: at zero,
 `robot_localization`'s EKF can't weight `/scan_odom` (rf2o) against this
 source. Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in
-`ekf.yaml` excludes them.
+`ekf.yaml` fuses yaw (identity orientation, the `root` heading) at that zero
+covariance and excludes the rest.
 
 `root` is heading-fixed, as rf2o's `fixed_heading` and the EKF assume.
 `RobotPose.chassis_yaw` (0 until the firmware sends it) goes out only as the
@@ -242,8 +246,11 @@ velocity under acceleration, and the camera also rotates with the gimbal.
 `lookupTransform(odom, camera, capture + pose_latency_s)` corrects both.
 Capture time is the detection stamp less `camera_latency_s` (0, unmeasured):
 the EKF updates at capture, and the TF lookup asks for the camera there. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
-offsets `dji_serial_bridge_node`'s `handle_pose()` stamping `RobotPose` at
-parse time instead of MCB sample time. Sweep it on hardware.
+covers the delay `dji_serial_bridge_node`'s stamp leaves in:
+`RobotPose` is stamped with the last-byte read time less the frame's wire
+time, so USB-serial/read buffering and the MCB's sample-to-send delay remain
+([UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md)). Sweep it on
+hardware; the bridge already removes wire time, so don't add it here.
 
 A missing transform logs an error and drops the detection, with no stale or
 zero fallback. In sim `robot_state_publisher` is always up, so a silent
@@ -399,7 +406,8 @@ using no TF and no backend assumptions (`Relocalizer` in `mcb_relay_core.hpp`).
   interpolated there from a 1 s buffer.
 - It is added to where the MCB's odometry will read when it applies the
   frame: the latest `/odom` extrapolated at its velocity by its age, two
-  UART legs (`uart_latency_s`, 5 ms; `/odom` is stamped on arrival) and
+  UART legs (`uart_latency_s`, 5 ms; `/odom` is stamped when the MCB began
+sending, not on arrival) and
   `mcb_read_delay_s` (2 ms). Both are placeholders until measured on the
   robot. The point is stamped with that apply time.
 - It is sent only when confident: the localization's xy std, combined with
@@ -449,7 +457,8 @@ trusting it.
 `/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
 and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See
-`CVTarget.msg` and `ros2_dji_serial_bridge/README.md`'s wire-format history.
+`CVTarget.msg` and
+[UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md).
 
 The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone (`ref_sys` only
 steers the patrol), so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
@@ -459,7 +468,7 @@ the message.
 
 A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
-`_compute_aim_point()` handles three cases per tick:
+`compute_aim_point()` handles three cases per tick:
 
 - No usable state, or TF fails: no `CVTarget`, so the MCB holds still, with
   a throttled `ERROR` on TF failure. Usable means present and younger than
@@ -522,8 +531,9 @@ aims at the current estimate and fires untimed.
 `fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
 MCB in the same frame as the aim it was solved for, and the MCB runs
 `delay_ms` from receiving that frame (no stamp crosses the wire; see
-`ros2_dji_serial_bridge/UART_PROTOCOL.md`). The
-firmware struct still has to grow to match before hardware timing works.
+`ros2_dji_serial_bridge/UART_PROTOCOL.md`). The firmware already reads the
+15-byte payload; remaining timing and frame work is tracked in the bridge's
+[firmware status](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
 
 Both horizons start from this tick's `now - state.header.stamp`, not
 `LatencyStat.mean`, because cached state ages between arrival and tick, by
