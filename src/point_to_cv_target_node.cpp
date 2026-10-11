@@ -300,6 +300,7 @@ void PointToCvTarget::on_publish_tick()
 {
   const rclcpp::Time now = clock_now();
   std::optional<Aim> aim;
+  bool patrol_point = false;
   if (target_active_) {
     aim = compute_aim_point();
   }
@@ -309,6 +310,7 @@ void PointToCvTarget::on_publish_tick()
     const auto point = patrol_point_now(now);
     if (point) {
       aim = Aim{*point, std::nullopt};
+      patrol_point = true;
     }
   }
   std::string out_frame;  // empty means no aim was published
@@ -324,6 +326,7 @@ void PointToCvTarget::on_publish_tick()
     out.delay_ms = static_cast<uint16_t>(fire.second);
     out.type_c_based_patrol = type_c_based_patrol_;
     out.turn_to_hit = turn_to_hit_;
+    out.patrol = patrol_point;
     out_frame = out.header.frame_id;
     send_target_(out);
   }
