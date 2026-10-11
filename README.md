@@ -553,13 +553,20 @@ Every aim point also carries `type_c_based_patrol` (default false: the MCB
 doesn't patrol on its own) and `turn_to_hit` (default true: it may turn toward
 where it got hit).
 
+Every Jetson patrol point, including a turn toward a hit, sets `CVTarget.patrol`;
+target aim points leave it clear, including non-firing holds. This identifies
+the source of the point and is independent of `type_c_based_patrol`, which
+permits firmware patrol. Wire semantics live in the
+[CV_TARGET flag table](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+
 The Jetson patrols itself (`patrol_enabled`, default true; `auto.launch.py`
 arg of the same name). After `patrol_after_s` (0.2) with no aim point it
 sends patrol points at the publish rate, never with `fire` set: a point
 `patrol_range_m` (3.0) out from the `muzzle` frame, `patrol_pitch_down_rad`
 (0.05) below level, its yaw starting at the gun's and turning at
-`patrol_rate_rad_s` (-2.0, clockwise). That copies the MCB's own patrol in
-`AutoAimAndFireCommand.cpp`: -0.002 rad per 1 ms cycle, pitch 0.05. The yaw
+`patrol_rate_rad_s` (-2.0, clockwise). Firmware patrol is slower: the compiled MCB uses -0.0002 rad per 1 ms
+cycle (0.2 rad/s clockwise), with pitch 0.05. The Jetson sweep remains its
+separate configured rate. The yaw
 is integrated on itself, not on the gun's, so a gun that lags can't stall
 the sweep. With `turn_to_hit`, a `RefSysStatus.delta_angle_got_hit_in` other
 than 123 (not hit) faces `gun yaw + hit_angle_sign * delta` for
@@ -570,8 +577,8 @@ has been checked on the robot.
 Why the Jetson and not the MCB: a patrol frame keeps a `CV_TARGET` going
 between targets, so the MCB hears the flags all the time and never patrols
 on its own. MCBV3#78 found the other way broken: the MCB only patrols with
-no frame coming, the one time it hears no flags. A patrol frame is just an
-aim point with `fire` clear, so the wire is unchanged. That holds because
+no frame coming, the one time it hears no flags. A patrol frame is an
+aim point with `fire` clear and `patrol` set; the payload size is unchanged. That holds because
 MCBV3 `nightly` requests a shot only when `fire` is set
 (`AutoAimAndFireCommand.cpp`). The aiming and estimation benches disable
 patrol; every `mcb_*` match stage enables it. The old E1 scorer is gone.

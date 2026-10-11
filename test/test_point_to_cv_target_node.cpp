@@ -50,7 +50,17 @@ public:
   using tp::PointToCvTarget::on_publish_tick;
   using tp::PointToCvTarget::on_target_state;
 
+  using tp::PointToCvTarget::on_ref_sys;
+  void gun_transform()
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = odom_frame_;
+    tf.child_frame_id = muzzle_frame_;
+    tf.transform.rotation.w = 1.0;
+    tf_buffer_->setTransform(tf, "test", true);
+  }
   void set_active(bool active) {target_active_ = active;}
+  void non_firing_target() {fire_target_ = false;}
   bool active() const {return target_active_;}
   void hold(double yaw) {held_panel_yaw_ = yaw;}
   bool held() const {return held_panel_yaw_.has_value();}
@@ -66,13 +76,18 @@ public:
   }
 
 protected:
-  std::optional<Aim> compute_aim_point() override {return Aim{tp::Vector3d(3.0, 1.0, 0.3), 0.0};}
-  std::pair<bool, int> fire_decision(std::optional<double>, const rclcpp::Time &) override
+  std::optional<Aim> compute_aim_point() override
   {
-    return {true, 0};
+    return Aim{tp::Vector3d(3.0, 1.0, 0.3),
+      fire_target_ ? std::optional<double>(0.0) : std::nullopt};
+  }
+  std::pair<bool, int> fire_decision(std::optional<double> delay, const rclcpp::Time &) override
+  {
+    return {delay.has_value(), 0};
   }
   rclcpp::Time clock_now() const override {return rclcpp::Time(now_ns_, RCL_ROS_TIME);}
   int64_t now_ns_ = 123000000;
+  bool fire_target_ = true;
 };
 
 class NodeTest : public ::testing::Test
@@ -123,6 +138,7 @@ TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
   EXPECT_EQ(rclcpp::Time(points[0].header.stamp).nanoseconds(), 123000000);
   EXPECT_NE(points[0].header.stamp, model->header.stamp);
   EXPECT_TRUE(points[0].fire);
+  EXPECT_FALSE(points[0].patrol);
 }
 
 TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
@@ -221,4 +237,35 @@ TEST_F(NodeTest, RejectsInvalidPanelSwitchMargins)
     options.append_parameter_override("panel_switch_margin_rad", margin);
     EXPECT_THROW(std::make_shared<Probe>(options), std::invalid_argument);
   }
+}
+
+TEST_F(NodeTest, SweepAndHitTurnPointsArePatrolButTargetsAreNot)
+{
+  auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
+  node->gun_transform();
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_FALSE(points.back().fire);
+  dji_serial_bridge::msg::RefSysStatus hit;
+  hit.delta_angle_got_hit_in = 1.0;
+  node->on_ref_sys(hit);
+  node->time_ns(148000000);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_FALSE(points.back().fire);
+  EXPECT_NEAR(points.back().x, 3.0 * std::cos(1.0), 1e-5);
+  node->set_active(true);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 3u);
+  EXPECT_FALSE(points.back().patrol);
+  node->non_firing_target();
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 4u);
+  EXPECT_FALSE(points.back().patrol);
+  EXPECT_FALSE(points.back().fire);
 }
