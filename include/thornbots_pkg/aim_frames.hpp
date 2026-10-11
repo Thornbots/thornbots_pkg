@@ -15,9 +15,11 @@
 #define THORNBOTS_PKG__AIM_FRAMES_HPP_
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include <Eigen/Geometry>
 
@@ -32,9 +34,12 @@ public:
   std::optional<Eigen::Isometry3d> navigation_to_aim(
     double stamp, const Eigen::Isometry3d & navigation_pose) const;
   bool too_old(double stamp) const;
+  void add_navigation(int64_t stamp_ns, const Eigen::Isometry3d & pose);
+  std::vector<std::pair<int64_t, Eigen::Isometry3d>> take_navigation();
 
 private:
   std::deque<std::pair<double, Eigen::Isometry3d>> raw_;
+  std::deque<std::pair<int64_t, Eigen::Isometry3d>> pending_;
 };
 
 }  // namespace thornbots_pkg

@@ -101,7 +101,51 @@ TEST(Relocalizer, HoldOffAfterASend)
   drive(rel, 0.0, 1.0);
   EXPECT_TRUE(rel.decide(0.4, 0.1, 0.0, 1e-6, 0.5));
   EXPECT_FALSE(rel.decide(0.6, 0.1, 0.0, 1e-6, 0.7));
-  EXPECT_TRUE(rel.decide(0.8, 0.1, 0.0, 1e-6, 0.85));
+  EXPECT_FALSE(rel.decide(0.8, 0.1, 0.0, 1e-6, 0.85));
+  EXPECT_TRUE(rel.decide(0.8, 0.2, 0.0, 1e-6, 0.85));
+}
+
+TEST(Relocalizer, UnchangedOffsetDoesNotRepeatWhileRawKeepsMoving)
+{
+  Relocalizer rel;
+  rel.add_odom(0.0, 0.0, 0.0, 1.0, 0.0);
+  rel.add_odom(0.1, 0.1, 0.0, 1.0, 0.0);
+  ASSERT_TRUE(rel.decide(0.1, 0.3, -0.1, 1e-6, 0.1));
+  for (int i = 2; i <= 100; ++i) {
+    const double t = i * 0.1;
+    rel.add_odom(t, t, 0.0, 1.0, 0.0);
+    EXPECT_FALSE(rel.decide(t, t + 0.2, -0.1, 1e-6, t));
+  }
+  const auto next = rel.decide(10.0, 10.3, -0.1, 1e-6, 10.0);
+  ASSERT_TRUE(next);
+  EXPECT_NEAR(next->error_m, 0.1, 1e-12);
+  EXPECT_NEAR(next->x, 10.307, 1e-12);
+  EXPECT_NEAR(next->y, -0.1, 1e-12);
+}
+
+TEST(Relocalizer, ReturnToRawCoordinatesIsANewNavigationCorrection)
+{
+  Relocalizer rel;
+  rel.add_odom(0.0, 0.0, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(0.0, 0.2, 0.0, 1e-6, 0.0));
+  rel.add_odom(1.0, 0.0, 0.0, 0.0, 0.0);
+  const auto reset = rel.decide(1.0, 0.0, 0.0, 1e-6, 1.0);
+  ASSERT_TRUE(reset);
+  EXPECT_DOUBLE_EQ(reset->x, 0.0);
+  rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
+  EXPECT_FALSE(rel.decide(2.0, 0.0, 0.0, 1e-6, 2.0));
+}
+
+TEST(Relocalizer, ClockResetAndTeamReanchorForgetTheSentOffset)
+{
+  Relocalizer rel;
+  rel.add_odom(10.0, -4.625, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(10.0, -4.425, 0.0, 1e-6, 10.0));
+  rel.add_odom(10.01, 4.625, 0.0, 0.0, 0.0);
+  EXPECT_FALSE(rel.odom_at(10.005));
+  ASSERT_TRUE(rel.decide(10.01, 4.825, 0.0, 1e-6, 10.01));
+  rel.add_odom(0.0, 4.625, 0.0, 0.0, 0.0);
+  EXPECT_TRUE(rel.decide(0.0, 4.825, 0.0, 1e-6, 0.0));
 }
 
 TEST(Relocalizer, LocalizationStampOutsideOdomHistory)
@@ -119,11 +163,11 @@ TEST(Relocalizer, InterpolatesBetweenOdomSamples)
 {
   Relocalizer rel;
   rel.add_odom(0.0, 0.0, 0.0, 0.0, 0.0);
-  rel.add_odom(0.1, 1.0, 2.0, 0.0, 0.0);
+  rel.add_odom(0.1, 0.1, 0.2, 0.0, 0.0);
   auto at = rel.odom_at(0.025);
   ASSERT_TRUE(at);
-  EXPECT_TRUE(approx(at->first, 0.25));
-  EXPECT_TRUE(approx(at->second, 0.5));
+  EXPECT_TRUE(approx(at->first, 0.025));
+  EXPECT_TRUE(approx(at->second, 0.05));
   rel.add_odom(0.05, 0.0, 0.0, 0.0, 0.0);  // stamps went back: a sim restart
   at = rel.odom_at(0.05);
   ASSERT_TRUE(at);

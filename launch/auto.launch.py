@@ -285,6 +285,7 @@ def generate_launch_description():
         package='thornbots_pkg',
         executable='mcb_relay',
         name='mcb_relay',
+        parameters=[{'navigation_frame': LaunchConfiguration('odom_frame')}],
         output='screen',
         condition=IfCondition(real_hardware),
         additional_env=shm_env,

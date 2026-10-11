@@ -58,6 +58,7 @@ public:
     const auto localization_odom_topic = declare_parameter(
       "localization_odom_topic", std::string("/localization/odom"));
     const auto raw_odom_topic = declare_parameter("raw_odom_topic", std::string("/odom"));
+    navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
     const auto relocalize_out = declare_parameter(
       "relocalize_output_topic", std::string("/dji_serial_bridge/relocalize"));
     Relocalizer::Params p;
@@ -117,17 +118,18 @@ private:
     }
     PointStamped point;
     point.header.stamp = rclcpp::Time(static_cast<int64_t>(out->apply_t * 1e9));
-    point.header.frame_id = msg.header.frame_id;
+    point.header.frame_id = navigation_frame_;
     point.point.x = out->x;
     point.point.y = out->y;
     relocalize_pub_->publish(point);
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "Localization %.3fm (std %.3fm) from raw odom - sent relocalize x=%.3f y=%.3f",
+      "Localization %.3fm (std %.3fm) from estimated MCB navigation - sent relocalize x=%.3f y=%.3f",
       out->error_m, out->std_m, out->x, out->y);
   }
 
   Relocalizer relocalizer_;
+  std::string navigation_frame_;
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;

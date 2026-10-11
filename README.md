@@ -179,19 +179,28 @@ Design rationale, kept here so in-code comments stay short.
 
 ### pose_translator
 
-`root` is heading-fixed by design. The TF tree is `map -> nav_odom -> odom
+The TF tree is `map -> nav_odom -> odom
 -> root`: raw MCB POSE supplies `/odom` and `odom->root`, while localization
 provides the fused navigation pose and `map->nav_odom`. The broadcaster
-interpolates raw pose at the fused pose stamp to publish `nav_odom->odom`;
-it does not substitute latest data or extrapolate. See [the frame roles](../AGENTS.md#frames)
-for this documented deviation from [REP-105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst)'s
-body-fixed base frame.
+interpolates raw position at the fused pose stamp to publish translation-only
+`nav_odom->odom`; navigation cannot rotate the aim axes. It does not substitute
+latest data or extrapolate. A backwards stamp or a discontinuous raw POSE step
+clears raw history and pending navigation samples. Boot/team selection can
+reanchor raw coordinates, as defined by the [wire owner](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+
+`nav_odom` is an extra navigation reference whose axes stay aligned with raw
+`odom`, matching the MCB's translation-only offset. Its pose can change with
+navigation corrections; it is not the continuous odometry frame described by
+[REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst).
+Raw `odom` retains that role after startup initialization. `root` is the
+separate heading-fixed deviation from REP 105's body-fixed `base_link`, below.
 
 Nobody has measured raw odom covariance. The placeholder is 1cm stddev on
 position and velocity, everything else zero. It has to be non-zero so the
 navigation EKF can weight `/scan_odom` (rf2o) against the raw POSE input.
 Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in `ekf.yaml`
-fuses the heading at that zero covariance and excludes the rest. Its fused
+fuses the adapter's explicit fixed navigation heading and excludes raw position.
+The adapter does not transform `/odom` yaw through EKF-derived TF. Its fused
 navigation pose is `nav_odom`; it does not replace raw `/odom` or
 `odom->root`.
 
@@ -412,13 +421,13 @@ See the [CV interface](#cv-interface) for correction ownership.
 ### mcb_relay
 
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
-for it. `relocalize` compares fused `/localization/odom` with the MCB's raw
-`/odom`, using no TF and no backend assumptions (`Relocalizer` in
+for it. `relocalize` compares fused `/localization/odom` with the estimated MCB
+navigation position: raw `/odom` plus the last sent offset, using no TF (`Relocalizer` in
 `mcb_relay_core.hpp`). Raw `/odom` never reflects a `RELOCALIZE`; the relay
 sends gated absolute navigation positions to correct the navigation offset
 while CV continues in the unchanged raw frame.
 
-- The relative correction is `loc(t) - odom(t)` at the localization stamp,
+- The desired offset is `loc(t) - odom(t)` at the localization stamp,
   with `/odom` interpolated there from a 1 s buffer.
 - The navigation position sent is `loc(t)`, adjusted for estimated message
   delay. Its age already includes the inbound UART leg because the
@@ -429,10 +438,13 @@ while CV continues in the unchanged raw frame.
   stamp; see the [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 - It is sent only when confident: the localization's xy std, combined with
   speed x `latency_std_s` (3 ms), stays under `max_std_m` (0.02), and the
-  offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
+  change from the last sent offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
   that std. The EKF's std reads ~1 mm at rest and ~7 mm at 1 m/s in sim.
 - After a send it waits `hold_off_s` (0.3 s) before another correction,
-  limiting correction rate; raw `/odom` does not jump or echo the correction.
+  limiting correction rate; an unchanged offset is not resent. Raw `/odom`
+  does not echo corrections. Clock resets/raw reanchors forget the sent offset.
+  UART has no correction acknowledgement: the stored offset estimates the MCB
+  state and cannot detect mailbox loss; hardware validation remains open.
 
 The bridge packs the navigation position using the existing `RELOCALIZE`
 payload. Raw POSE and the CV aim frame remain unchanged. See the

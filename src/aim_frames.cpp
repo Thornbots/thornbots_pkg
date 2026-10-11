@@ -18,8 +18,12 @@ namespace thornbots_pkg
 
 void AimFrames::add_raw(double stamp, const Eigen::Isometry3d & pose)
 {
-  if (!raw_.empty() && stamp < raw_.back().first) {
+  // A >1 m single POSE step is a reanchor, not motion to interpolate through.
+  if (!raw_.empty() && (stamp < raw_.back().first ||
+    (pose.translation() - raw_.back().second.translation()).norm() > 1.0))
+  {
     raw_.clear();
+    pending_.clear();
   }
   if (!raw_.empty() && stamp == raw_.back().first) {
     raw_.back().second = pose;
@@ -44,7 +48,9 @@ std::optional<Eigen::Isometry3d> AimFrames::navigation_to_aim(
   }
   for (std::size_t i = 0; i < raw_.size(); ++i) {
     if (stamp == raw_[i].first) {
-      return navigation_pose * raw_[i].second.inverse();
+      auto correction = Eigen::Isometry3d::Identity();
+      correction.translation() = navigation_pose.translation() - raw_[i].second.translation();
+      return correction;
     }
     if (raw_[i].first > stamp) {
       const auto & before = raw_[i - 1];
@@ -53,12 +59,40 @@ std::optional<Eigen::Isometry3d> AimFrames::navigation_to_aim(
       Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
       pose.translation() = before.second.translation() * (1.0 - fraction) +
         after.second.translation() * fraction;
-      pose.linear() = Eigen::Quaterniond(before.second.linear()).slerp(
-        fraction, Eigen::Quaterniond(after.second.linear())).toRotationMatrix();
-      return navigation_pose * pose.inverse();
+      auto correction = Eigen::Isometry3d::Identity();
+      correction.translation() = navigation_pose.translation() - pose.translation();
+      return correction;
     }
   }
   return std::nullopt;
+}
+
+void AimFrames::add_navigation(int64_t stamp_ns, const Eigen::Isometry3d & pose)
+{
+  pending_.emplace_back(stamp_ns, pose);
+  if (pending_.size() > 100) {
+    pending_.pop_front();
+  }
+}
+
+std::vector<std::pair<int64_t, Eigen::Isometry3d>> AimFrames::take_navigation()
+{
+  std::vector<std::pair<int64_t, Eigen::Isometry3d>> out;
+  while (!pending_.empty()) {
+    const auto & sample = pending_.front();
+    const double stamp = sample.first * 1e-9;
+    if (too_old(stamp)) {
+      pending_.pop_front();
+      continue;
+    }
+    const auto correction = navigation_to_aim(stamp, sample.second);
+    if (!correction) {
+      break;
+    }
+    out.emplace_back(sample.first, *correction);
+    pending_.pop_front();
+  }
+  return out;
 }
 
 }  // namespace thornbots_pkg

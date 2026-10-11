@@ -34,13 +34,18 @@ TEST(AimFrames, NavigationCorrectionPreservesRawAimAndCameraChain)
   const auto navigation = pose(-2.0, 3.0, 0.1);
   const auto correction = frames.navigation_to_aim(1.0, navigation);
   ASSERT_TRUE(correction);
-  EXPECT_TRUE((*correction * raw).matrix().isApprox(navigation.matrix()));
-  EXPECT_TRUE((correction->inverse() * navigation * camera).matrix().isApprox(
+  auto heading_fixed_navigation = navigation;
+  heading_fixed_navigation.linear().setIdentity();
+  EXPECT_TRUE(correction->linear().isIdentity());
+  EXPECT_TRUE((*correction * raw).matrix().isApprox(heading_fixed_navigation.matrix()));
+  EXPECT_TRUE((correction->inverse() * heading_fixed_navigation * camera).matrix().isApprox(
       (raw * camera).matrix()));
   const auto next = pose(8.0, -4.0, -0.2);
   const auto next_correction = frames.navigation_to_aim(1.0, next);
   ASSERT_TRUE(next_correction);
-  EXPECT_TRUE((next_correction->inverse() * next * camera).matrix().isApprox(
+  auto heading_fixed_next = next;
+  heading_fixed_next.linear().setIdentity();
+  EXPECT_TRUE((next_correction->inverse() * heading_fixed_next * camera).matrix().isApprox(
       (raw * camera).matrix()));
 }
 
@@ -48,10 +53,37 @@ TEST(AimFrames, UsesInterpolatedRawPoseAtNavigationStamp)
 {
   thornbots_pkg::AimFrames frames;
   frames.add_raw(1.0, pose(1.0, 2.0));
-  frames.add_raw(2.0, pose(3.0, 4.0));
+  frames.add_raw(2.0, pose(1.2, 2.4));
   const auto correction = frames.navigation_to_aim(1.5, pose(7.0, 8.0));
   ASSERT_TRUE(correction);
-  EXPECT_TRUE(correction->matrix().isApprox(pose(5.0, 5.0).matrix()));
+  EXPECT_TRUE(correction->matrix().isApprox(pose(5.9, 5.8).matrix()));
+}
+
+TEST(AimFrames, TeamInitializationNeverInterpolatesAcrossTheRawReanchor)
+{
+  thornbots_pkg::AimFrames frames;
+  frames.add_raw(1.0, pose(-4.625, 0.0));
+  frames.add_navigation(1010000000, pose(0.0, 0.0));
+  frames.add_raw(1.02, pose(4.625, 0.0));
+  EXPECT_FALSE(frames.navigation_to_aim(1.01, pose(0.0, 0.0)));
+  EXPECT_TRUE(frames.take_navigation().empty());
+  EXPECT_TRUE(frames.navigation_to_aim(1.02, pose(4.625, 0.0)));
+}
+
+TEST(AimFrames, ClockResetDropsPendingNavigationFromThePreviousEpoch)
+{
+  thornbots_pkg::AimFrames frames;
+  frames.add_raw(10.0, pose(0.0, 0.0));
+  frames.add_navigation(11000000000, pose(0.5, 0.0));
+  EXPECT_TRUE(frames.take_navigation().empty());
+  frames.add_raw(0.0, pose(0.0, 0.0));
+  frames.add_raw(11.0, pose(0.0, 0.0));
+  EXPECT_TRUE(frames.take_navigation().empty());
+  frames.add_navigation(11000000000, pose(0.5, 0.0));
+  const auto fresh = frames.take_navigation();
+  ASSERT_EQ(fresh.size(), 1u);
+  EXPECT_EQ(fresh[0].first, 11000000000);
+  EXPECT_DOUBLE_EQ(fresh[0].second.translation().x(), 0.5);
 }
 
 TEST(AimFrames, RejectsMissingStaleAndFutureRawPose)

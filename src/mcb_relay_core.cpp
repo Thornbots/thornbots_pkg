@@ -22,8 +22,12 @@ namespace thornbots_pkg
 
 void Relocalizer::add_odom(double t, double x, double y, double vx, double vy)
 {
-  if (!odom_.empty() && t < odom_.back().t) {
-    odom_.clear();  // clock reset (sim restart)
+  if (!odom_.empty() && (t < odom_.back().t ||
+    std::hypot(x - odom_.back().x, y - odom_.back().y) > 1.0))
+  {
+    odom_.clear();  // clock reset or startup/team reanchor
+    last_sent_t_.reset();
+    sent_offset_x_ = sent_offset_y_ = 0.0;
   }
   odom_.push_back({t, x, y, vx, vy});
   while (!odom_.empty() && odom_.front().t < t - p_.history_s) {
@@ -56,14 +60,14 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   double loc_t, double loc_x, double loc_y, double loc_var_xy, double now)
 {
   if (last_sent_t_ && now - *last_sent_t_ < p_.hold_off_s) {
-    return std::nullopt;  // limit navigation updates; raw /odom never echoes a fix
+    return std::nullopt;
   }
   const auto at_loc = odom_at(loc_t);
   if (!at_loc) {
     return std::nullopt;
   }
   const double dx = loc_x - at_loc->first, dy = loc_y - at_loc->second;
-  const double error = std::hypot(dx, dy);
+  const double error = std::hypot(dx - sent_offset_x_, dy - sent_offset_y_);
   const OdomSample & last = odom_.back();
   const double speed = std::hypot(last.vx, last.vy);
   const double std_m =
@@ -77,6 +81,8 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   const double apply_t = now + p_.uart_latency_s + p_.mcb_read_delay_s;
   const double horizon = apply_t - last.t;
   last_sent_t_ = now;
+  sent_offset_x_ = dx;
+  sent_offset_y_ = dy;
   return RelocalizeCommand{
     last.x + last.vx * horizon + dx, last.y + last.vy * horizon + dy, apply_t, error, std_m};
 }

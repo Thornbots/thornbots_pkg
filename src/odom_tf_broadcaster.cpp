@@ -15,7 +15,6 @@
 // Raw odom owns root; localization owns only the upstream navigation correction.
 // See README.md, pose_translator, for the frame tree and heading-fixed base.
 
-#include <deque>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -51,10 +50,7 @@ public:
     navigation_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "/localization/odom", 10,
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m) {
-        pending_.push_back(*m);
-        if (pending_.size() > 100) {
-          pending_.pop_front();
-        }
+        frames_.add_navigation(rclcpp::Time(m->header.stamp).nanoseconds(), pose(*m));
         flush_navigation();
       });
   }
@@ -77,19 +73,9 @@ private:
 
   void flush_navigation()
   {
-    while (!pending_.empty()) {
-      const auto & msg = pending_.front();
-      const double stamp = seconds(msg.header.stamp);
-      if (frames_.too_old(stamp)) {
-        pending_.pop_front();
-        continue;
-      }
-      const auto correction = frames_.navigation_to_aim(stamp, pose(msg));
-      if (!correction) {
-        break;
-      }
-      send(msg.header.stamp, navigation_frame_, aim_frame_, *correction);
-      pending_.pop_front();
+    for (const auto & sample : frames_.take_navigation()) {
+      const builtin_interfaces::msg::Time stamp = rclcpp::Time(sample.first);
+      send(stamp, navigation_frame_, aim_frame_, sample.second);
     }
   }
 
@@ -116,7 +102,6 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_sub_, navigation_sub_;
   AimFrames frames_;
   std::string aim_frame_, navigation_frame_, base_frame_;
-  std::deque<nav_msgs::msg::Odometry> pending_;
 };
 
 }  // namespace thornbots_pkg

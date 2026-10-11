@@ -42,7 +42,7 @@ PoseTranslator::PoseTranslator(const rclcpp::NodeOptions & options)
   // First-pass covariance, not measured/validated. Non-zero (1cm stddev) is
   // required so the EKF can weight rf2o's scan-matched estimate against this
   // source; unset fields (z/roll/pitch/yaw) stay 0. odom0_config in ekf.yaml
-  // fuses yaw (identity heading) and excludes the other unset fields.
+  // uses the adapter's fixed navigation heading and excludes raw position.
   // see README.md for design rationale
   constexpr double POS_VAR = 0.01 * 0.01;
   constexpr double VEL_VAR = 0.01 * 0.01;
