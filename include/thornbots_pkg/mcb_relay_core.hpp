@@ -16,8 +16,8 @@
 //
 // The correction is the offset loc(t) - odom(t) at the localization stamp,
 // /odom interpolated there, added to where the MCB's odometry will read when
-// it applies the frame: latest /odom extrapolated past both UART legs and the
-// MCB's read delay. Sent only when confident: localization's xy std and the
+// it applies the frame: latest send-stamped /odom extrapolated by its age, the
+// outbound UART leg and the MCB's read delay. Sent only when confident: localization's xy std and the
 // extrapolation's (speed x latency_std_s) combined stay under max_std_m, and
 // the offset clears error_threshold_m and n_sigma of that std. See
 // README.md's ### mcb_relay.
