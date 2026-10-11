@@ -476,7 +476,13 @@ the intercept on the target's true path (curved by acceleration and spin),
 not a straight line.
 
 - Panel mode leads the panel facing the shooter at impact, with that pair's
-  radius and `z_offset`, and fires now.
+  radius and `z_offset`, and fires now. `choose_panel()` selects the most
+  face-on normal near impact, then holds that physical panel by its odom yaw
+  until another faces us `panel_switch_margin_rad` more squarely. A new track,
+  invalid state, spin mode or timeout clears the hold, including a late update
+  arriving before the timeout timer runs. Holding by yaw survives quarter-turn
+  relabeling of the target model. Zero margin gives the immediate best-panel
+  choice; finite nonnegative margins below pi/2 are accepted.
 - Spin mode, shotgating (`chase_settle_s < 0`): leads a point on
   the center-to-shooter line, at the radius and height of the pair arriving
   next. The line is steady, so the gimbal can hold it while panels sweep
@@ -494,6 +500,13 @@ not a straight line.
   every tick, against shotgating's one tick in five. A real gimbal has to
   make a ~7 deg jump every quarter turn and settle; measure that on hardware
   and set `chase_settle_s` to it, or fall back to shotgating.
+
+The panel margin was selected on the 45-degree aiming bench to suppress
+noise-driven switches while preserving slow-turn panel transitions. The
+[three-run measurement](../sim/docs/panel-choice-2026-10-11.md#aiming-bench)
+compares margins, exact-yaw controls and synthetic orientation-error stress.
+It uses a perfect gimbal and does not establish hardware calibration or
+measured tracker-noise tolerance.
 
 Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
 the aim point, past the half tick each aim is held: the aim leads by

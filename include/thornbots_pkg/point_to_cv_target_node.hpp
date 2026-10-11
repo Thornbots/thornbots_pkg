@@ -92,7 +92,7 @@ protected:
   int tof_iterations_;
   double tick_s_, spin_enter_rad_s_, spin_exit_rad_s_;
   std::optional<double> chase_settle_s_;
-  double chase_margin_s_;
+  double chase_margin_s_, panel_switch_margin_rad_;
   bool type_c_based_patrol_, turn_to_hit_;
   std::optional<Patrol> patrol_;
   double patrol_range_m_, patrol_pitch_down_rad_, hit_angle_sign_;
@@ -103,6 +103,7 @@ protected:
   std::optional<rclcpp::Time> last_fire_time_;
   bool spinning_ = false;
   bool target_active_ = false;
+  std::optional<double> held_panel_yaw_;  // Shot::panel_yaw, for latest_state_'s track
   dji_serial_bridge::msg::TargetState::ConstSharedPtr latest_state_;
   Vector3d chassis_vel_root_ = Vector3d::Zero();  // from RobotPose, root frame
   LatencyStat latency_stat_;
