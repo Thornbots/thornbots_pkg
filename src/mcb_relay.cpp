@@ -69,7 +69,7 @@ public:
     p.uart_latency_s = declare_parameter("uart_latency_s", 0.005);
     p.mcb_read_delay_s = declare_parameter("mcb_read_delay_s", 0.002);
     p.latency_std_s = declare_parameter("latency_std_s", 0.003);
-    p.hold_off_s = declare_parameter("hold_off_s", 0.3);  // after a send, for /odom to show it
+    p.hold_off_s = declare_parameter("hold_off_s", 0.3);  // limit navigation fix rate
     const auto cv_target_in = declare_parameter("cv_target_input_topic", std::string("/cv/target"));
     const auto cv_target_out = declare_parameter(
       "cv_target_output_topic", std::string("/dji_serial_bridge/cv_target"));

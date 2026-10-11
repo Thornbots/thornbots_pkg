@@ -75,9 +75,12 @@ def generate_launch_description():
     )
 
     odom_frame_arg = DeclareLaunchArgument(
-        'odom_frame', default_value='odom',
-        description='Frame sentry_localization/odom_tf_broadcaster treat as '
-        'their drift-free reference, parent of base_frame.'
+        'odom_frame', default_value='nav_odom',
+        description='Fused navigation frame; localization corrections stay upstream of raw aim.'
+    )
+    aim_frame_arg = DeclareLaunchArgument(
+        'aim_frame', default_value='odom',
+        description='Continuous raw MCB odometry frame used by camera tracking and aim.'
     )
 
     dds_transport_arg = DeclareLaunchArgument(
@@ -123,14 +126,14 @@ def generate_launch_description():
         'localization_mode', default_value='mapping',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
-        "map->odom. See sentry_localization's "
+        "map->navigation frame. See sentry_localization's "
         'localization.launch.py module docstring for what each '
         'value launches.'
     )
     use_rf2o_arg = DeclareLaunchArgument(
         'use_rf2o', default_value='true',
         description='Forwarded to sentry_localization -- whether rf2o scan '
-        'odometry is fused into odom->root (rf2o_laser_odometry_node on '
+        'odometry is fused into navigation pose (rf2o_laser_odometry_node on '
         '/scan, fused by ekf_node) instead of passing /odom through raw. True '
         'by default so scan-matched odometry is always in the '
         'fusion; set false for raw /odom passthrough. '
@@ -302,7 +305,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
             'lead_enabled': ParameterValue(
                 LaunchConfiguration('lead_enabled'), value_type=bool
             ),
@@ -364,7 +367,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
             'tf_max_wait_s': ParameterValue(
                 LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
@@ -410,7 +413,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
@@ -423,6 +426,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
+            'aim_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
@@ -464,7 +468,7 @@ def generate_launch_description():
             'initial_y', default_value='0.0', description='Known initial field Y, meters'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, dds_transport_arg,
+        odom_frame_arg, aim_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,

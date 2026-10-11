@@ -56,7 +56,7 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   double loc_t, double loc_x, double loc_y, double loc_var_xy, double now)
 {
   if (last_sent_t_ && now - *last_sent_t_ < p_.hold_off_s) {
-    return std::nullopt;  // the last one may not have reached /odom yet
+    return std::nullopt;  // limit navigation updates; raw /odom never echoes a fix
   }
   const auto at_loc = odom_at(loc_t);
   if (!at_loc) {

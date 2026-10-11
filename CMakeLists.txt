@@ -32,7 +32,7 @@ ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core mcb_relay_core point_to_cv_target_core)
+foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
@@ -70,6 +70,7 @@ add_executable(lidar_self_filter src/lidar_self_filter.cpp)
 ament_target_dependencies(lidar_self_filter rclcpp sensor_msgs)
 
 add_executable(odom_tf_broadcaster src/odom_tf_broadcaster.cpp)
+target_link_libraries(odom_tf_broadcaster aim_frames)
 ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
 
 install(TARGETS target_tracker target_selector mcb_relay point_to_cv_target pose_translator
@@ -95,6 +96,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_point_to_cv_target_node point_to_cv_target_node)
   ament_add_gtest(test_pose_translator_node test/test_pose_translator_node.cpp)
   target_link_libraries(test_pose_translator_node pose_translator_node)
+  ament_add_gtest(test_aim_frames test/test_aim_frames.cpp)
+  target_link_libraries(test_aim_frames aim_frames)
 
   # Python is left for the ament lint checks (launch/, test/).
   find_package(ament_cmake_pytest REQUIRED)
