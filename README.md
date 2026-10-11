@@ -405,11 +405,13 @@ using no TF and no backend assumptions (`Relocalizer` in `mcb_relay_core.hpp`).
 - The offset is `loc(t) - odom(t)` at the localization stamp, with `/odom`
   interpolated there from a 1 s buffer.
 - It is added to where the MCB's odometry will read when it applies the
-  frame: the latest `/odom` extrapolated at its velocity by its age, two
-  UART legs (`uart_latency_s`, 5 ms; `/odom` is stamped when the MCB began
-sending, not on arrival) and
-  `mcb_read_delay_s` (2 ms). Both are placeholders until measured on the
-  robot. The point is stamped with that apply time.
+  frame: the latest `/odom` extrapolated at its velocity to the estimated
+  apply time. Its age already includes the inbound UART leg because the
+  [bridge stamp](../ros2_dji_serial_bridge/UART_PROTOCOL.md#mcb--jetson)
+  estimates MCB send start. Add only the outbound `uart_latency_s` and
+  `mcb_read_delay_s`; both are placeholders until measured on the robot.
+  The point is stamped with that apply time. The wire drops the stamp and
+  firmware [adopts x/y when received](../ros2_dji_serial_bridge/UART_PROTOCOL.md#relocalize-id4--lidar-position-fix).
 - It is sent only when confident: the localization's xy std, combined with
   speed x `latency_std_s` (3 ms), stays under `max_std_m` (0.02), and the
   offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of

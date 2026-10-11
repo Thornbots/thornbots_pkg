@@ -68,8 +68,8 @@ TEST(Relocalizer, MovingOffsetLandsWhereTheMcbWillBe)
   // Localization at t=0.4 says we were 0.1 m further on than /odom did.
   const auto out = rel.decide(0.4, 2.0 * 0.4 + 0.1, 0.0, 1e-6, 0.52);
   ASSERT_TRUE(out);
-  // The MCB reads its odometry at apply_t; /odom shows that one UART leg later.
-  const double mcb_odom_at_apply = 2.0 * (out->apply_t + rel.params().uart_latency_s);
+  // /odom carries the MCB send-start stamp, so predict exactly to apply_t.
+  const double mcb_odom_at_apply = 2.0 * out->apply_t;
   EXPECT_TRUE(approx(out->x, mcb_odom_at_apply + 0.1));
 }
 
@@ -130,4 +130,21 @@ TEST(Relocalizer, InterpolatesBetweenOdomSamples)
   EXPECT_EQ(at->first, 0.0);
   EXPECT_EQ(at->second, 0.0);
   EXPECT_EQ(rel.odom_size(), 1u);
+}
+
+TEST(Relocalizer, SendStartStampDoesNotAddTheInboundUartLegAgain)
+{
+  Relocalizer::Params p;
+  p.uart_latency_s = 0.020;
+  p.mcb_read_delay_s = 0.007;
+  p.latency_std_s = 0.001;
+  Relocalizer rel(p);
+  rel.add_odom(0.4, 1.2, -1.6, 3.0, -4.0);
+  rel.add_odom(0.5, 1.5, -2.0, 3.0, -4.0);
+  // A 30 ms-old send-start sample already covers the inbound UART leg.
+  const auto out = rel.decide(0.4, 1.5, -1.8, 1e-6, 0.53);
+  ASSERT_TRUE(out);
+  EXPECT_NEAR(out->apply_t, 0.557, 1e-12);
+  EXPECT_NEAR(out->x, 1.971, 1e-12);
+  EXPECT_NEAR(out->y, -2.428, 1e-12);
 }

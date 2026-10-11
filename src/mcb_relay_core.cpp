@@ -72,10 +72,11 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
     return std::nullopt;
   }
   // /odom is stamped when the MCB began sending (wire time removed), not on
-  // arrival; the horizon adds two placeholder UART legs and a read delay.
-  const double horizon = now - last.t + 2.0 * p_.uart_latency_s + p_.mcb_read_delay_s;
-  last_sent_t_ = now;
+  // arrival. Its age already includes the inbound leg; only the outbound
+  // UART leg and firmware read delay remain before application.
   const double apply_t = now + p_.uart_latency_s + p_.mcb_read_delay_s;
+  const double horizon = apply_t - last.t;
+  last_sent_t_ = now;
   return RelocalizeCommand{
     last.x + last.vx * horizon + dx, last.y + last.vy * horizon + dy, apply_t, error, std_m};
 }
