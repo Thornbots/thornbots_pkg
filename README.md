@@ -267,6 +267,8 @@ across long handoff gaps.
 The filter runs in `odom`. `root` moves with the sentry, which breaks constant
 velocity under acceleration, and the camera also rotates with the gimbal.
 `lookupTransform(odom, camera, capture + pose_latency_s)` corrects both.
+`auto.launch.py` exposes `pose_latency_s` for capture-time calibration. E2E's
+PTY fixture selects zero; the hardware default remains the unmeasured 10 ms.
 Capture time is the detection stamp less `camera_latency_s` (0, unmeasured):
 the EKF updates at capture, and the TF lookup asks for the camera there. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
 covers the delay `dji_serial_bridge_node`'s stamp leaves in:

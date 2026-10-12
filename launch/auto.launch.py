@@ -232,6 +232,9 @@ def generate_launch_description():
         description='TargetState topic published by target_tracker, '
         "consumed by point_to_cv_target's intercept solver."
     )
+    pose_latency_s_arg = DeclareLaunchArgument(
+        'pose_latency_s', default_value='0.01',
+        description='Tracker capture-time pose transport calibration, seconds')
     tf_max_wait_s_arg = DeclareLaunchArgument(
         'tf_max_wait_s', default_value='0.25',
         description='target_tracker: how long a detection waits for the '
@@ -366,6 +369,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_target_tracker')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'pose_latency_s': ParameterValue(
+                LaunchConfiguration('pose_latency_s'), value_type=float),
             'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
             'odom_frame': LaunchConfiguration('aim_frame'),
@@ -478,7 +483,7 @@ def generate_launch_description():
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg,
+        tf_max_wait_s_arg, pose_latency_s_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,
