@@ -744,3 +744,51 @@ TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)
   EXPECT_EQ(tp::wire_fire_delay_ms(0.05, 0.094) - 94, 50);
   EXPECT_EQ(tp::wire_fire_delay_ms(70.0, 0.08), 65535);
 }
+
+TEST(PlanShot, OneHzAlignmentGatingHoldsYawAndMeetsTheExitHorizon)
+{
+  for (double w : {2 * M_PI, -2 * M_PI}) {
+    int fired = 0;
+    for (int i = 0; i < 160; ++i) {
+      ArmorArgs a;
+      a.center.x() = 1.3;
+      a.yaw = M_PI + i * 2 * M_PI / 160;
+      a.w = w;
+      ShotOptions opt;
+      opt.gimbal_lag_s = 0;
+      const double age = .013, tick = .025;
+      const auto s = tp::plan_shot(
+        armor(a), {.24, .24}, FLAT, age, SHOOTER, V_MUZZLE, true, tick, opt);
+      EXPECT_NEAR(s.aim_pos.y(), 0, 1e-9);
+      if (!s.delay_s) {
+        continue;
+      }
+      ++fired;
+      EXPECT_GE(*s.delay_s, 0);
+      EXPECT_LT(*s.delay_s, tick);
+      const double impact = age + opt.firmware_latency_s + *s.delay_s + flight(s.aim_pos);
+      const double phase = tp::py_mod(a.yaw + w * impact - M_PI, M_PI / 2);
+      EXPECT_LT(std::min(phase, M_PI / 2 - phase), 1e-8);
+    }
+    EXPECT_GT(fired, 0);
+  }
+}
+
+TEST(PlanShot, SpinFirePolicyDoesNotChangeNonspinningMovingPrediction)
+{
+  for (const Vector3d & velocity : {Vector3d(2, 0, 0), Vector3d(0, 2, 0), Vector3d(1, 1, 0)}) {
+    ArmorArgs a;
+    a.vel = velocity;
+    ShotOptions gated, chase;
+    gated.gimbal_lag_s = chase.gimbal_lag_s = 0;
+    chase.chase_settle_s = .025;
+    chase.chase_margin_s = .025;
+    const auto gate_shot = tp::plan_shot(
+      armor(a), RADII, STAGGER, .02, SHOOTER, V_MUZZLE, false, .025, gated);
+    const auto chase_shot = tp::plan_shot(
+      armor(a), RADII, STAGGER, .02, SHOOTER, V_MUZZLE, false, .025, chase);
+    EXPECT_LT((gate_shot.aim_pos - chase_shot.aim_pos).norm(), 1e-12);
+    EXPECT_EQ(gate_shot.delay_s, chase_shot.delay_s);
+    EXPECT_EQ(gate_shot.panel_yaw, chase_shot.panel_yaw);
+  }
+}

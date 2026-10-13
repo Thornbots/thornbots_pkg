@@ -73,11 +73,11 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // exit, in |yaw_rate| rad/s.
   spin_enter_rad_s_ = declare_parameter("spin_enter_rad_s", 3.0);
   spin_exit_rad_s_ = declare_parameter("spin_exit_rad_s", 2.0);
-  // Spin mode, >= 0 (default): chase the facing panel, firing on any tick whose
+  // Spin mode, >= 0: chase the facing panel, firing on any tick whose
   // panel has faced us this long and will for chase_margin_s more; both cover
   // the gimbal's jump between panels. < 0: shotgating, hold the center line
   // and time the fire. README.md.
-  const double chase_settle_s = declare_parameter("chase_settle_s", 0.0);
+  const double chase_settle_s = declare_parameter("chase_settle_s", -1.0);
   if (chase_settle_s >= 0.0) {
     chase_settle_s_ = chase_settle_s;
   }

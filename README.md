@@ -525,7 +525,7 @@ not a straight line.
   arriving before the timeout timer runs. Holding by yaw survives quarter-turn
   relabeling of the target model. Zero margin gives the immediate best-panel
   choice; finite nonnegative margins below pi/2 are accepted.
-- Spin mode, shotgating (`chase_settle_s < 0`): leads a point on
+- Spin mode, shotgating (`chase_settle_s < 0`, default -1): leads a point on
   the center-to-shooter line, at the radius and height of the pair arriving
   next. The line is steady, so the gimbal can hold it while panels sweep
   past. It fires with `delay_ms` set so a panel normal points along the line
@@ -533,7 +533,12 @@ not a straight line.
   in five at 2 Hz spin. The pair switches only once the last shot at the
   current one has left the muzzle: its height is a step, and a switch any
   earlier moved the gun under that shot (staggered 0.5 m/s: 58% to 97%).
-- Spin mode, chase (`chase_settle_s >= 0`, the default, 0): leads the facing panel itself and
+  This is the default after 1 Hz hosted tests showed persistent yaw error
+  while chasing despite fresh detections and valid tracks. It changes only
+  spin mode; nonspinning targets retain panel lead and hysteresis. The
+  [accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md) records the
+  filter, lead and fire-policy ablations and repeat measurements.
+- Spin mode, chase (`chase_settle_s >= 0`, opt-in): leads the facing panel itself and
   fires on any tick whose panel will have faced the shooter for
   `chase_settle_s` at impact, with `chase_margin_s` still to go. Both cover
   the gimbal's jump between panels; 0 and 0 fire every tick. The fire is

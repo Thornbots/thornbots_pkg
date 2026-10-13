@@ -170,8 +170,9 @@ def generate_launch_description():
         '0.094 matches the hosted sentry indexer; measure it on hardware.'
     )
     chase_settle_s_arg = DeclareLaunchArgument(
-        'chase_settle_s', default_value='0.0',
-        description='point_to_cv_target: delay before chasing a facing panel, seconds')
+        'chase_settle_s', default_value='-1.0',
+        description='point_to_cv_target: negative selects spin alignment gating; '
+                    'nonnegative sets chase settling time, seconds')
     chase_margin_s_arg = DeclareLaunchArgument(
         'chase_margin_s', default_value='0.0',
         description='point_to_cv_target: time margin before a panel stops facing, seconds')
