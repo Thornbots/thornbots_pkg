@@ -16,7 +16,7 @@
 Launch thornbots_pkg's core nodes and hand off to sentry_localization.
 
 Gets /dji_serial_bridge/pose and /scan onto the graph, owns the robot description, then
-hands off to sentry_localization for odom->root/map->odom localization.
+hands off to sentry_localization for map->nav_odom and navigation pose.
 See README.md for design rationale and per-node breakdown.
 
 real_hardware:=true (default) launches dji_serial_bridge_node + sllidar_ros2
@@ -75,9 +75,12 @@ def generate_launch_description():
     )
 
     odom_frame_arg = DeclareLaunchArgument(
-        'odom_frame', default_value='odom',
-        description='Frame sentry_localization/odom_tf_broadcaster treat as '
-        'their drift-free reference, parent of base_frame.'
+        'odom_frame', default_value='nav_odom',
+        description='Fused navigation frame; localization corrections stay upstream of raw aim.'
+    )
+    aim_frame_arg = DeclareLaunchArgument(
+        'aim_frame', default_value='odom',
+        description='Continuous raw MCB odometry frame used by camera tracking and aim.'
     )
 
     dds_transport_arg = DeclareLaunchArgument(
@@ -123,14 +126,14 @@ def generate_launch_description():
         'localization_mode', default_value='mapping',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
-        "map->odom. See sentry_localization's "
+        "map->navigation frame. See sentry_localization's "
         'localization.launch.py module docstring for what each '
         'value launches.'
     )
     use_rf2o_arg = DeclareLaunchArgument(
         'use_rf2o', default_value='true',
         description='Forwarded to sentry_localization -- whether rf2o scan '
-        'odometry is fused into odom->root (rf2o_laser_odometry_node on '
+        'odometry is fused into navigation pose (rf2o_laser_odometry_node on '
         '/scan, fused by ekf_node) instead of passing /odom through raw. True '
         'by default so scan-matched odometry is always in the '
         'fusion; set false for raw /odom passthrough. '
@@ -161,11 +164,18 @@ def generate_launch_description():
         'param flip between before/after.'
     )
     firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.05',
+        'firmware_latency_s', default_value='0.094',
         description='point_to_cv_target: static delay from fire decision '
         'to projectile exit, added to the state age before time of flight. '
-        '0.05 matches the aiming bench; measure it on hardware.'
+        '0.094 matches the hosted sentry indexer; measure it on hardware.'
     )
+    chase_settle_s_arg = DeclareLaunchArgument(
+        'chase_settle_s', default_value='-1.0',
+        description='point_to_cv_target: negative selects spin alignment gating; '
+                    'nonnegative sets chase settling time, seconds')
+    chase_margin_s_arg = DeclareLaunchArgument(
+        'chase_margin_s', default_value='0.0',
+        description='point_to_cv_target: time margin before a panel stops facing, seconds')
     v_muzzle_arg = DeclareLaunchArgument(
         'v_muzzle', default_value='25.0',
         description='point_to_cv_target: projectile speed (m/s) used only '
@@ -229,6 +239,12 @@ def generate_launch_description():
         description='TargetState topic published by target_tracker, '
         "consumed by point_to_cv_target's intercept solver."
     )
+    gimbal_lag_s_arg = DeclareLaunchArgument(
+        'gimbal_lag_s', default_value='0.05',
+        description='Measured setpoint-to-gimbal response delay, seconds')
+    pose_latency_s_arg = DeclareLaunchArgument(
+        'pose_latency_s', default_value='0.01',
+        description='Tracker capture-time pose transport calibration, seconds')
     tf_max_wait_s_arg = DeclareLaunchArgument(
         'tf_max_wait_s', default_value='0.25',
         description='target_tracker: how long a detection waits for the '
@@ -282,6 +298,7 @@ def generate_launch_description():
         package='thornbots_pkg',
         executable='mcb_relay',
         name='mcb_relay',
+        parameters=[{'navigation_frame': LaunchConfiguration('odom_frame')}],
         output='screen',
         condition=IfCondition(real_hardware),
         additional_env=shm_env,
@@ -300,14 +317,22 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_cv_target_bridge')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'gimbal_lag_s': ParameterValue(
+                LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
             'lead_enabled': ParameterValue(
                 LaunchConfiguration('lead_enabled'), value_type=bool
             ),
             'firmware_latency_s': ParameterValue(
                 LaunchConfiguration('firmware_latency_s'), value_type=float
+            ),
+            'chase_settle_s': ParameterValue(
+                LaunchConfiguration('chase_settle_s'), value_type=float
+            ),
+            'chase_margin_s': ParameterValue(
+                LaunchConfiguration('chase_margin_s'), value_type=float
             ),
             'v_muzzle': ParameterValue(
                 LaunchConfiguration('v_muzzle'), value_type=float
@@ -362,9 +387,11 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_target_tracker')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'pose_latency_s': ParameterValue(
+                LaunchConfiguration('pose_latency_s'), value_type=float),
             'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
             'tf_max_wait_s': ParameterValue(
                 LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
@@ -410,7 +437,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
@@ -423,6 +450,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
+            'aim_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
@@ -464,16 +492,17 @@ def generate_launch_description():
             'initial_y', default_value='0.0', description='Known initial field Y, meters'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, dds_transport_arg,
+        odom_frame_arg, aim_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
-        lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
+        lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
+        chase_margin_s_arg, v_muzzle_arg,
         cv_target_publish_rate_hz_arg, patrol_enabled_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg,
+        tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,

@@ -3,9 +3,10 @@
 Hardware interface, robot description, and CV target selection for the Thornbots
 ARC 2026 Sentry. It puts `/dji_serial_bridge/pose` (hardware or `sim`) and `/scan` on the graph,
 runs `robot_state_publisher` off `urdf/sentry.urdf.xacro` (the `sentry_v2`
-CAD's frames, with its meshes in `meshes/sentry_v2/`), republishes the
-`odom->root` pose from `sentry_localization`, and turns detections into a
-world-frame (`odom`) `CVTarget`. Localization backends are in
+CAD's frames, with its meshes in `meshes/sentry_v2/`), publishes raw MCB
+odometry as `/odom` and `odom->root`, and turns detections into a raw
+world-frame (`odom`) `CVTarget`. Fused navigation uses `nav_odom`;
+localization backends are in
 `sentry_localization/README.md`; game rules are in
 `../ARCC_2026_SENTRY_CONTEXT.md`.
 
@@ -14,7 +15,7 @@ world-frame (`odom`) `CVTarget`. Localization backends are in
 | Node | In | Out |
 | --- | --- | --- |
 | `pose_translator` | `/dji_serial_bridge/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
-| `odom_tf_broadcaster` | `/localization/odom` | `odom->root` TF |
+| `odom_tf_broadcaster` | `/odom`, `/localization/odom` | raw `odom->root` and fused `nav_odom->odom` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
@@ -33,9 +34,11 @@ arg (`enable_target_selector`, `enable_target_tracker`,
 `launch/` is Python.
 
 ```
-/dji_serial_bridge/pose --[pose_translator]--> /odom --> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> odom->root TF
+/dji_serial_bridge/pose --[pose_translator]--> /odom --[odom_tf_broadcaster]--> odom->root TF
+                                           \-> sentry_localization --> /localization/odom --[odom_tf_broadcaster]--> nav_odom->odom TF
                           \-> /joint_states --[robot_state_publisher]--> rest of TF tree
-/scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->odom TF owned by slam_toolbox/amcl there)
+/scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->nav_odom TF owned by slam_toolbox/amcl there)
+TF: map -> nav_odom -> odom -> root
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
@@ -51,9 +54,10 @@ The [TargetState](../ros2_dji_serial_bridge/msg/TargetState.msg) boundary lets
 the [aiming bench](../sim/README.md#run-the-tests) replace perception with
 perfect state. [target_tracker](#target_tracker) owns correction up to the
 state's publish-time stamp; [point_to_cv_target](#point_to_cv_target)
-extrapolates to the fire horizon. Target and aim use continuous `odom`, since
+extrapolates to the fire horizon. Detections, target state and aim use raw,
+never-relocalized `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
-[firmware/frame coordination](../ros2_dji_serial_bridge/README.md#shared-aim-frame)
+[firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
 and [remaining work](../ROADMAP.md#b-hit-while-we-move).
 
 ## Build and launch
@@ -91,19 +95,20 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 and setting it false keeps the launch off the real serial devices.
 
 `localization_mode` (`mapping` default since 2026-10-02, `slam`, `amcl`,
-`none`) picks the `map->odom` owner. Under `mapping`, `load_map` defaults
+`none`) picks the `map->nav_odom` owner. Under `mapping`, `load_map` defaults
 false (a blank map from the boot pose) and `autosave_map` defaults to
-`real_hardware`. `use_rf2o` (default `true`) picks whether `odom->root` is
-EKF-fused, with any mode; on `true` it also starts `rf2o_laser_odometry_node`,
-which scan-matches `/scan` into the `/scan_odom` the EKF fuses with `/odom`.
+`real_hardware`. `/localization/odom` is published in every mode.
+`use_rf2o` (default `true`) controls whether the navigation pose fuses
+`/scan_odom` or passes through raw odometry; when enabled it starts
+`rf2o_laser_odometry_node` to scan-match `/scan`. The MCB's raw POSE remains
+`/odom` regardless.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 `sentry_localization`.
 
-Every x/y and yaw to and from the MCB is in the field frame, so `odom` is
-too: REP-105, (0, 0) at the field centre, x toward blue's base, y left. The
-MCB boots at its team's start, red (-4.625, 0) facing +x, blue mirrored, and
-adds it to its odometry in the workspace-pinned MCBV3 `nightly`. The spawn
-coordinates still need measurement on the real field.
+Raw aim coordinates use the current field-centred wire frame; see
+[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+Navigation's corrected `nav_odom` does not change raw `odom` or the CV aim
+frame.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
@@ -174,14 +179,32 @@ Design rationale, kept here so in-code comments stay short.
 
 ### pose_translator
 
-Nobody has measured odom covariance. The placeholder is 1cm stddev on
-position and velocity, everything else zero. It has to be non-zero: at zero,
-`robot_localization`'s EKF can't weight `/scan_odom` (rf2o) against this
-source. Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in
-`ekf.yaml` fuses yaw (identity orientation, the `root` heading) at that zero
-covariance and excludes the rest.
+The TF tree is `map -> nav_odom -> odom
+-> root`: raw MCB POSE supplies `/odom` and `odom->root`, while localization
+provides the fused navigation pose and `map->nav_odom`. The broadcaster
+interpolates raw position at the fused pose stamp to publish translation-only
+`nav_odom->odom`; navigation cannot rotate the aim axes. It does not substitute
+latest data or extrapolate. A backwards stamp or a discontinuous raw POSE step
+clears raw history and pending navigation samples. Boot/team selection can
+reanchor raw coordinates, as defined by the [wire owner](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 
-`root` is heading-fixed, as rf2o's `fixed_heading` and the EKF assume.
+`nav_odom` is an extra navigation reference whose axes stay aligned with raw
+`odom`, matching the MCB's translation-only offset. Its pose can change with
+navigation corrections; it is not the continuous odometry frame described by
+[REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst).
+Raw `odom` retains that role after startup initialization.
+
+Nobody has measured raw odom covariance. The placeholder is 1cm stddev on
+position and velocity, everything else zero. It has to be non-zero so the
+navigation EKF can weight `/scan_odom` (rf2o) against the raw POSE input.
+Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in `ekf.yaml`
+fuses the adapter's explicit fixed navigation heading and excludes raw position.
+The adapter does not transform `/odom` yaw through EKF-derived TF. Its fused
+navigation pose is `nav_odom`; it does not replace raw `/odom` or
+`odom->root`.
+
+`root` is heading-fixed, a deviation from REP 105's body-fixed `base_link`,
+as rf2o's `fixed_heading` and the EKF assume.
 `RobotPose.chassis_yaw` (0 until the firmware sends it) goes out only as the
 URDF's `chassis_yaw` joint, which turns `body`, the wheels and the armor
 under `root`. The head hangs off `root` with `headlink` at the MCB's world
@@ -244,6 +267,8 @@ across long handoff gaps.
 The filter runs in `odom`. `root` moves with the sentry, which breaks constant
 velocity under acceleration, and the camera also rotates with the gimbal.
 `lookupTransform(odom, camera, capture + pose_latency_s)` corrects both.
+`auto.launch.py` exposes `pose_latency_s` for capture-time calibration. E2E's
+PTY fixture selects zero; the hardware default remains the unmeasured 10 ms.
 Capture time is the detection stamp less `camera_latency_s` (0, unmeasured):
 the EKF updates at capture, and the TF lookup asks for the camera there. `pose_latency_s` (0.01, unmeasured, inside the documented 3-25ms range)
 covers the delay `dji_serial_bridge_node`'s stamp leaves in:
@@ -398,28 +423,34 @@ See the [CV interface](#cv-interface) for correction ownership.
 ### mcb_relay
 
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
-for it. `relocalize` compares `/localization/odom` (published in every
-`localization_mode` and `use_rf2o` combination) with the MCB's raw `/odom`,
-using no TF and no backend assumptions (`Relocalizer` in `mcb_relay_core.hpp`).
+for it. `relocalize` compares fused `/localization/odom` with the estimated MCB
+navigation position: raw `/odom` plus the last sent offset, using no TF (`Relocalizer` in
+`mcb_relay_core.hpp`). Raw `/odom` never reflects a `RELOCALIZE`; the relay
+sends gated absolute navigation positions to correct the navigation offset
+while CV continues in the unchanged raw frame.
 
-- The offset is `loc(t) - odom(t)` at the localization stamp, with `/odom`
-  interpolated there from a 1 s buffer.
-- It is added to where the MCB's odometry will read when it applies the
-  frame: the latest `/odom` extrapolated at its velocity to the estimated
-  apply time. Its age already includes the inbound UART leg because the
+- The desired offset is `loc(t) - odom(t)` at the localization stamp,
+  with `/odom` interpolated there from a 1 s buffer.
+- The navigation position sent is `loc(t)`, adjusted for estimated message
+  delay. Its age already includes the inbound UART leg because the
   [bridge stamp](../ros2_dji_serial_bridge/UART_PROTOCOL.md#mcb--jetson)
   estimates MCB send start. Add only the outbound `uart_latency_s` and
   `mcb_read_delay_s`; both are placeholders until measured on the robot.
-  The point is stamped with that apply time. The wire drops the stamp and
-  firmware [adopts x/y when received](../ros2_dji_serial_bridge/UART_PROTOCOL.md#relocalize-id4--lidar-position-fix).
+  The point is stamped with the estimated apply time. The wire drops the
+  stamp; see the [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 - It is sent only when confident: the localization's xy std, combined with
   speed x `latency_std_s` (3 ms), stays under `max_std_m` (0.02), and the
-  offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
+  change from the last sent offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
   that std. The EKF's std reads ~1 mm at rest and ~7 mm at 1 m/s in sim.
-- After a send it waits `hold_off_s` (0.3 s) for `/odom` to show the jump.
+- After a send it waits `hold_off_s` (0.3 s) before another correction,
+  limiting correction rate; an unchanged offset is not resent. Raw `/odom`
+  does not echo corrections. Clock resets/raw reanchors forget the sent offset.
+  UART has no correction acknowledgement: the stored offset estimates the MCB
+  state and cannot detect mailbox loss; hardware validation remains open.
 
-The bridge packs the point into a `RelocalizePayload` and the MCB resets its
-odometry origin.
+The bridge packs the navigation position using the existing `RELOCALIZE`
+payload. Raw POSE and the CV aim frame remain unchanged. See the
+[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
@@ -494,7 +525,7 @@ not a straight line.
   arriving before the timeout timer runs. Holding by yaw survives quarter-turn
   relabeling of the target model. Zero margin gives the immediate best-panel
   choice; finite nonnegative margins below pi/2 are accepted.
-- Spin mode, shotgating (`chase_settle_s < 0`): leads a point on
+- Spin mode, shotgating (`chase_settle_s < 0`, default -1): leads a point on
   the center-to-shooter line, at the radius and height of the pair arriving
   next. The line is steady, so the gimbal can hold it while panels sweep
   past. It fires with `delay_ms` set so a panel normal points along the line
@@ -502,7 +533,12 @@ not a straight line.
   in five at 2 Hz spin. The pair switches only once the last shot at the
   current one has left the muzzle: its height is a step, and a switch any
   earlier moved the gun under that shot (staggered 0.5 m/s: 58% to 97%).
-- Spin mode, chase (`chase_settle_s >= 0`, the default, 0): leads the facing panel itself and
+  This is the default after 1 Hz hosted tests showed persistent yaw error
+  while chasing despite fresh detections and valid tracks. It changes only
+  spin mode; nonspinning targets retain panel lead and hysteresis. The
+  [accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md) records the
+  filter, lead and fire-policy ablations and repeat measurements.
+- Spin mode, chase (`chase_settle_s >= 0`, opt-in): leads the facing panel itself and
   fires on any tick whose panel will have faced the shooter for
   `chase_settle_s` at impact, with `chase_margin_s` still to go. Both cover
   the gimbal's jump between panels; 0 and 0 fire every tick. The fire is
@@ -511,6 +547,8 @@ not a straight line.
   every tick, against shotgating's one tick in five. A real gimbal has to
   make a ~7 deg jump every quarter turn and settle; measure that on hardware
   and set `chase_settle_s` to it, or fall back to shotgating.
+  `auto.launch.py` exposes both chase window controls and the independent
+  gimbal/firmware latency estimates for calibration.
 
 The panel margin was selected on the 45-degree aiming bench to suppress
 noise-driven switches while preserving slow-turn panel transitions. The
@@ -521,10 +559,17 @@ measured tracker-noise tolerance.
 
 Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
 the aim point, past the half tick each aim is held: the aim leads by
-`gimbal_lag_s` plus half a tick. `firmware_latency_s` (0.05) is fire decision
+`gimbal_lag_s` plus half a tick. `auto.launch.py` exposes this calibration;
+the hardware default remains 50 ms. After filtering absolute setpoint rate, the hosted E2E fixture uses zero
+yaw lag from
+command/achieved-angle replay in the
+[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.094) is indexing request
 to muzzle exit, and times the fire against the spin. Aiming both from the
 firmware latency overshot moving targets in sim by ~27 ms of their motion,
-since the sim gimbal reaches a moving setpoint in 35 ms.
+in the earlier fixture. The outgoing wire delay includes this indexer estimate
+plus the planner's alignment wait, matching the
+[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+The sentry default matches the 94 ms hosted chamber-exit calibration; hardware timing remains unmeasured.
 
 `plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
 no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
@@ -542,13 +587,14 @@ Both horizons start from this tick's `now - state.header.stamp`, not
 up to a tracker period plus tick phase (measured: 20ms mean at arrival, 50ms
 at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
 
-The output needs no transform. For lead, `odom->root` at the state's stamp,
-`plan_shot()`'s time zero, gives shooter position in odom, and
-`RobotPose.vel_x/vel_y` rotated by it gives shooter velocity. The state is
-stamped at the tracker's publish time, usually past the newest `odom->root`
-(the EKF runs at 30 Hz), so then the newest transform is used and its
-position is carried at that velocity to the state's stamp. The lookup never
-waits: a wait in a callback starves `/tf`.
+Aim state and shooter pose share raw `odom`; lead uses `odom->root` at the
+state stamp and world-frame `RobotPose.vel_x/vel_y`. If the state stamp is
+newer than the newest raw POSE, the latest transform is used and its position
+is carried at that velocity to the state's stamp. The lookup does not wait,
+since waiting in a callback starves `/tf`. Localization corrections do not
+move the CV target or change the outgoing aim frame. See
+[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types)
+for the wire frame and payload contract.
 
 Our own motion: the shot leaves where we are at the aim horizon and carries
 our velocity, so `plan_shot()` returns the intercept less our motion over

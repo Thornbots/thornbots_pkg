@@ -56,7 +56,7 @@ using ArmorState = std::array<double, 8>;
 struct ShotOptions
 {
   double gimbal_lag_s = 0.05;
-  double firmware_latency_s = 0.05;
+  double firmware_latency_s = 0.094;
   bool lead = true;
   int iterations = 3;
   Vector3d shooter_vel = Vector3d::Zero();
@@ -99,6 +99,9 @@ Shot plan_shot(
   const ArmorState & state, const std::array<double, 2> & radius,
   const std::array<double, 2> & z_offset, double age_s, const Vector3d & shooter_pos,
   double v_muzzle, bool spinning, double tick_s, const ShotOptions & options = {});
+
+// Wire delay names projectile exit; planner delay is the extra alignment wait.
+int wire_fire_delay_ms(double alignment_s, double firmware_latency_s);
 
 // Running mean/count of now-minus-detection-stamp latency samples (seconds).
 class LatencyStat

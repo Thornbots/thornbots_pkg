@@ -25,4 +25,5 @@ Keep runtime nodes C++; Python is for launch, with ROS-free cores unit-tested.
   [robot work](../ROADMAP.md#later-needs-a-robot). Source the referee UART spec
   before hardware firing-timing work: [game context](../ARCC_2026_SENTRY_CONTEXT.md).
 - Tracker accuracy: [track G](../ROADMAP.md#g-estimation-accuracy).
-  Frame coordination: [shared aim frame](../ros2_dji_serial_bridge/README.md#shared-aim-frame).
+  Frame design: [pose_translator](README.md#pose_translator); wire frames:
+  [UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).

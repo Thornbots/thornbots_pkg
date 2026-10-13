@@ -190,6 +190,12 @@ Shot plan_shot(
   return {hit.aim_pos, delay < tick_s ? std::optional<double>(delay) : std::nullopt};
 }
 
+int wire_fire_delay_ms(double alignment_s, double firmware_latency_s)
+{
+  const double ms = std::nearbyint((alignment_s + firmware_latency_s) * 1000.0);
+  return static_cast<int>(std::clamp(ms, 0.0, 65535.0));
+}
+
 void LatencyStat::add(double sample_s)
 {
   ++count_;

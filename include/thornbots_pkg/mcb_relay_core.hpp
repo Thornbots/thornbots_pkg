@@ -19,7 +19,7 @@
 // it applies the frame: latest send-stamped /odom extrapolated by its age, the
 // outbound UART leg and the MCB's read delay. Sent only when confident: localization's xy std and the
 // extrapolation's (speed x latency_std_s) combined stay under max_std_m, and
-// the offset clears error_threshold_m and n_sigma of that std. See
+// the change from the last sent offset clears the confidence gate. See
 // README.md's ### mcb_relay.
 
 #ifndef THORNBOTS_PKG__MCB_RELAY_CORE_HPP_
@@ -82,6 +82,7 @@ private:
   Params p_;
   std::deque<OdomSample> odom_;
   std::optional<double> last_sent_t_;
+  double sent_offset_x_ = 0.0, sent_offset_y_ = 0.0;
 };
 
 }  // namespace thornbots_pkg
