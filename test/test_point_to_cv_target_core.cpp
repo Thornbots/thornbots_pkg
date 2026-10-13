@@ -736,3 +736,11 @@ TEST(PatrolPoint, IsRangeOutAlongYawAndPitchedDown)
   EXPECT_TRUE(approx(p.y(), 5.0));
   EXPECT_TRUE(approx(p.z(), 0.4 - 3.0 * std::tan(0.05)));
 }
+
+TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)
+{
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.0, 0.094), 94);
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.02, 0.094) - 94, 20);
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.05, 0.094) - 94, 50);
+  EXPECT_EQ(tp::wire_fire_delay_ms(70.0, 0.08), 65535);
+}

@@ -542,6 +542,8 @@ not a straight line.
   every tick, against shotgating's one tick in five. A real gimbal has to
   make a ~7 deg jump every quarter turn and settle; measure that on hardware
   and set `chase_settle_s` to it, or fall back to shotgating.
+  `auto.launch.py` exposes both chase window controls and the independent
+  gimbal/firmware latency estimates for calibration.
 
 The panel margin was selected on the 45-degree aiming bench to suppress
 noise-driven switches while preserving slow-turn panel transitions. The
@@ -552,10 +554,17 @@ measured tracker-noise tolerance.
 
 Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
 the aim point, past the half tick each aim is held: the aim leads by
-`gimbal_lag_s` plus half a tick. `firmware_latency_s` (0.05) is fire decision
+`gimbal_lag_s` plus half a tick. `auto.launch.py` exposes this calibration;
+the hardware default remains 50 ms. After filtering absolute setpoint rate, the hosted E2E fixture uses zero
+yaw lag from
+command/achieved-angle replay in the
+[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.094) is indexing request
 to muzzle exit, and times the fire against the spin. Aiming both from the
 firmware latency overshot moving targets in sim by ~27 ms of their motion,
-since the sim gimbal reaches a moving setpoint in 35 ms.
+in the earlier fixture. The outgoing wire delay includes this indexer estimate
+plus the planner's alignment wait, matching the
+[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+The sentry default matches the 94 ms hosted chamber-exit calibration; hardware timing remains unmeasured.
 
 `plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
 no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`

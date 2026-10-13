@@ -164,11 +164,17 @@ def generate_launch_description():
         'param flip between before/after.'
     )
     firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.05',
+        'firmware_latency_s', default_value='0.094',
         description='point_to_cv_target: static delay from fire decision '
         'to projectile exit, added to the state age before time of flight. '
-        '0.05 matches the aiming bench; measure it on hardware.'
+        '0.094 matches the hosted sentry indexer; measure it on hardware.'
     )
+    chase_settle_s_arg = DeclareLaunchArgument(
+        'chase_settle_s', default_value='0.0',
+        description='point_to_cv_target: delay before chasing a facing panel, seconds')
+    chase_margin_s_arg = DeclareLaunchArgument(
+        'chase_margin_s', default_value='0.0',
+        description='point_to_cv_target: time margin before a panel stops facing, seconds')
     v_muzzle_arg = DeclareLaunchArgument(
         'v_muzzle', default_value='25.0',
         description='point_to_cv_target: projectile speed (m/s) used only '
@@ -232,6 +238,9 @@ def generate_launch_description():
         description='TargetState topic published by target_tracker, '
         "consumed by point_to_cv_target's intercept solver."
     )
+    gimbal_lag_s_arg = DeclareLaunchArgument(
+        'gimbal_lag_s', default_value='0.05',
+        description='Measured setpoint-to-gimbal response delay, seconds')
     pose_latency_s_arg = DeclareLaunchArgument(
         'pose_latency_s', default_value='0.01',
         description='Tracker capture-time pose transport calibration, seconds')
@@ -307,6 +316,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_cv_target_bridge')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'gimbal_lag_s': ParameterValue(
+                LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('aim_frame'),
@@ -315,6 +326,12 @@ def generate_launch_description():
             ),
             'firmware_latency_s': ParameterValue(
                 LaunchConfiguration('firmware_latency_s'), value_type=float
+            ),
+            'chase_settle_s': ParameterValue(
+                LaunchConfiguration('chase_settle_s'), value_type=float
+            ),
+            'chase_margin_s': ParameterValue(
+                LaunchConfiguration('chase_margin_s'), value_type=float
             ),
             'v_muzzle': ParameterValue(
                 LaunchConfiguration('v_muzzle'), value_type=float
@@ -478,12 +495,13 @@ def generate_launch_description():
         localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
-        lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
+        lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
+        chase_margin_s_arg, v_muzzle_arg,
         cv_target_publish_rate_hz_arg, patrol_enabled_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg, pose_latency_s_arg,
+        tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,

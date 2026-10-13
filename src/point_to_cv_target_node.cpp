@@ -61,7 +61,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
   // Fire decision to projectile exit; times the fire against the spin.
-  firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.05);
+  firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.094);
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
   // ahead the aim point leads. See README.md.
   gimbal_lag_s_ = declare_parameter("gimbal_lag_s", 0.05);
@@ -272,8 +272,7 @@ std::pair<bool, int> PointToCvTarget::fire_decision(
   }
   last_fire_time_ = now;
   // Python round() is half-to-even, as is nearbyint in the default mode.
-  const double ms = std::nearbyint(*delay_s * 1000.0);
-  return {true, static_cast<int>(std::max(0.0, std::min(65535.0, ms)))};
+  return {true, wire_fire_delay_ms(*delay_s, firmware_latency_s_)};
 }
 
 void PointToCvTarget::check_timeout()
