@@ -502,8 +502,9 @@ A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `compute_aim_point()` handles three cases per tick:
 
-- No usable state, or TF fails: no `CVTarget`, so the MCB holds still, with
-  a throttled `ERROR` on TF failure. Usable means present and younger than
+- No usable state, or TF fails: no target aim; Jetson patrol may supply a
+  non-firing point instead. TF failure logs a throttled `ERROR`.
+  Usable means present and younger than
   `target_timeout_s`. With `tick_topic` set (the lockstep benches), a
   `Header` still goes out every tick.
 - `valid == False`: raw `panel` position, no lead, no fire. No

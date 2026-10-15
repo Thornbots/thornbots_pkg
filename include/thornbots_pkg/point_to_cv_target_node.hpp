@@ -15,12 +15,9 @@
 // ROS wrapper for point_to_cv_target_core.hpp: target_tracker's target state
 // -> a world-frame aim point.
 //
-// /cv/target_state (armor model, odom) -> /cv/target (odom aim point, held by
-// the MCB as we move, carrying its own fire decision), via plan_shot. Each
-// cv_target_publish_rate_hz tick aims, and sets fire/delay_ms (at most
-// fire_rate_hz) with the delay that times a spinning target's panel to the
-// shot. With no target it sweeps without firing and permits firmware hit turns.
-// See README.md's ### point_to_cv_target Notes.
+// /cv/target_state (odom armor model) -> /cv/target (odom aim plus fire decision).
+// Each publish tick aims and gates firmware hit turns by estimate availability.
+// No target: sweep without firing and permit firmware hit turns. See README.md.
 //
 // The protected members are seams for test/test_point_to_cv_target_node.cpp:
 // the clock, the outgoing publishes and the aim/fire decisions.
@@ -72,7 +69,7 @@ protected:
   virtual std::pair<bool, int> fire_decision(
     std::optional<double> delay_s, const rclcpp::Time & now);
   // The odom aim point, or nullopt if the newest target_state is stale or TF
-  // fails (logged loudly, never silently): the caller sends no CVTarget.
+  // fails (logged loudly): the caller may publish a non-firing patrol point.
   virtual std::optional<Aim> compute_aim_point();
   virtual rclcpp::Time clock_now() const {return get_clock()->now();}
 

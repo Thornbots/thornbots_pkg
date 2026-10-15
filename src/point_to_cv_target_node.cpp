@@ -89,12 +89,9 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   {
     throw std::invalid_argument("panel_switch_margin_rad must be finite and in [0, pi/2)");
   }
-  // Sent with every aim point: whether the MCB may patrol on its own (off: the
-  // Jetson owns where it looks), and turn toward a hit (on).
+  // Firmware patrol permission is independent of the per-frame hit-turn decision.
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
-  // Jetson patrol with no target, mirroring the MCB's own (README.md): sweep at
-  // patrol_rate_rad_s (MCB's -0.002 rad per 1 ms cycle), a point
-  // patrol_range_m out and patrol_pitch_down_rad below level.
+  // Jetson patrol sweeps a point patrol_range_m out and patrol_pitch_down_rad below level.
   const bool patrol_enabled = declare_parameter("patrol_enabled", true);
   const double patrol_after_s = declare_parameter("patrol_after_s", 0.2);
   const double patrol_rate_rad_s = declare_parameter("patrol_rate_rad_s", -2.0);
@@ -261,7 +258,7 @@ void PointToCvTarget::check_timeout()
   spinning_ = false;
   held_panel_yaw_.reset();
   RCLCPP_INFO(
-    get_logger(), "Newest '%s' is %.2f s old - publishing no CVTarget until the next one arrives.",
+    get_logger(), "Newest '%s' is %.2f s old - no target estimate until the next one arrives.",
     target_state_topic_.c_str(), age_s);
 }
 
