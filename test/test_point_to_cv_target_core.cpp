@@ -684,7 +684,7 @@ TEST(PlanShot, MovingShooterChaseLandsOnAFacingPanel)
 
 TEST(Patrol, StartsAtOnceWithNoTargetEver)
 {
-  Patrol p(-2.0, 0.2, 0.5);
+  Patrol p(-2.0, 0.2);
   const auto yaw = p.step(10.0, 1.0);
   ASSERT_TRUE(yaw);
   EXPECT_TRUE(approx(*yaw, 1.0));
@@ -692,7 +692,7 @@ TEST(Patrol, StartsAtOnceWithNoTargetEver)
 
 TEST(Patrol, WaitsAfterSThenStartsFromTheGunYaw)
 {
-  Patrol p(-2.0, 0.2, 0.5);
+  Patrol p(-2.0, 0.2);
   p.target_seen(10.0);
   EXPECT_FALSE(p.step(10.1, 1.0));
   const auto yaw = p.step(10.25, 1.0);
@@ -702,7 +702,7 @@ TEST(Patrol, WaitsAfterSThenStartsFromTheGunYaw)
 
 TEST(Patrol, SweepsAtItsRateFromItsOwnYawAndWraps)
 {
-  Patrol p(-2.0, 0.2, 0.5);
+  Patrol p(-2.0, 0.2);
   p.step(0.0, -3.0);
   // The command integrates on itself, so a lagging gun can't stall it.
   const auto yaw = p.step(0.1, 0.0);
@@ -710,19 +710,9 @@ TEST(Patrol, SweepsAtItsRateFromItsOwnYawAndWraps)
   EXPECT_TRUE(approx(*yaw, -3.2 + 2.0 * M_PI));
 }
 
-TEST(Patrol, FacesAHitForHitTurnSThenSweepsOnFromIt)
-{
-  Patrol p(-2.0, 0.2, 0.5);
-  p.step(0.0, 0.0);
-  p.hit(2.0, 0.05);
-  EXPECT_TRUE(approx(*p.step(0.1, 0.0), 2.0));
-  EXPECT_TRUE(approx(*p.step(0.5, 1.0), 2.0));
-  EXPECT_TRUE(approx(*p.step(0.6, 2.0), 2.0 - 0.2));
-}
-
 TEST(Patrol, RestartsFromTheGunAfterATarget)
 {
-  Patrol p(-2.0, 0.2, 0.5);
+  Patrol p(-2.0, 0.2);
   p.step(0.0, 0.0);
   p.step(1.0, 0.0);
   p.target_seen(2.0);

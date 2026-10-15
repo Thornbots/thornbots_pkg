@@ -50,7 +50,6 @@ public:
   using tp::PointToCvTarget::on_publish_tick;
   using tp::PointToCvTarget::on_target_state;
 
-  using tp::PointToCvTarget::on_ref_sys;
   void gun_transform()
   {
     geometry_msgs::msg::TransformStamped tf;
@@ -61,6 +60,7 @@ public:
   }
   void set_active(bool active) {target_active_ = active;}
   void non_firing_target() {fire_target_ = false;}
+  void fail_aim() {fail_aim_ = true;}
   bool active() const {return target_active_;}
   void hold(double yaw) {held_panel_yaw_ = yaw;}
   bool held() const {return held_panel_yaw_.has_value();}
@@ -78,6 +78,7 @@ public:
 protected:
   std::optional<Aim> compute_aim_point() override
   {
+    if (fail_aim_) {return std::nullopt;}
     return Aim{tp::Vector3d(3.0, 1.0, 0.3),
       fire_target_ ? std::optional<double>(0.0) : std::nullopt};
   }
@@ -88,6 +89,7 @@ protected:
   rclcpp::Time clock_now() const override {return rclcpp::Time(now_ns_, RCL_ROS_TIME);}
   int64_t now_ns_ = 123000000;
   bool fire_target_ = true;
+  bool fail_aim_ = false;
 };
 
 class NodeTest : public ::testing::Test
@@ -139,6 +141,7 @@ TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
   EXPECT_NE(points[0].header.stamp, model->header.stamp);
   EXPECT_TRUE(points[0].fire);
   EXPECT_FALSE(points[0].patrol);
+  EXPECT_FALSE(points[0].turn_to_hit);
 }
 
 TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
@@ -159,11 +162,8 @@ TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
   EXPECT_EQ(acknowledged[0], model->header);
 }
 
-TEST_F(NodeTest, SubscribesToTargetStateRobotPoseAndRefSysOnly)
+TEST_F(NodeTest, SubscribesToTargetStateAndRobotPoseOnly)
 {
-  // The CV interface (README.md): Part 1 aims from TargetState alone, so a
-  // truth publisher can replace the whole of Part 2. RefSysStatus only turns
-  // the patrol toward a hit. (/tf and parameter events are the TransformListener's and rclcpp's.)
   rclcpp::NodeOptions options;
   auto node = std::make_shared<Probe>(options);
   std::set<std::string> types;
@@ -178,7 +178,7 @@ TEST_F(NodeTest, SubscribesToTargetStateRobotPoseAndRefSysOnly)
   }
   EXPECT_EQ(
     types, (std::set<std::string>{
-    "dji_serial_bridge/msg/RefSysStatus", "dji_serial_bridge/msg/RobotPose",
+    "dji_serial_bridge/msg/RobotPose",
     "dji_serial_bridge/msg/TargetState"}));
 }
 
@@ -239,7 +239,7 @@ TEST_F(NodeTest, RejectsInvalidPanelSwitchMargins)
   }
 }
 
-TEST_F(NodeTest, SweepAndHitTurnPointsArePatrolButTargetsAreNot)
+TEST_F(NodeTest, HitPermissionChangesImmediatelyWithAnyTargetEstimate)
 {
   auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
   node->gun_transform();
@@ -250,22 +250,55 @@ TEST_F(NodeTest, SweepAndHitTurnPointsArePatrolButTargetsAreNot)
   ASSERT_EQ(points.size(), 1u);
   EXPECT_TRUE(points.back().patrol);
   EXPECT_FALSE(points.back().fire);
-  dji_serial_bridge::msg::RefSysStatus hit;
-  hit.delta_angle_got_hit_in = 1.0;
-  node->on_ref_sys(hit);
-  node->time_ns(148000000);
+  EXPECT_TRUE(points.back().turn_to_hit);
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->valid = true;
+  node->on_target_state(model);
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 2u);
-  EXPECT_TRUE(points.back().patrol);
-  EXPECT_FALSE(points.back().fire);
-  EXPECT_NEAR(points.back().x, 3.0 * std::cos(1.0), 1e-5);
-  node->set_active(true);
+  EXPECT_FALSE(points.back().patrol);
+  EXPECT_FALSE(points.back().turn_to_hit);
+  // No new detection: keep the cached estimate during brief occlusion.
+  node->time_ns(200000000);
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 3u);
-  EXPECT_FALSE(points.back().patrol);
+  EXPECT_FALSE(points.back().turn_to_hit);
+  model = std::make_shared<TargetState>(*model);
+  model->valid = false;
+  node->on_target_state(model);
   node->non_firing_target();
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 4u);
   EXPECT_FALSE(points.back().patrol);
   EXPECT_FALSE(points.back().fire);
+  EXPECT_FALSE(points.back().turn_to_hit);
+  node->time_ns(700000000);
+  node->on_publish_tick();
+  node->time_ns(950000000);
+  node->on_publish_tick();
+  ASSERT_TRUE(points.back().patrol);
+  EXPECT_TRUE(points.back().turn_to_hit);
+  model = std::make_shared<TargetState>(*model);
+  model->header.stamp = rclcpp::Time(int64_t{950000000}, RCL_ROS_TIME);
+  node->on_target_state(model);
+  node->on_publish_tick();
+  EXPECT_FALSE(points.back().turn_to_hit);
+}
+
+TEST_F(NodeTest, HeldEstimateBlocksHitTurnEvenWhenAimCannotBeComputed)
+{
+  auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
+  node->gun_transform();
+  node->fail_aim();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  node->on_target_state(model);
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_FALSE(points.back().turn_to_hit);
 }

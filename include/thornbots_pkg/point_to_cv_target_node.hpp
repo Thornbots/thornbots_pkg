@@ -19,8 +19,8 @@
 // the MCB as we move, carrying its own fire decision), via plan_shot. Each
 // cv_target_publish_rate_hz tick aims, and sets fire/delay_ms (at most
 // fire_rate_hz) with the delay that times a spinning target's panel to the
-// shot. With no target it patrols: sweeps, or faces the last hit off
-// RefSysStatus, never firing. See README.md's ### point_to_cv_target Notes.
+// shot. With no target it sweeps without firing and permits firmware hit turns.
+// See README.md's ### point_to_cv_target Notes.
 //
 // The protected members are seams for test/test_point_to_cv_target_node.cpp:
 // the clock, the outgoing publishes and the aim/fire decisions.
@@ -35,7 +35,6 @@
 #include <utility>
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
-#include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "dji_serial_bridge/msg/robot_pose.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -46,9 +45,6 @@
 
 namespace thornbots_pkg
 {
-
-// RefSysStatus.delta_angle_got_hit_in when not hit (HitRing::PLACEHOLDER_ANGLE).
-constexpr double NOT_HIT = 123.0;
 
 class PointToCvTarget : public rclcpp::Node
 {
@@ -64,7 +60,6 @@ protected:
 
   void on_target_state(dji_serial_bridge::msg::TargetState::ConstSharedPtr msg);
   void on_robot_pose(const dji_serial_bridge::msg::RobotPose & msg);
-  void on_ref_sys(const dji_serial_bridge::msg::RefSysStatus & msg);
   void check_timeout();
   void on_publish_tick();
 
@@ -93,9 +88,9 @@ protected:
   double tick_s_, spin_enter_rad_s_, spin_exit_rad_s_;
   std::optional<double> chase_settle_s_;
   double chase_margin_s_, panel_switch_margin_rad_;
-  bool type_c_based_patrol_, turn_to_hit_;
+  bool type_c_based_patrol_;
   std::optional<Patrol> patrol_;
-  double patrol_range_m_, patrol_pitch_down_rad_, hit_angle_sign_;
+  double patrol_range_m_, patrol_pitch_down_rad_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -113,7 +108,6 @@ private:
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RobotPose>::SharedPtr robot_pose_sub_;
-  rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_;
 };
 
