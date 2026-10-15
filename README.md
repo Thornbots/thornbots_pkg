@@ -360,6 +360,14 @@ centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
 came from a sweep against an emulator-shaped target; the higher yaw
 noise let a jinking target's translation leak into `w`.
 
+`radius_prior_std` controls the initial radius uncertainty around
+`panel_radius_m`, including bank reseeds. Position reacquisition that keeps
+spin also keeps the learned radius uncertainty. `log_innovations` enables
+one diagnostic line per updated detection: capture time, track, panel count,
+lead hypothesis, associated panel, result (update/outlier/reacquire = 0/1/2),
+pre-update residual/NIS/log determinant and post-update spin/radii/score.
+It is off by default; parameter defaults live in `src/target_tracker.cpp`.
+
 Acceleration is a Singer model: it decays over `accel_time_constant_s` (1.0)
 and `process_noise_jerk` (3.0 m/s^3) drives it. From panel positions alone a
 filter can't separate the centre accelerating from the panel spinning faster
