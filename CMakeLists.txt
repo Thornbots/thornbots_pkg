@@ -15,6 +15,7 @@ find_package(dji_serial_bridge REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -51,7 +52,7 @@ ament_target_dependencies(target_selector rclcpp dji_serial_bridge geometry_msgs
 
 add_executable(mcb_relay src/mcb_relay.cpp)
 target_link_libraries(mcb_relay mcb_relay_core)
-ament_target_dependencies(mcb_relay rclcpp dji_serial_bridge geometry_msgs nav_msgs)
+ament_target_dependencies(mcb_relay rclcpp dji_serial_bridge geometry_msgs nav_msgs diagnostic_msgs)
 
 add_executable(point_to_cv_target src/point_to_cv_target.cpp)
 target_link_libraries(point_to_cv_target point_to_cv_target_node)
