@@ -487,6 +487,14 @@ trusting it.
 
 ### point_to_cv_target
 
+`allow_latest_tf` defaults true on the robot. When a carried target-state or
+hit stamp is unavailable, the aimer may use latest TF and increments the
+latched `/point_to_cv_target/latest_tf_fallbacks` counter. With the parameter
+false it withholds that aim instead. Patrol uses the newest received raw
+POSE capture stamp; hits use their REF_SYS stamp. A zero capture stamp is
+unavailable, since TF would interpret it as latest. Lockstep acceptance must
+disable fallback and require a present, zero counter.
+
 `/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
 and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See

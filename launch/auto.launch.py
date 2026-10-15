@@ -245,6 +245,9 @@ def generate_launch_description():
     pose_latency_s_arg = DeclareLaunchArgument(
         'pose_latency_s', default_value='0.01',
         description='Tracker capture-time pose transport calibration, seconds')
+    allow_latest_tf_arg = DeclareLaunchArgument(
+        'allow_latest_tf', default_value='true',
+        description='Permit counted latest-TF fallback in the aimer; disable for lockstep')
     tf_max_wait_s_arg = DeclareLaunchArgument(
         'tf_max_wait_s', default_value='0.25',
         description='target_tracker: how long a detection waits for the '
@@ -320,6 +323,8 @@ def generate_launch_description():
             'gimbal_lag_s': ParameterValue(
                 LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
+            'allow_latest_tf': ParameterValue(
+                LaunchConfiguration('allow_latest_tf'), value_type=bool),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('aim_frame'),
             'lead_enabled': ParameterValue(
@@ -502,7 +507,7 @@ def generate_launch_description():
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
+        tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg, allow_latest_tf_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,
         lidar_node, lidar_self_filter_node,

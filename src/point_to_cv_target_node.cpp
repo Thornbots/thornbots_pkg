@@ -60,6 +60,9 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
+  allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
+  fallback_pub_ = create_publisher<std_msgs::msg::UInt64>(
+    "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
   // Fire decision to projectile exit; times the fire against the spin.
   firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.094);
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
@@ -210,6 +213,7 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 void PointToCvTarget::on_robot_pose(const RobotPose & msg)
 {
   chassis_vel_root_ = Vector3d(msg.vel_x, msg.vel_y, 0.0);
+  robot_pose_stamp_ = rclcpp::Time(msg.header.stamp, clock_now().get_clock_type());
 }
 
 void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
@@ -218,7 +222,7 @@ void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
   if (delta == NOT_HIT || !(std::abs(delta) <= M_PI + 1e-3)) {
     return;
   }
-  const auto gun = gun_pose();
+  const auto gun = gun_pose(rclcpp::Time(msg.header.stamp, clock_now().get_clock_type()));
   if (!gun) {
     return;
   }
@@ -228,26 +232,40 @@ void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
     get_logger(), "hit at %+.2f rad from the gun: facing odom yaw %+.2f", delta, hit_yaw);
 }
 
-std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
+std::optional<geometry_msgs::msg::TransformStamped> PointToCvTarget::stamped_transform(
+  const std::string & child, const rclcpp::Time & stamp)
 {
-  geometry_msgs::msg::TransformStamped tf;
   try {
-    tf = tf_buffer_->lookupTransform(odom_frame_, muzzle_frame_, tf2::TimePointZero);
+    // TF interprets zero as latest, so never pass a zero capture stamp through.
+    if (stamp.nanoseconds() != 0 && tf_buffer_->canTransform(odom_frame_, child, stamp)) {
+      return tf_buffer_->lookupTransform(odom_frame_, child, stamp);
+    }
+    if (allow_latest_tf_) {
+      auto tf = tf_buffer_->lookupTransform(odom_frame_, child, tf2::TimePointZero);
+      ++latest_tf_fallbacks_;
+      return tf;
+    }
   } catch (const tf2::TransformException & ex) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
-      muzzle_frame_.c_str(), ex.what());
-    return std::nullopt;
+      child.c_str(), ex.what());
   }
-  const auto & t = tf.transform.translation;
-  const auto & q = tf.transform.rotation;
+  return std::nullopt;
+}
+
+std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose(const rclcpp::Time & stamp)
+{
+  const auto tf = stamped_transform(muzzle_frame_, stamp);
+  if (!tf) {return std::nullopt;}
+  const auto & t = tf->transform.translation;
+  const auto & q = tf->transform.rotation;
   const Matrix3d R = quat_to_rot(q.x, q.y, q.z, q.w);
   return std::make_pair(Vector3d(t.x, t.y, t.z), std::atan2(R(1, 0), R(0, 0)));
 }
 
 std::optional<Vector3d> PointToCvTarget::patrol_point_now(const rclcpp::Time & now)
 {
-  const auto gun = gun_pose();
+  const auto gun = gun_pose(robot_pose_stamp_.value_or(now));
   if (!gun) {
     return std::nullopt;
   }
@@ -336,6 +354,9 @@ void PointToCvTarget::on_publish_tick()
     tick.frame_id = out_frame;
     send_tick_(tick);
   }
+  std_msgs::msg::UInt64 fallbacks;
+  fallbacks.data = latest_tf_fallbacks_;
+  fallback_pub_->publish(fallbacks);
 }
 
 std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
@@ -362,21 +383,9 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
     return Aim{Vector3d(state->panel.x, state->panel.y, state->panel.z), std::nullopt};
   }
 
-  // Our pose at the state's stamp; if TF hasn't reached it yet, the newest one,
-  // carried forward below.
-  geometry_msgs::msg::TransformStamped tf_shooter;
-  try {
-    if (tf_buffer_->canTransform(odom_frame_, root_frame_, state_stamp)) {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, state_stamp);
-    } else {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, tf2::TimePointZero);
-    }
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR_THROTTLE(
-      get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
-      root_frame_.c_str(), ex.what());
-    return std::nullopt;
-  }
+  const auto stamped_shooter = stamped_transform(root_frame_, state_stamp);
+  if (!stamped_shooter) {return std::nullopt;}
+  const auto & tf_shooter = *stamped_shooter;
 
   const auto & st = tf_shooter.transform.translation;
   const auto & sq = tf_shooter.transform.rotation;

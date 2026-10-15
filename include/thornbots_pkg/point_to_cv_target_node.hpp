@@ -28,6 +28,7 @@
 #ifndef THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 #define THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -40,6 +41,7 @@
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "std_msgs/msg/u_int64.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "thornbots_pkg/point_to_cv_target_core.hpp"
@@ -68,8 +70,10 @@ protected:
   void check_timeout();
   void on_publish_tick();
 
-  // The muzzle's newest odom (position, yaw), or nullopt.
-  std::optional<std::pair<Vector3d, double>> gun_pose();
+  // The muzzle's odom (position, yaw) at the carried input stamp, or nullopt.
+  std::optional<std::pair<Vector3d, double>> gun_pose(const rclcpp::Time & stamp);
+  std::optional<geometry_msgs::msg::TransformStamped> stamped_transform(
+    const std::string & child, const rclcpp::Time & stamp);
   std::optional<Vector3d> patrol_point_now(const rclcpp::Time & now);
   // (fire, delay_ms) for this tick's CVTarget. The MCB runs the delay from
   // receiving the frame, so aim and fire cross the wire as one frame. Rate
@@ -88,6 +92,9 @@ protected:
   std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
   double target_timeout_s_, fire_confidence_threshold_, fire_rate_hz_;
   bool lead_enabled_;
+  bool allow_latest_tf_;
+  uint64_t latest_tf_fallbacks_ = 0;
+  std::optional<rclcpp::Time> robot_pose_stamp_;
   double firmware_latency_s_, gimbal_lag_s_, v_muzzle_;
   int tof_iterations_;
   double tick_s_, spin_enter_rad_s_, spin_exit_rad_s_;
@@ -111,6 +118,7 @@ protected:
 private:
   rclcpp::Publisher<dji_serial_bridge::msg::CVTarget>::SharedPtr pub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr fallback_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RobotPose>::SharedPtr robot_pose_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;

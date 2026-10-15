@@ -51,6 +51,19 @@ public:
   using tp::PointToCvTarget::on_target_state;
 
   using tp::PointToCvTarget::on_ref_sys;
+  using tp::PointToCvTarget::stamped_transform;
+  using tp::PointToCvTarget::gun_pose;
+  uint64_t fallbacks() const {return latest_tf_fallbacks_;}
+  void dynamic_transform(int64_t stamp_ns, double x, const std::string & child = "root")
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = odom_frame_;
+    tf.header.stamp = rclcpp::Time(stamp_ns, RCL_ROS_TIME);
+    tf.child_frame_id = child;
+    tf.transform.translation.x = x;
+    tf.transform.rotation.w = 1.0;
+    ASSERT_TRUE(tf_buffer_->setTransform(tf, "test", false));
+  }
   void gun_transform()
   {
     geometry_msgs::msg::TransformStamped tf;
@@ -105,6 +118,44 @@ protected:
 };
 
 }  // namespace
+
+TEST_F(NodeTest, StrictTfWithholdsFutureAndZeroStampsWithoutLatestFallback)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->dynamic_transform(100000000, 1.0);
+  EXPECT_FALSE(node->stamped_transform("root", rclcpp::Time(int64_t{200000000}, RCL_ROS_TIME)));
+  EXPECT_FALSE(node->stamped_transform("root", rclcpp::Time(int64_t{0}, RCL_ROS_TIME)));
+  EXPECT_EQ(node->fallbacks(), 0u);
+}
+
+TEST_F(NodeTest, StrictTfRecoversAtTheOriginalStampAfterDelayedDelivery)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->dynamic_transform(100000000, 1.0);
+  const rclcpp::Time stamp(int64_t{150000000}, RCL_ROS_TIME);
+  EXPECT_FALSE(node->stamped_transform("root", stamp));
+  node->dynamic_transform(200000000, 3.0);
+  const auto tf = node->stamped_transform("root", stamp);
+  ASSERT_TRUE(tf);
+  EXPECT_DOUBLE_EQ(tf->transform.translation.x, 2.0);
+  EXPECT_EQ(rclcpp::Time(tf->header.stamp).nanoseconds(), stamp.nanoseconds());
+  EXPECT_EQ(node->fallbacks(), 0u);
+}
+
+TEST_F(NodeTest, HardwareLatestFallbackIsCountedForBothAimAndGun)
+{
+  auto node = make();
+  node->dynamic_transform(100000000, 1.0);
+  node->dynamic_transform(100000000, 2.0, "muzzle");
+  const rclcpp::Time stamp(int64_t{200000000}, RCL_ROS_TIME);
+  ASSERT_TRUE(node->stamped_transform("root", stamp));
+  ASSERT_TRUE(node->gun_pose(stamp));
+  EXPECT_EQ(node->fallbacks(), 2u);
+}
 
 TEST_F(NodeTest, NoTargetTickDoesNotRequireAnAbsentAimPoint)
 {
