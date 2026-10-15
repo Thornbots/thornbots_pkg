@@ -79,7 +79,7 @@ public:
   bool held() const {return held_panel_yaw_.has_value();}
   void time_ns(int64_t value) {now_ns_ = value;}
   using tp::PointToCvTarget::check_timeout;
-  void base_plan() {tp::PointToCvTarget::compute_aim_point();}
+  bool base_plan() {return tp::PointToCvTarget::compute_aim_point().has_value();}
   TargetState::ConstSharedPtr latest() const {return latest_state_;}
   void on_target_state_hook(std::function<void(const Header &)> ack) {send_ack_ = ack;}
   void capture(std::vector<CVTarget> * points, std::vector<Header> * ticks)
@@ -155,6 +155,32 @@ TEST_F(NodeTest, HardwareLatestFallbackIsCountedForBothAimAndGun)
   ASSERT_TRUE(node->stamped_transform("root", stamp));
   ASSERT_TRUE(node->gun_pose(stamp));
   EXPECT_EQ(node->fallbacks(), 2u);
+}
+
+TEST_F(NodeTest, StrictAimRetainsResolvableStateUntilNewerStampedTfArrives)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->time_ns(175000000);
+  node->dynamic_transform(100000000, 0.0);
+  auto state = std::make_shared<TargetState>();
+  state->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  state->valid = true;
+  state->center.x = 3.0;
+  state->center.z = 0.4;
+  state->radius = {0.3f, 0.3f};
+  node->on_target_state(state);
+  EXPECT_TRUE(node->base_plan());
+  auto newer = std::make_shared<TargetState>(*state);
+  newer->header.stamp = rclcpp::Time(int64_t{150000000}, RCL_ROS_TIME);
+  node->on_target_state(newer);
+  EXPECT_TRUE(node->base_plan());
+  EXPECT_EQ(node->fallbacks(), 0u);
+  newer = std::make_shared<TargetState>(*newer);
+  newer->robot_track_id = 1;
+  node->on_target_state(newer);
+  EXPECT_FALSE(node->base_plan()) << "handoff must discard the previous track's history";
 }
 
 TEST_F(NodeTest, NoTargetTickDoesNotRequireAnAbsentAimPoint)

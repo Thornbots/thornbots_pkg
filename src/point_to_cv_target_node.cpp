@@ -181,11 +181,13 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
   const bool stale = latest_state_ && seconds(
     now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
+    state_history_.clear();
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
     spinning_ = false;
     held_panel_yaw_.reset();
   }
   if (!msg->valid || stale) {
+    state_history_.clear();
     spinning_ = false;
     held_panel_yaw_.reset();
   }
@@ -193,6 +195,8 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
     held_panel_yaw_.reset();
   }
   latest_state_ = msg;
+  state_history_.push_back(msg);
+  while (state_history_.size() > 100) {state_history_.pop_front();}
   target_active_ = true;
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
@@ -361,8 +365,22 @@ void PointToCvTarget::on_publish_tick()
 
 std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
 {
-  const auto state = latest_state_;
+  auto state = latest_state_;
   const rclcpp::Time now = clock_now();
+  if (!allow_latest_tf_ && state->valid) {
+    // A newly delivered prediction may be ahead of TF. Retain the newest
+    // same-track state whose original stamp can be resolved, never latest TF.
+    for (auto i = state_history_.rbegin(); i != state_history_.rend(); ++i) {
+      const rclcpp::Time stamp((*i)->header.stamp, now.get_clock_type());
+      const double age = seconds(now - stamp);
+      if ((*i)->valid && stamp.nanoseconds() != 0 && age >= 0.0 &&
+        age <= target_timeout_s_ && tf_buffer_->canTransform(odom_frame_, root_frame_, stamp))
+      {
+        state = *i;
+        break;
+      }
+    }
+  }
   const rclcpp::Time state_stamp(state->header.stamp, now.get_clock_type());
   const double state_age_s = seconds(now - state_stamp);
 

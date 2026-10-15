@@ -29,6 +29,7 @@
 #define THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -112,6 +113,7 @@ protected:
   bool target_active_ = false;
   std::optional<double> held_panel_yaw_;  // Shot::panel_yaw, for latest_state_'s track
   dji_serial_bridge::msg::TargetState::ConstSharedPtr latest_state_;
+  std::deque<dji_serial_bridge::msg::TargetState::ConstSharedPtr> state_history_;
   Vector3d chassis_vel_root_ = Vector3d::Zero();  // from RobotPose, root frame
   LatencyStat latency_stat_;
 
