@@ -646,6 +646,9 @@ patrol; every `mcb_*` match stage enables it. The old E1 scorer is gone.
 Firmware may interrupt Jetson patrol toward a hit only while no target
 estimate is held. Its next target frame cancels that turn. See
 [firmware coordination](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
+The [three-run hosted comparison](docs/hit-permission-2026-10-15.md#hosted-drive-and-match)
+records the unit checks and drive/match regression guard against nightly with
+the angle-only firmware correction applied.
 
 
 
