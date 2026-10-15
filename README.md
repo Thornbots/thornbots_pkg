@@ -8,7 +8,7 @@ odometry as `/odom` and `odom->root`, and turns detections into a raw
 world-frame (`odom`) `CVTarget`. Fused navigation uses `nav_odom`;
 localization backends are in
 `sentry_localization/README.md`; game rules are in
-`../ARCC_2026_SENTRY_CONTEXT.md`.
+`../docs/ARCC_2026_SENTRY_CONTEXT.md`.
 
 ## Nodes
 
@@ -58,7 +58,7 @@ extrapolates to the fire horizon. Detections, target state and aim use raw,
 never-relocalized `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
-and [remaining work](../ROADMAP.md#b-hit-while-we-move).
+and [remaining work](../docs/ROADMAP.md#b-hit-while-we-move).
 
 ## Build and launch
 
