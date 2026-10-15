@@ -119,30 +119,26 @@ private:
 // Wrap an angle to [-pi, pi).
 double wrap_to_pi(double a);
 
-// Where the gun looks with no target: sweep, or face the last hit. Starts
+// Where the gun looks with no target: sweep. Starts
 // after_s after the last target, from the gun's own yaw, and turns at
-// rate_rad_s. A hit holds its yaw for hit_turn_s, then the sweep goes on from
-// there. Mirrors the MCB's own patrol (AutoAimAndFireCommand.cpp). Times in
+// rate_rad_s. Firmware owns turns toward chassis-relative hits. Times in
 // seconds, yaws in odom radians.
 class Patrol
 {
 public:
-  Patrol(double rate_rad_s, double after_s, double hit_turn_s)
-  : rate_rad_s_(rate_rad_s), after_s_(after_s), hit_turn_s_(hit_turn_s) {}
+  Patrol(double rate_rad_s, double after_s)
+  : rate_rad_s_(rate_rad_s), after_s_(after_s) {}
 
   double rate_rad_s() const {return rate_rad_s_;}
   void target_seen(double now_s);
-  void hit(double yaw, double now_s);
   // This tick's patrol yaw, or nullopt while a target is recent.
   std::optional<double> step(double now_s, double gun_yaw);
 
 private:
-  double rate_rad_s_, after_s_, hit_turn_s_;
+  double rate_rad_s_, after_s_;
   std::optional<double> last_target_s_;
   std::optional<double> yaw_;  // commanded yaw; nullopt until patrol starts
   double last_step_s_ = 0.0;
-  std::optional<double> hit_yaw_;
-  std::optional<double> hit_until_s_;
 };
 
 // Odom point range_m out from gun_pos along yaw, pitch_down_rad below level.
