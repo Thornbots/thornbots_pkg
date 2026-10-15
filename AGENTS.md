@@ -22,8 +22,8 @@ Keep runtime nodes C++; Python is for launch, with ROS-free cores unit-tested.
 - Measure relay UART/mailbox delays and gimbal settling on hardware; defaults
   are placeholders: [relay](README.md#mcb_relay), [aiming](README.md#point_to_cv_target).
 - Firing receipt/indexer timing and HP/heat/power gates remain unverified;
-  [robot work](../ROADMAP.md#later-needs-a-robot). Source the referee UART spec
-  before hardware firing-timing work: [game context](../ARCC_2026_SENTRY_CONTEXT.md).
-- Tracker accuracy: [track G](../ROADMAP.md#g-estimation-accuracy).
+  [robot work](../docs/ROADMAP.md#later-needs-a-robot). Source the referee UART spec
+  before hardware firing-timing work: [game context](../docs/ARCC_2026_SENTRY_CONTEXT.md).
+- Tracker accuracy: [track G](../docs/ROADMAP.md#g-estimation-accuracy).
   Frame design: [pose_translator](README.md#pose_translator); wire frames:
   [UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
