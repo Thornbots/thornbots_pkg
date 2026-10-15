@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -59,8 +61,18 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   fire_rate_hz_ = declare_parameter("fire_rate_hz", 2.0);
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
+  camera_frame_ = declare_parameter("camera_frame", std::string("camera"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
   allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
+  const double state_hold_s = declare_parameter("state_hold_s", 0.0);
+  if (!std::isfinite(state_hold_s) || state_hold_s < 0.0) {
+    throw std::invalid_argument("state_hold_s must be finite and nonnegative");
+  }
+  const long double state_hold_ns = std::round(static_cast<long double>(state_hold_s) * 1e9L);
+  if (state_hold_ns > std::numeric_limits<int64_t>::max()) {
+    throw std::invalid_argument("state_hold_s exceeds the representable ROS time range");
+  }
+  state_hold_ns_ = static_cast<int64_t>(state_hold_ns);
   fallback_pub_ = create_publisher<std_msgs::msg::UInt64>(
     "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
   // Fire decision to projectile exit; times the fire against the spin.
@@ -114,6 +126,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
+  const auto raw_pose_ack_topic = declare_parameter("raw_pose_ack_topic", std::string(""));
   if (patrol_enabled) {
     patrol_.emplace(patrol_rate_rad_s, patrol_after_s, hit_turn_s);
   }
@@ -137,6 +150,11 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   if (!state_ack_topic.empty()) {
     state_ack_pub_ = create_publisher<std_msgs::msg::Header>(state_ack_topic, 100);
     send_ack_ = [this](const std_msgs::msg::Header & h) {state_ack_pub_->publish(h);};
+  }
+  if (!raw_pose_ack_topic.empty()) {
+    raw_pose_ack_pub_ = create_publisher<std_msgs::msg::Header>(raw_pose_ack_topic, 100);
+    raw_pose_ack_timer_ = create_wall_timer(
+      std::chrono::milliseconds(1), [this]() {acknowledge_raw_poses();});
   }
   robot_pose_sub_ = create_subscription<RobotPose>(
     robot_pose_topic, rclcpp::SensorDataQoS(),
@@ -177,6 +195,22 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
+  if (state_hold_ns_ > 0) {
+    std::lock_guard<std::mutex> lock(target_state_mutex_);
+    if (pending_target_states_.size() >= 100) {
+      throw std::runtime_error("lockstep timeout: target state hold queue overflow");
+    }
+    pending_target_states_.push_back(msg);
+  } else {
+    apply_target_state(msg);
+  }
+  if (send_ack_) {
+    send_ack_(msg->header);
+  }
+}
+
+void PointToCvTarget::apply_target_state(TargetState::ConstSharedPtr msg)
+{
   const rclcpp::Time now = clock_now();
   const bool stale = latest_state_ && seconds(
     now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type())) > target_timeout_s_;
@@ -208,16 +242,38 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
       "target_state age on arrival: %.1f ms now, %.1f ms mean over %d samples",
       latency_s * 1e3, latency_stat_.mean() * 1e3, latency_stat_.count());
   }
-
-  if (send_ack_) {
-    send_ack_(msg->header);
-  }
 }
 
 void PointToCvTarget::on_robot_pose(const RobotPose & msg)
 {
   chassis_vel_root_ = Vector3d(msg.vel_x, msg.vel_y, 0.0);
   robot_pose_stamp_ = rclcpp::Time(msg.header.stamp, clock_now().get_clock_type());
+  if (raw_pose_ack_pub_ && rclcpp::Time(msg.header.stamp).nanoseconds() > 0) {
+    {
+      std::lock_guard<std::mutex> lock(raw_pose_ack_mutex_);
+      if (pending_raw_pose_acks_.size() >= 100) {
+        throw std::runtime_error("lockstep timeout: raw pose TF acknowledgement queue overflow");
+      }
+      pending_raw_pose_acks_.push_back(msg.header);
+    }
+    acknowledge_raw_poses();
+  }
+}
+
+void PointToCvTarget::acknowledge_raw_poses()
+{
+  std::lock_guard<std::mutex> lock(raw_pose_ack_mutex_);
+  while (raw_pose_ack_pub_ && !pending_raw_pose_acks_.empty()) {
+    const auto & header = pending_raw_pose_acks_.front();
+    const rclcpp::Time stamp(header.stamp, get_clock()->get_clock_type());
+    if (!tf_buffer_->canTransform(odom_frame_, muzzle_frame_, stamp) ||
+      !tf_buffer_->canTransform(odom_frame_, camera_frame_, stamp))
+    {
+      return;
+    }
+    raw_pose_ack_pub_->publish(header);
+    pending_raw_pose_acks_.pop_front();
+  }
 }
 
 void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
@@ -320,6 +376,19 @@ void PointToCvTarget::check_timeout()
 void PointToCvTarget::on_publish_tick()
 {
   const rclcpp::Time now = clock_now();
+  while (state_hold_ns_ > 0) {
+    TargetState::ConstSharedPtr eligible;
+    {
+      std::lock_guard<std::mutex> lock(target_state_mutex_);
+      if (pending_target_states_.empty()) {break;}
+      const rclcpp::Time stamp(
+        pending_target_states_.front()->header.stamp, now.get_clock_type());
+      if ((now - stamp).nanoseconds() < state_hold_ns_) {break;}
+      eligible = pending_target_states_.front();
+      pending_target_states_.pop_front();
+    }
+    apply_target_state(eligible);
+  }
   std::optional<Aim> aim;
   bool patrol_point = false;
   if (target_active_) {

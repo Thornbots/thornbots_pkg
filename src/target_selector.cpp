@@ -135,6 +135,9 @@ private:
     }
 
     if (candidates.empty()) {
+      PanelDetectionArray empty;
+      empty.header = msg.header;
+      robot_panels_pub_->publish(empty);
       if (!is_blue_team_ && !msg.detections.empty()) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,

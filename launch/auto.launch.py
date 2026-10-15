@@ -28,7 +28,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
@@ -248,6 +248,30 @@ def generate_launch_description():
     allow_latest_tf_arg = DeclareLaunchArgument(
         'allow_latest_tf', default_value='true',
         description='Permit counted latest-TF fallback in the aimer; disable for lockstep')
+    aim_tick_topic_arg = DeclareLaunchArgument(
+        'aim_tick_topic', default_value='',
+        description='Optional lockstep tick topic for point_to_cv_target')
+    joint_tf_publish_rate_hz_arg = DeclareLaunchArgument(
+        'joint_tf_publish_rate_hz', default_value='',
+        description='Optional robot_state_publisher rate override; empty uses its default')
+    aim_state_ack_topic_arg = DeclareLaunchArgument(
+        'aim_state_ack_topic', default_value='',
+        description='Optional lockstep state acknowledgement topic for point_to_cv_target')
+    aim_raw_pose_ack_topic_arg = DeclareLaunchArgument(
+        'aim_raw_pose_ack_topic', default_value='',
+        description='Optional lockstep acknowledgement after raw capture-time TF is available')
+    aim_state_hold_s_arg = DeclareLaunchArgument(
+        'aim_state_hold_s', default_value='0.0',
+        description='Delay target-state eligibility until its capture stamp is this old')
+    tracker_consumed_topic_arg = DeclareLaunchArgument(
+        'tracker_consumed_topic', default_value='',
+        description='Optional target_tracker consumed-state acknowledgement topic')
+    tracker_empty_ack_topic_arg = DeclareLaunchArgument(
+        'tracker_empty_ack_topic', default_value='',
+        description='Optional target_tracker acknowledgement for empty detections')
+    tracker_state_at_capture_arg = DeclareLaunchArgument(
+        'tracker_state_at_capture', default_value='false',
+        description='Evaluate target_tracker state at the detection capture time')
     tf_max_wait_s_arg = DeclareLaunchArgument(
         'tf_max_wait_s', default_value='0.25',
         description='target_tracker: how long a detection waits for the '
@@ -323,6 +347,11 @@ def generate_launch_description():
             'gimbal_lag_s': ParameterValue(
                 LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
+            'tick_topic': LaunchConfiguration('aim_tick_topic'),
+            'state_ack_topic': LaunchConfiguration('aim_state_ack_topic'),
+            'raw_pose_ack_topic': LaunchConfiguration('aim_raw_pose_ack_topic'),
+            'state_hold_s': ParameterValue(
+                LaunchConfiguration('aim_state_hold_s'), value_type=float),
             'allow_latest_tf': ParameterValue(
                 LaunchConfiguration('allow_latest_tf'), value_type=bool),
             'output_topic': '/cv/target',
@@ -400,6 +429,10 @@ def generate_launch_description():
             'tf_max_wait_s': ParameterValue(
                 LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
+            'consumed_topic': LaunchConfiguration('tracker_consumed_topic'),
+            'empty_ack_topic': LaunchConfiguration('tracker_empty_ack_topic'),
+            'state_at_capture': ParameterValue(
+                LaunchConfiguration('tracker_state_at_capture'), value_type=bool),
         }],
         additional_env=udp_env,
     )
@@ -463,17 +496,20 @@ def generate_launch_description():
     robot_description = ParameterValue(
         Command(['xacro ', sentry_xacro]), value_type=str
     )
-    robot_state_publisher_node = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        name='robot_state_publisher',
-        output='screen',
-        parameters=[{
+
+    def robot_state_publisher(context):
+        params = {
             'robot_description': robot_description,
             'use_sim_time': use_sim_time,
-        }],
-        additional_env=udp_env,
-    )
+        }
+        rate = context.launch_configurations['joint_tf_publish_rate_hz']
+        if rate:
+            params['publish_frequency'] = float(rate)
+        return [Node(package='robot_state_publisher', executable='robot_state_publisher',
+                     name='robot_state_publisher', output='screen',
+                     parameters=[params], additional_env=udp_env)]
+
+    robot_state_publisher_node = OpaqueFunction(function=robot_state_publisher)
 
     localization_launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(localization_launch),
@@ -507,6 +543,10 @@ def generate_launch_description():
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
+        aim_tick_topic_arg, aim_state_ack_topic_arg, joint_tf_publish_rate_hz_arg,
+        aim_raw_pose_ack_topic_arg,
+        aim_state_hold_s_arg, tracker_consumed_topic_arg,
+        tracker_empty_ack_topic_arg, tracker_state_at_capture_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg, allow_latest_tf_arg,
         dji_serial_bridge_node, mcb_relay_node,
         target_selector_node, target_tracker_node, point_to_cv_target_node,

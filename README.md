@@ -513,6 +513,13 @@ the message.
 
 A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
+Optional simulation consumption topics acknowledge carried input headers.
+`state_hold_s` defers state application until that capture age; queued track
+handoffs and invalid states take effect at the same eligibility boundary.
+`raw_pose_ack_topic` acknowledges a POSE only after exact-stamp muzzle and
+camera transforms exist. The tracker can publish state at capture time with
+`state_at_capture` and acknowledge empty detection batches. These options
+default off; the E2E profile owns their simulation settings.
 `compute_aim_point()` handles three cases per tick:
 
 - No usable state, or TF fails: no `CVTarget`, so the MCB holds still, with
