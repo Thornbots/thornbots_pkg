@@ -28,6 +28,8 @@
 #ifndef THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 #define THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -133,6 +135,10 @@ private:
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
   std::deque<std_msgs::msg::Header> pending_raw_pose_acks_;
   std::mutex raw_pose_ack_mutex_;
+  std::optional<int64_t> raw_pose_ack_wait_stamp_ns_;
+  std::chrono::steady_clock::time_point raw_pose_ack_wait_started_;
+  bool raw_pose_ack_wait_reported_ = false;
+  std::size_t robot_pose_callback_count_ = 0;
   rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_, raw_pose_ack_timer_;
 };
 

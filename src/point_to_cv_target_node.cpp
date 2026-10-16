@@ -248,6 +248,13 @@ void PointToCvTarget::on_robot_pose(const RobotPose & msg)
 {
   chassis_vel_root_ = Vector3d(msg.vel_x, msg.vel_y, 0.0);
   robot_pose_stamp_ = rclcpp::Time(msg.header.stamp, clock_now().get_clock_type());
+  if (raw_pose_ack_pub_ && robot_pose_callback_count_ < 3) {
+    ++robot_pose_callback_count_;
+    RCLCPP_INFO(
+      get_logger(), "raw RobotPose callback %zu at %ld ns; raw pose ACK readers=%zu",
+      robot_pose_callback_count_, rclcpp::Time(msg.header.stamp).nanoseconds(),
+      raw_pose_ack_pub_->get_subscription_count());
+  }
   if (raw_pose_ack_pub_ && rclcpp::Time(msg.header.stamp).nanoseconds() > 0) {
     {
       std::lock_guard<std::mutex> lock(raw_pose_ack_mutex_);
@@ -266,13 +273,44 @@ void PointToCvTarget::acknowledge_raw_poses()
   while (raw_pose_ack_pub_ && !pending_raw_pose_acks_.empty()) {
     const auto & header = pending_raw_pose_acks_.front();
     const rclcpp::Time stamp(header.stamp, get_clock()->get_clock_type());
-    if (!tf_buffer_->canTransform(odom_frame_, muzzle_frame_, stamp) ||
-      !tf_buffer_->canTransform(odom_frame_, camera_frame_, stamp))
-    {
+    const int64_t stamp_ns = stamp.nanoseconds();
+    if (!raw_pose_ack_wait_stamp_ns_ || *raw_pose_ack_wait_stamp_ns_ != stamp_ns) {
+      raw_pose_ack_wait_stamp_ns_ = stamp_ns;
+      raw_pose_ack_wait_started_ = std::chrono::steady_clock::now();
+      raw_pose_ack_wait_reported_ = false;
+    }
+
+    std::string muzzle_error;
+    std::string camera_error;
+    const bool muzzle_ready = tf_buffer_->canTransform(
+      odom_frame_, muzzle_frame_, stamp, rclcpp::Duration::from_nanoseconds(0), &muzzle_error);
+    const bool camera_ready = tf_buffer_->canTransform(
+      odom_frame_, camera_frame_, stamp, rclcpp::Duration::from_nanoseconds(0), &camera_error);
+    if (!muzzle_ready || !camera_ready) {
+      const auto elapsed = std::chrono::steady_clock::now() - raw_pose_ack_wait_started_;
+      if (!raw_pose_ack_wait_reported_ && elapsed >= std::chrono::milliseconds(250)) {
+        RCLCPP_WARN(
+          get_logger(),
+          "raw pose TF wait at %ld ns: muzzle=%s error=\"%s\", camera=%s error=\"%s\"; "
+          "raw pose ACK readers=%zu, robot pose publishers=%zu",
+          stamp_ns, muzzle_ready ? "ready" : "missing", muzzle_error.c_str(),
+          camera_ready ? "ready" : "missing", camera_error.c_str(),
+          raw_pose_ack_pub_->get_subscription_count(), robot_pose_sub_->get_publisher_count());
+        raw_pose_ack_wait_reported_ = true;
+      }
       return;
+    }
+    if (raw_pose_ack_wait_reported_) {
+      const auto elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - raw_pose_ack_wait_started_).count();
+      RCLCPP_INFO(
+        get_logger(), "raw pose TF wait recovered at %ld ns after %.3f s",
+        stamp_ns, elapsed);
     }
     raw_pose_ack_pub_->publish(header);
     pending_raw_pose_acks_.pop_front();
+    raw_pose_ack_wait_stamp_ns_.reset();
+    raw_pose_ack_wait_reported_ = false;
   }
 }
 
