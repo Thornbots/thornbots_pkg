@@ -29,7 +29,6 @@ namespace thornbots_pkg
 {
 
 using dji_serial_bridge::msg::CVTarget;
-using dji_serial_bridge::msg::RefSysStatus;
 using dji_serial_bridge::msg::RobotPose;
 using dji_serial_bridge::msg::TargetState;
 using Eigen::Matrix3d;
@@ -105,30 +104,21 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   {
     throw std::invalid_argument("panel_switch_margin_rad must be finite and in [0, pi/2)");
   }
-  // Sent with every aim point: whether the MCB may patrol on its own (off: the
-  // Jetson owns where it looks), and turn toward a hit (on).
+  // Firmware patrol permission is independent of the per-frame hit-turn decision.
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
-  turn_to_hit_ = declare_parameter("turn_to_hit", true);
-  // Jetson patrol with no target, mirroring the MCB's own (README.md): sweep at
-  // patrol_rate_rad_s (MCB's -0.002 rad per 1 ms cycle), a point
-  // patrol_range_m out and patrol_pitch_down_rad below level.
+  // Jetson patrol sweeps a point patrol_range_m out and patrol_pitch_down_rad below level.
   const bool patrol_enabled = declare_parameter("patrol_enabled", true);
   const double patrol_after_s = declare_parameter("patrol_after_s", 0.2);
   const double patrol_rate_rad_s = declare_parameter("patrol_rate_rad_s", -2.0);
   patrol_range_m_ = declare_parameter("patrol_range_m", 3.0);
   patrol_pitch_down_rad_ = declare_parameter("patrol_pitch_down_rad", 0.05);
-  // Face a hit for hit_turn_s: hit yaw = gun yaw + sign * delta angle.
-  const double hit_turn_s = declare_parameter("hit_turn_s", 0.5);
-  hit_angle_sign_ = declare_parameter("hit_angle_sign", -1.0);
   muzzle_frame_ = declare_parameter("muzzle_frame", std::string("muzzle"));
-  const auto ref_sys_topic = declare_parameter(
-    "ref_sys_topic", std::string("/dji_serial_bridge/ref_sys"));
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
   const auto raw_pose_ack_topic = declare_parameter("raw_pose_ack_topic", std::string(""));
   if (patrol_enabled) {
-    patrol_.emplace(patrol_rate_rad_s, patrol_after_s, hit_turn_s);
+    patrol_.emplace(patrol_rate_rad_s, patrol_after_s);
   }
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -159,12 +149,6 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   robot_pose_sub_ = create_subscription<RobotPose>(
     robot_pose_topic, rclcpp::SensorDataQoS(),
     [this](RobotPose::ConstSharedPtr m) {on_robot_pose(*m);});
-  if (patrol_ && turn_to_hit_) {
-    // Matches dji_serial_bridge_node's ~/ref_sys SensorDataQoS publisher.
-    ref_sys_sub_ = create_subscription<RefSysStatus>(
-      ref_sys_topic, rclcpp::SensorDataQoS(),
-      [this](RefSysStatus::ConstSharedPtr m) {on_ref_sys(*m);});
-  }
 
   watchdog_timer_ = rclcpp::create_timer(
     this, get_clock(), rclcpp::Duration::from_seconds(0.1), [this]() {check_timeout();});
@@ -174,8 +158,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 
   std::ostringstream patrol_text;
   if (patrol_) {
-    patrol_text << patrol_->rate_rad_s() << " rad/s, turn_to_hit="
-                << (turn_to_hit_ ? "True" : "False");
+    patrol_text << patrol_->rate_rad_s() << " rad/s";
   } else {
     patrol_text << "off";
   }
@@ -314,22 +297,6 @@ void PointToCvTarget::acknowledge_raw_poses()
   }
 }
 
-void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
-{
-  const double delta = msg.delta_angle_got_hit_in;
-  if (delta == NOT_HIT || !(std::abs(delta) <= M_PI + 1e-3)) {
-    return;
-  }
-  const auto gun = gun_pose(rclcpp::Time(msg.header.stamp, clock_now().get_clock_type()));
-  if (!gun) {
-    return;
-  }
-  const double hit_yaw = gun->second + hit_angle_sign_ * delta;
-  patrol_->hit(hit_yaw, seconds(clock_now()));
-  RCLCPP_INFO(
-    get_logger(), "hit at %+.2f rad from the gun: facing odom yaw %+.2f", delta, hit_yaw);
-}
-
 std::optional<geometry_msgs::msg::TransformStamped> PointToCvTarget::stamped_transform(
   const std::string & child, const rclcpp::Time & stamp)
 {
@@ -407,12 +374,13 @@ void PointToCvTarget::check_timeout()
   spinning_ = false;
   held_panel_yaw_.reset();
   RCLCPP_INFO(
-    get_logger(), "Newest '%s' is %.2f s old - publishing no CVTarget until the next one arrives.",
+    get_logger(), "Newest '%s' is %.2f s old - no target estimate until the next one arrives.",
     target_state_topic_.c_str(), age_s);
 }
 
 void PointToCvTarget::on_publish_tick()
 {
+  check_timeout();
   const rclcpp::Time now = clock_now();
   while (state_hold_ns_ > 0) {
     TargetState::ConstSharedPtr eligible;
@@ -453,7 +421,8 @@ void PointToCvTarget::on_publish_tick()
     out.fire = fire.first;
     out.delay_ms = static_cast<uint16_t>(fire.second);
     out.type_c_based_patrol = type_c_based_patrol_;
-    out.turn_to_hit = turn_to_hit_;
+    // A held estimate includes unconverged and coasting tracks, even if TF fails.
+    out.turn_to_hit = !target_active_;
     out.patrol = patrol_point;
     out_frame = out.header.frame_id;
     send_target_(out);

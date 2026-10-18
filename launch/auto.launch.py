@@ -190,7 +190,7 @@ def generate_launch_description():
     patrol_enabled_arg = DeclareLaunchArgument(
         'patrol_enabled', default_value='true',
         description='point_to_cv_target: with no target, sweep the gun and '
-        'face hits off ref_sys, never firing. false sends nothing between '
+        'permit firmware hit turns, never firing. false sends nothing between '
         'targets.'
     )
 
@@ -378,7 +378,6 @@ def generate_launch_description():
             'patrol_enabled': ParameterValue(
                 LaunchConfiguration('patrol_enabled'), value_type=bool
             ),
-            'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
     )

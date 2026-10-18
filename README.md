@@ -8,7 +8,7 @@ odometry as `/odom` and `odom->root`, and turns detections into a raw
 world-frame (`odom`) `CVTarget`. Fused navigation uses `nav_odom`;
 localization backends are in
 `sentry_localization/README.md`; game rules are in
-`../ARCC_2026_SENTRY_CONTEXT.md`.
+`../docs/ARCC_2026_SENTRY_CONTEXT.md`.
 
 ## Nodes
 
@@ -20,7 +20,7 @@ localization backends are in
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose`, `/dji_serial_bridge/ref_sys` (hits) | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
+| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
 
 `mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
 pose translation, target selection and aiming consume the incoming pose/referee
@@ -58,7 +58,7 @@ extrapolates to the fire horizon. Detections, target state and aim use raw,
 never-relocalized `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
-and [remaining work](../ROADMAP.md#b-hit-while-we-move).
+and [remaining work](../docs/ROADMAP.md#b-hit-while-we-move).
 
 ## Build and launch
 
@@ -360,6 +360,14 @@ centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
 came from a sweep against an emulator-shaped target; the higher yaw
 noise let a jinking target's translation leak into `w`.
 
+`radius_prior_std` controls the initial radius uncertainty around
+`panel_radius_m`, including bank reseeds. Position reacquisition that keeps
+spin also keeps the learned radius uncertainty. `log_innovations` enables
+one diagnostic line per updated detection: capture time, track, panel count,
+lead hypothesis, associated panel, result (update/outlier/reacquire = 0/1/2),
+pre-update residual/NIS/log determinant and post-update spin/radii/score.
+It is off by default; parameter defaults live in `src/target_tracker.cpp`.
+
 Acceleration is a Singer model: it decays over `accel_time_constant_s` (1.0)
 and `process_noise_jerk` (3.0 m/s^3) drives it. From panel positions alone a
 filter can't separate the centre accelerating from the panel spinning faster
@@ -495,11 +503,11 @@ trusting it.
 
 ### point_to_cv_target
 
-`allow_latest_tf` defaults true on the robot. When a carried target-state or
-hit stamp is unavailable, the aimer may use latest TF and increments the
+`allow_latest_tf` defaults true on the robot. When a carried target-state
+stamp is unavailable, the aimer may use latest TF and increments the
 latched `/point_to_cv_target/latest_tf_fallbacks` counter. With the parameter
 false it withholds that aim instead. Patrol uses the newest received raw
-POSE capture stamp; hits use their REF_SYS stamp. A zero capture stamp is
+POSE capture stamp. A zero capture stamp is
 unavailable, since TF would interpret it as latest. Lockstep acceptance must
 disable fallback and require a present, zero counter.
 Strict mode retains recent states from the current track and selects the
@@ -513,8 +521,7 @@ root-frame point before that and a camera-relative vector before that. See
 `CVTarget.msg` and
 [UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md).
 
-The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone (`ref_sys` only
-steers the patrol), so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
+The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone, so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
 `sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
 the message.
@@ -530,8 +537,9 @@ camera transforms exist. The tracker can publish state at capture time with
 default off; the E2E profile owns their simulation settings.
 `compute_aim_point()` handles three cases per tick:
 
-- No usable state, or TF fails: no `CVTarget`, so the MCB holds still, with
-  a throttled `ERROR` on TF failure. Usable means present and younger than
+- No usable state, or TF fails: no target aim; Jetson patrol may supply a
+  non-firing point instead. TF failure logs a throttled `ERROR`.
+  Usable means present and younger than
   `target_timeout_s`. With `tick_topic` set (the lockstep benches), a
   `Header` still goes out every tick.
 - `valid == False`: raw `panel` position, no lead, no fire. No
@@ -634,11 +642,14 @@ Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
 only above `fire_confidence_threshold`, so a failed TF lookup or stale state
 holds fire. HP, heat and power gating are not built.
 
-Every aim point also carries `type_c_based_patrol` (default false: the MCB
-doesn't patrol on its own) and `turn_to_hit` (default true: it may turn toward
-where it got hit).
+Every frame carries `type_c_based_patrol` (default false) and a per-frame
+`turn_to_hit` decision. A held target estimate clears `turn_to_hit`, including
+an unconverged estimate or a coasting/predicted track during brief occlusion.
+When the estimate expires, patrol frames set it. Reacquisition clears it on
+the next frame, with no cooldown. The decision does not depend on whether the
+aim solve succeeds or the frame permits firing.
 
-Every Jetson patrol point, including a turn toward a hit, sets `CVTarget.patrol`;
+Every Jetson patrol point sets `CVTarget.patrol`;
 target aim points leave it clear, including non-firing holds. This identifies
 the source of the point and is independent of `type_c_based_patrol`, which
 permits firmware patrol. Wire semantics live in the
@@ -653,11 +664,11 @@ sends patrol points at the publish rate, never with `fire` set: a point
 cycle (0.2 rad/s clockwise), with pitch 0.05. The Jetson sweep remains its
 separate configured rate. The yaw
 is integrated on itself, not on the gun's, so a gun that lags can't stall
-the sweep. With `turn_to_hit`, a `RefSysStatus.delta_angle_got_hit_in` other
-than 123 (not hit) faces `gun yaw + hit_angle_sign * delta` for
-`hit_turn_s` (0.5), then the sweep goes on from there.
-`hit_angle_sign` -1 copies the firmware's `currentYaw - angle`; neither sign
-has been checked on the robot.
+the sweep. Firmware owns turns toward hits: REF_SYS reports a chassis-relative
+angle, while the current POSE payload does not carry chassis yaw. The removed
+Jetson `hit_angle_sign`/`hit_turn_s` path incorrectly added that angle to gun
+yaw. The `turn_to_hit` parameter is also removed; the decision now follows
+estimate availability on each frame.
 
 Why the Jetson and not the MCB: a patrol frame keeps a `CV_TARGET` going
 between targets, so the MCB hears the flags all the time and never patrols
@@ -667,11 +678,13 @@ aim point with `fire` clear and `patrol` set; the payload size is unchanged. Tha
 MCBV3 `nightly` requests a shot only when `fire` is set
 (`AutoAimAndFireCommand.cpp`). The aiming and estimation benches disable
 patrol; every `mcb_*` match stage enables it. The old E1 scorer is gone.
-`turn_to_hit` is still sent unchanged with every point, so an enabled
-firmware hit turn can interrupt a live CV aim. Per-frame gating and a
-patrol-point flag remain [ROADMAP short todos](../ROADMAP.md#short-todos).
-For the current firmware behavior and hit-angle limitations, see
+Firmware may interrupt Jetson patrol toward a hit only while no target
+estimate is held. Its next target frame cancels that turn. See
 [firmware coordination](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
+The [three-run hosted comparison](docs/hit-permission-2026-10-15.md#hosted-drive-and-match)
+records the unit checks and drive/match regression guard against nightly with
+the angle-only firmware correction applied.
+
 
 
 ### Initial field position

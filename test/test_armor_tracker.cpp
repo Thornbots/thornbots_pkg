@@ -267,6 +267,34 @@ TEST(ArmorTracker, RadiusIsClamped)
   EXPECT_LE(ekf.state[R], ekf.p.r_max);
 }
 
+TEST(ArmorTracker, RadiusPriorControlsFreshAndReacquiredUncertainty)
+{
+  auto p = ekf_params();
+  p.radius_prior_std = 0.02;
+  const Vector3d panel(2.7, 0.0, 0.3);
+  tp::ArmorEKF ekf(panel, CAMERA, 0.0, iso(1e-4), p);
+  EXPECT_DOUBLE_EQ(ekf.P(R, R), 0.02 * 0.02);
+  ekf.P(R, R) = 0.001;
+  ekf.reacquire(panel, CAMERA, 1.0, iso(1e-4), true);
+  EXPECT_DOUBLE_EQ(ekf.P(R, R), 0.001);
+  ekf.reacquire(panel, CAMERA, 2.0, iso(1e-4), false);
+  EXPECT_DOUBLE_EQ(ekf.P(R, R), 0.02 * 0.02);
+}
+
+TEST(ArmorTracker, InnovationDiagnosticsRetainTheGatedPreUpdateResidual)
+{
+  const Vector3d panel(2.7, 0.0, 0.3);
+  tp::ArmorEKF ekf(panel, CAMERA, 0.0, iso(1e-4), ekf_params());
+  const Vector3d measurement = panel + Vector3d(0.0, 0.0, 1.0);
+  const Vector3d expected = measurement - tp::panel_positions(ekf.state, ekf.other_r)[0].pos;
+  const double nis = ekf.nis(measurement, iso(1e-4));
+  EXPECT_EQ(ekf.step(measurement, CAMERA, 0.0, iso(1e-4), 0.0, 1),
+    tp::StepResult::Reacquire);
+  EXPECT_TRUE(ekf.last_residual.isApprox(expected));
+  EXPECT_DOUBLE_EQ(ekf.last_nis, nis);
+  EXPECT_EQ(ekf.last_association, 0);
+}
+
 TEST(ArmorTracker, BankRecoversTheSpinAfterABadFirstSecond)
 {
   // A lone EKF fed 15cm noise for the first second (the head slewing in, in

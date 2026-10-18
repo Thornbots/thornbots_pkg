@@ -213,20 +213,12 @@ void Patrol::target_seen(double now_s)
   yaw_.reset();
 }
 
-void Patrol::hit(double yaw, double now_s)
-{
-  hit_yaw_ = yaw;
-  hit_until_s_ = now_s + hit_turn_s_;
-}
-
 std::optional<double> Patrol::step(double now_s, double gun_yaw)
 {
   if (last_target_s_ && now_s - *last_target_s_ < after_s_) {
     return std::nullopt;
   }
-  if (hit_until_s_ && now_s < *hit_until_s_) {
-    yaw_ = hit_yaw_;
-  } else if (!yaw_) {
+  if (!yaw_) {
     yaw_ = gun_yaw;
   } else {
     *yaw_ += rate_rad_s_ * (now_s - last_step_s_);
