@@ -57,9 +57,9 @@ private:
     const double angle_min = msg.angle_min, increment = msg.angle_increment;
     for (size_t i = 0; i < out.ranges.size(); ++i) {
       const double angle = angle_min + static_cast<double>(i) * increment;
-      // Wrap into [0, 2*pi) so this compares correctly whether the scan's own
-      // angle_min/angle_max starts at 0 (sim's gpu_lidar) or spans a signed
-      // range like [-pi, pi] (as real RPLIDAR drivers may). Floor modulo.
+      // Wrap into [0, 2*pi) so this compares correctly for any angle_min.
+      // Sim and the RPLIDAR driver both publish -pi..+pi (720 bins); the
+      // sector is stated in 0..2*pi. Floor modulo.
       double wrapped = std::fmod(angle, two_pi);
       if (wrapped < 0.0) {
         wrapped += two_pi;
