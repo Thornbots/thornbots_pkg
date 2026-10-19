@@ -131,7 +131,10 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 ```
 
 `lidar_serial_port` and `lidar_baudrate` (`/dev/ttyUSB0`, `115200`) configure
-the RPLIDAR A2M8 on hardware. The docstring at the top of
+the RPLIDAR A2M8 on hardware. The driver uses `angle_compensate: true` to
+keep a fixed angular grid (720 bins on the measured A2M8), required by
+rf2o and slam_toolbox. Uncompensated scans vary in beam count.
+The docstring at the top of
 `launch/auto.launch.py` documents only `real_hardware`; the other args are
 described in their `DeclareLaunchArgument` `description=` strings.
 

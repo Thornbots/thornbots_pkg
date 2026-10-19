@@ -415,6 +415,7 @@ def generate_launch_description():
                 LaunchConfiguration('lidar_baudrate'), value_type=int
             ),
             'frame_id': 'lidar',
+            'angle_compensate': True,
             'use_sim_time': use_sim_time,
         }],
         additional_env=shm_env,
