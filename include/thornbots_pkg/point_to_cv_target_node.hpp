@@ -25,8 +25,13 @@
 #ifndef THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 #define THORNBOTS_PKG__POINT_TO_CV_TARGET_NODE_HPP_
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -36,6 +41,7 @@
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "std_msgs/msg/u_int64.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "thornbots_pkg/point_to_cv_target_core.hpp"
@@ -56,12 +62,16 @@ protected:
   };
 
   void on_target_state(dji_serial_bridge::msg::TargetState::ConstSharedPtr msg);
+  void apply_target_state(dji_serial_bridge::msg::TargetState::ConstSharedPtr msg);
   void on_robot_pose(const dji_serial_bridge::msg::RobotPose & msg);
+  void acknowledge_raw_poses();
   void check_timeout();
   void on_publish_tick();
 
-  // The muzzle's newest odom (position, yaw), or nullopt.
-  std::optional<std::pair<Vector3d, double>> gun_pose();
+  // The muzzle's odom (position, yaw) at the carried input stamp, or nullopt.
+  std::optional<std::pair<Vector3d, double>> gun_pose(const rclcpp::Time & stamp);
+  std::optional<geometry_msgs::msg::TransformStamped> stamped_transform(
+    const std::string & child, const rclcpp::Time & stamp);
   std::optional<Vector3d> patrol_point_now(const rclcpp::Time & now);
   // (fire, delay_ms) for this tick's CVTarget. The MCB runs the delay from
   // receiving the frame, so aim and fire cross the wire as one frame. Rate
@@ -77,9 +87,13 @@ protected:
   std::function<void(const dji_serial_bridge::msg::CVTarget &)> send_target_;
   std::function<void(const std_msgs::msg::Header &)> send_tick_, send_ack_;
 
-  std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
+  std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_, camera_frame_;
   double target_timeout_s_, fire_confidence_threshold_, fire_rate_hz_;
   bool lead_enabled_;
+  bool allow_latest_tf_;
+  int64_t state_hold_ns_ = 0;
+  uint64_t latest_tf_fallbacks_ = 0;
+  std::optional<rclcpp::Time> robot_pose_stamp_;
   double firmware_latency_s_, gimbal_lag_s_, v_muzzle_;
   int tof_iterations_;
   double tick_s_, spin_enter_rad_s_, spin_exit_rad_s_;
@@ -97,15 +111,26 @@ protected:
   bool target_active_ = false;
   std::optional<double> held_panel_yaw_;  // Shot::panel_yaw, for latest_state_'s track
   dji_serial_bridge::msg::TargetState::ConstSharedPtr latest_state_;
+  std::deque<dji_serial_bridge::msg::TargetState::ConstSharedPtr> state_history_;
+  std::deque<dji_serial_bridge::msg::TargetState::ConstSharedPtr> pending_target_states_;
+  std::mutex target_state_mutex_;
   Vector3d chassis_vel_root_ = Vector3d::Zero();  // from RobotPose, root frame
   LatencyStat latency_stat_;
 
 private:
   rclcpp::Publisher<dji_serial_bridge::msg::CVTarget>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr
+    tick_pub_, state_ack_pub_, raw_pose_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr fallback_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RobotPose>::SharedPtr robot_pose_sub_;
-  rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_;
+  std::deque<std_msgs::msg::Header> pending_raw_pose_acks_;
+  std::mutex raw_pose_ack_mutex_;
+  std::optional<int64_t> raw_pose_ack_wait_stamp_ns_;
+  std::chrono::steady_clock::time_point raw_pose_ack_wait_started_;
+  bool raw_pose_ack_wait_reported_ = false;
+  std::size_t robot_pose_callback_count_ = 0;
+  rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_, raw_pose_ack_timer_;
 };
 
 }  // namespace thornbots_pkg

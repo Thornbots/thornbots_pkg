@@ -430,6 +430,14 @@ See the [CV interface](#cv-interface) for correction ownership.
 
 ### mcb_relay
 
+With `lockstep_inputs:=true`, the simulator relay waits for the
+[EKF update receipt](../sentry_localization/README.md#testing) and its paired
+filtered/raw inputs. Each logical update produces a `SimulationRelocalize`
+command, including explicit no-correction decisions. Its header records decision
+time, while the embedded correction retains its future application stamp.
+The UART bridge acknowledges the command before the lockstep coordinator releases
+physics. Normal robot relocalization continues to use `PointStamped`.
+
 The bridge stays a pure UART/DJI translator; this node reshapes upstream output
 for it. `relocalize` compares fused `/localization/odom` with the estimated MCB
 navigation position: raw `/odom` plus the last sent offset, using no TF (`Relocalizer` in
@@ -495,6 +503,18 @@ trusting it.
 
 ### point_to_cv_target
 
+`allow_latest_tf` defaults true on the robot. When a carried target-state
+stamp is unavailable, the aimer may use latest TF and increments the
+latched `/point_to_cv_target/latest_tf_fallbacks` counter. With the parameter
+false it withholds that aim instead. Patrol uses the newest received raw
+POSE capture stamp. A zero capture stamp is
+unavailable, since TF would interpret it as latest. Lockstep acceptance must
+disable fallback and require a present, zero counter.
+Strict mode retains recent states from the current track and selects the
+newest whose original stamp is available in TF. A newer unresolved prediction
+therefore does not discard a still-usable state. Invalid states, handoffs and
+staleness clear that history; the normal target timeout still applies.
+
 `/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
 and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See
@@ -508,6 +528,13 @@ the message.
 
 A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
+Optional simulation consumption topics acknowledge carried input headers.
+`state_hold_s` defers state application until that capture age; queued track
+handoffs and invalid states take effect at the same eligibility boundary.
+`raw_pose_ack_topic` acknowledges a POSE only after exact-stamp muzzle and
+camera transforms exist. The tracker can publish state at capture time with
+`state_at_capture` and acknowledge empty detection batches. These options
+default off; the E2E profile owns their simulation settings.
 `compute_aim_point()` handles three cases per tick:
 
 - No usable state, or TF fails: no target aim; Jetson patrol may supply a

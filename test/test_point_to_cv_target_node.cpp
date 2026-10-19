@@ -19,10 +19,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <memory>
 #include <limits>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,6 +52,19 @@ public:
   using tp::PointToCvTarget::on_publish_tick;
   using tp::PointToCvTarget::on_target_state;
 
+  using tp::PointToCvTarget::stamped_transform;
+  using tp::PointToCvTarget::gun_pose;
+  uint64_t fallbacks() const {return latest_tf_fallbacks_;}
+  void dynamic_transform(int64_t stamp_ns, double x, const std::string & child = "root")
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = odom_frame_;
+    tf.header.stamp = rclcpp::Time(stamp_ns, RCL_ROS_TIME);
+    tf.child_frame_id = child;
+    tf.transform.translation.x = x;
+    tf.transform.rotation.w = 1.0;
+    ASSERT_TRUE(tf_buffer_->setTransform(tf, "test", false));
+  }
   void gun_transform()
   {
     geometry_msgs::msg::TransformStamped tf;
@@ -66,8 +81,9 @@ public:
   bool held() const {return held_panel_yaw_.has_value();}
   void time_ns(int64_t value) {now_ns_ = value;}
   using tp::PointToCvTarget::check_timeout;
-  void base_plan() {tp::PointToCvTarget::compute_aim_point();}
+  bool base_plan() {return tp::PointToCvTarget::compute_aim_point().has_value();}
   TargetState::ConstSharedPtr latest() const {return latest_state_;}
+  size_t history_size() const {return state_history_.size();}
   void on_target_state_hook(std::function<void(const Header &)> ack) {send_ack_ = ack;}
   void capture(std::vector<CVTarget> * points, std::vector<Header> * ticks)
   {
@@ -106,7 +122,85 @@ protected:
   }
 };
 
+TargetState::SharedPtr target_state(int64_t stamp_ns, uint32_t track_id,
+                                    bool valid = true)
+{
+  auto state = std::make_shared<TargetState>();
+  state->header.stamp = rclcpp::Time(stamp_ns, RCL_ROS_TIME);
+  state->header.frame_id = "odom";
+  state->robot_track_id = track_id;
+  state->valid = valid;
+  state->center.x = 3.0;
+  state->center.z = 0.4;
+  state->radius = {0.3f, 0.3f};
+  return state;
+}
+
 }  // namespace
+
+TEST_F(NodeTest, StrictTfWithholdsFutureAndZeroStampsWithoutLatestFallback)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->dynamic_transform(100000000, 1.0);
+  EXPECT_FALSE(node->stamped_transform("root", rclcpp::Time(int64_t{200000000}, RCL_ROS_TIME)));
+  EXPECT_FALSE(node->stamped_transform("root", rclcpp::Time(int64_t{0}, RCL_ROS_TIME)));
+  EXPECT_EQ(node->fallbacks(), 0u);
+}
+
+TEST_F(NodeTest, StrictTfRecoversAtTheOriginalStampAfterDelayedDelivery)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->dynamic_transform(100000000, 1.0);
+  const rclcpp::Time stamp(int64_t{150000000}, RCL_ROS_TIME);
+  EXPECT_FALSE(node->stamped_transform("root", stamp));
+  node->dynamic_transform(200000000, 3.0);
+  const auto tf = node->stamped_transform("root", stamp);
+  ASSERT_TRUE(tf);
+  EXPECT_DOUBLE_EQ(tf->transform.translation.x, 2.0);
+  EXPECT_EQ(rclcpp::Time(tf->header.stamp).nanoseconds(), stamp.nanoseconds());
+  EXPECT_EQ(node->fallbacks(), 0u);
+}
+
+TEST_F(NodeTest, HardwareLatestFallbackIsCountedForBothAimAndGun)
+{
+  auto node = make();
+  node->dynamic_transform(100000000, 1.0);
+  node->dynamic_transform(100000000, 2.0, "muzzle");
+  const rclcpp::Time stamp(int64_t{200000000}, RCL_ROS_TIME);
+  ASSERT_TRUE(node->stamped_transform("root", stamp));
+  ASSERT_TRUE(node->gun_pose(stamp));
+  EXPECT_EQ(node->fallbacks(), 2u);
+}
+
+TEST_F(NodeTest, StrictAimRetainsResolvableStateUntilNewerStampedTfArrives)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  auto node = std::make_shared<Probe>(options);
+  node->time_ns(175000000);
+  node->dynamic_transform(100000000, 0.0);
+  auto state = std::make_shared<TargetState>();
+  state->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  state->valid = true;
+  state->center.x = 3.0;
+  state->center.z = 0.4;
+  state->radius = {0.3f, 0.3f};
+  node->on_target_state(state);
+  EXPECT_TRUE(node->base_plan());
+  auto newer = std::make_shared<TargetState>(*state);
+  newer->header.stamp = rclcpp::Time(int64_t{150000000}, RCL_ROS_TIME);
+  node->on_target_state(newer);
+  EXPECT_TRUE(node->base_plan());
+  EXPECT_EQ(node->fallbacks(), 0u);
+  newer = std::make_shared<TargetState>(*newer);
+  newer->robot_track_id = 1;
+  node->on_target_state(newer);
+  EXPECT_FALSE(node->base_plan()) << "handoff must discard the previous track's history";
+}
 
 TEST_F(NodeTest, NoTargetTickDoesNotRequireAnAbsentAimPoint)
 {
@@ -301,4 +395,150 @@ TEST_F(NodeTest, HeldEstimateBlocksHitTurnEvenWhenAimCannotBeComputed)
   ASSERT_EQ(points.size(), 1u);
   EXPECT_TRUE(points.back().patrol);
   EXPECT_FALSE(points.back().turn_to_hit);
+}
+
+TEST_F(NodeTest, HoldsReceivedStateUntilCaptureStampIsFourteenMillisecondsOld)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("patrol_enabled", false);
+  options.append_parameter_override("state_hold_s", 0.014);
+  auto node = std::make_shared<Probe>(options);
+  std::vector<Header> acknowledged;
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_target_state_hook([&](const Header & header) {
+    EXPECT_FALSE(node->latest());
+    acknowledged.push_back(header);
+  });
+
+  const auto state = target_state(100000000, 7);
+  node->time_ns(110000000);
+  node->on_target_state(state);
+  ASSERT_EQ(acknowledged.size(), 1u);
+  EXPECT_EQ(acknowledged.front(), state->header);
+  EXPECT_FALSE(node->latest());
+
+  node->time_ns(113999999);
+  node->on_publish_tick();
+  EXPECT_FALSE(node->latest());
+  EXPECT_TRUE(points.empty());
+
+  node->time_ns(114000000);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), state);
+  EXPECT_EQ(node->history_size(), 1u);
+  ASSERT_EQ(points.size(), 1u);
+  ASSERT_EQ(ticks.size(), 2u);
+  EXPECT_EQ(points.front().header.frame_id, "odom");
+  EXPECT_EQ(acknowledged.size(), 1u);
+
+  node->time_ns(115000000);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), state);
+  EXPECT_EQ(node->history_size(), 1u);
+  EXPECT_EQ(acknowledged.size(), 1u);
+}
+
+TEST_F(NodeTest, EarlyHandoffAndInvalidStateWaitWithoutClearingHeldPanel)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("patrol_enabled", false);
+  options.append_parameter_override("state_hold_s", 0.014);
+  auto node = std::make_shared<Probe>(options);
+  std::vector<Header> acknowledged;
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_target_state_hook(
+    [&](const Header & header) {acknowledged.push_back(header);});
+
+  const auto current = target_state(100000000, 1);
+  node->time_ns(114000000);
+  node->on_target_state(current);
+  node->on_publish_tick();
+  ASSERT_EQ(node->latest(), current);
+  node->hold(0.5);
+
+  const auto handoff = target_state(120000000, 2);
+  const auto invalid = target_state(121000000, 2, false);
+  node->time_ns(121000000);
+  node->on_target_state(handoff);
+  node->time_ns(122000000);
+  node->on_target_state(invalid);
+  ASSERT_EQ(acknowledged.size(), 3u);
+  EXPECT_EQ(node->latest(), current);
+  EXPECT_TRUE(node->held());
+
+  node->time_ns(133999999);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), current);
+  EXPECT_TRUE(node->held());
+
+  node->time_ns(134000000);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), handoff);
+  EXPECT_FALSE(node->held());
+
+  node->hold(0.25);
+  node->time_ns(134999999);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), handoff);
+  EXPECT_TRUE(node->held());
+
+  node->time_ns(135000000);
+  node->on_publish_tick();
+  EXPECT_EQ(node->latest(), invalid);
+  EXPECT_FALSE(node->held());
+  EXPECT_EQ(acknowledged.size(), 3u);
+}
+
+TEST_F(NodeTest, CaptureEligibilityIsIndependentOfStateArrivalClock)
+{
+  auto options = [] {
+    rclcpp::NodeOptions result;
+    result.append_parameter_override("patrol_enabled", false);
+    result.append_parameter_override("state_hold_s", 0.014);
+    return result;
+  };
+  auto early = std::make_shared<Probe>(options());
+  auto late = std::make_shared<Probe>(options());
+  std::vector<CVTarget> early_points, late_points;
+  std::vector<Header> early_ticks, late_ticks;
+  early->capture(&early_points, &early_ticks);
+  late->capture(&late_points, &late_ticks);
+  const auto state = target_state(100000000, 42);
+
+  early->time_ns(101000000);
+  early->on_target_state(state);
+  late->time_ns(113000000);
+  late->on_target_state(state);
+
+  early->time_ns(113999999);
+  late->time_ns(113999999);
+  early->on_publish_tick();
+  late->on_publish_tick();
+  EXPECT_FALSE(early->latest());
+  EXPECT_FALSE(late->latest());
+
+  early->time_ns(114000000);
+  late->time_ns(114000000);
+  early->on_publish_tick();
+  late->on_publish_tick();
+  ASSERT_TRUE(early->latest());
+  ASSERT_TRUE(late->latest());
+  EXPECT_EQ(early->latest()->robot_track_id, late->latest()->robot_track_id);
+  EXPECT_EQ(early->latest()->robot_track_id, 42u);
+}
+
+TEST_F(NodeTest, RejectsInvalidStateHoldDurations)
+{
+  for (double hold_s : {-0.001, std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::quiet_NaN(),
+                        std::numeric_limits<double>::max()})
+  {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("state_hold_s", hold_s);
+    EXPECT_THROW(std::make_shared<Probe>(options), std::invalid_argument);
+  }
 }

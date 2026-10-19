@@ -57,6 +57,7 @@ public:
     output_topic_ = declare_parameter("output_topic", std::string("/cv/target_state"));
     measurement_topic_ = declare_parameter(
       "measurement_topic", std::string("/cv/tracker/measurement"));
+    state_at_capture_ = declare_parameter("state_at_capture", false);
     odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
     pose_latency_s_ = declare_parameter("pose_latency_s", 0.01);
     // Unmeasured on hardware (../../docs/ROADMAP.md, track B); match the emulator's in sim.
@@ -97,6 +98,14 @@ public:
 
     pub_ = create_publisher<TargetState>(output_topic_, 10);
     measurement_pub_ = create_publisher<std_msgs::msg::Header>(measurement_topic_, 10);
+    const auto consumed_topic = declare_parameter("consumed_topic", std::string(""));
+    if (!consumed_topic.empty()) {
+      consumed_pub_ = create_publisher<std_msgs::msg::Header>(consumed_topic, 100);
+    }
+    const auto empty_ack_topic = declare_parameter("empty_ack_topic", std::string(""));
+    if (!empty_ack_topic.empty()) {
+      empty_ack_pub_ = create_publisher<std_msgs::msg::Header>(empty_ack_topic, 100);
+    }
     // Set by the estimation bench only: echo each /clock update once now()
     // reads it, so a lockstep bench sends detections only after it lands.
     const auto clock_ack_topic = declare_parameter("clock_ack_topic", std::string(""));
@@ -116,6 +125,9 @@ public:
         if (!msg->detections.empty()) {
           waiting_.emplace_back(msg, now());
           drain();
+        } else {
+          if (consumed_pub_) consumed_pub_->publish(msg->header);
+          if (empty_ack_pub_) empty_ack_pub_->publish(msg->header);
         }
       });
     // Wall-clock retries: a bench that holds sim time until this node
@@ -273,9 +285,9 @@ private:
     }
     ++n_updates_;
 
-    // TargetState describes the target now: predict to the publish time.
-    const rclcpp::Time now_t = std::max(now(), stamp);
-    lags_.push_back((now_t - stamp).seconds());
+    // Capture-state mode keeps the model independent of callback scheduling.
+    const rclcpp::Time now_t = state_at_capture_ ? stamp : std::max(now(), stamp);
+    lags_.push_back((std::max(now(), stamp) - stamp).seconds());
     const auto [s, P] = tracker_->predicted(now_t.seconds());
     TargetState out;
     out.header.stamp = now_t;
@@ -307,6 +319,7 @@ private:
     out.valid = n_updates_ >= 2;
     pub_->publish(out);
     measurement_pub_->publish(msg.header);
+    if (consumed_pub_) consumed_pub_->publish(msg.header);
   }
 
   std::string robot_panels_topic_, output_topic_, measurement_topic_, odom_frame_;
@@ -314,6 +327,7 @@ private:
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
   int max_outliers_;
+  bool state_at_capture_ = false;
   bool log_innovations_;
   TrackerParams params_;
 
@@ -321,6 +335,8 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<TargetState>::SharedPtr pub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr measurement_pub_, clock_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr consumed_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr empty_ack_pub_;
   rclcpp::JumpHandler::SharedPtr clock_jump_;
   rclcpp::Subscription<PanelDetectionArray>::SharedPtr sub_;
   rclcpp::TimerBase::SharedPtr drain_timer_, log_timer_;

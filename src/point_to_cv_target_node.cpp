@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -58,7 +60,20 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   fire_rate_hz_ = declare_parameter("fire_rate_hz", 2.0);
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
+  camera_frame_ = declare_parameter("camera_frame", std::string("camera"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
+  allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
+  const double state_hold_s = declare_parameter("state_hold_s", 0.0);
+  if (!std::isfinite(state_hold_s) || state_hold_s < 0.0) {
+    throw std::invalid_argument("state_hold_s must be finite and nonnegative");
+  }
+  const long double state_hold_ns = std::round(static_cast<long double>(state_hold_s) * 1e9L);
+  if (state_hold_ns > std::numeric_limits<int64_t>::max()) {
+    throw std::invalid_argument("state_hold_s exceeds the representable ROS time range");
+  }
+  state_hold_ns_ = static_cast<int64_t>(state_hold_ns);
+  fallback_pub_ = create_publisher<std_msgs::msg::UInt64>(
+    "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
   // Fire decision to projectile exit; times the fire against the spin.
   firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.094);
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
@@ -101,6 +116,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
+  const auto raw_pose_ack_topic = declare_parameter("raw_pose_ack_topic", std::string(""));
   if (patrol_enabled) {
     patrol_.emplace(patrol_rate_rad_s, patrol_after_s);
   }
@@ -124,6 +140,11 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   if (!state_ack_topic.empty()) {
     state_ack_pub_ = create_publisher<std_msgs::msg::Header>(state_ack_topic, 100);
     send_ack_ = [this](const std_msgs::msg::Header & h) {state_ack_pub_->publish(h);};
+  }
+  if (!raw_pose_ack_topic.empty()) {
+    raw_pose_ack_pub_ = create_publisher<std_msgs::msg::Header>(raw_pose_ack_topic, 100);
+    raw_pose_ack_timer_ = create_wall_timer(
+      std::chrono::milliseconds(1), [this]() {acknowledge_raw_poses();});
   }
   robot_pose_sub_ = create_subscription<RobotPose>(
     robot_pose_topic, rclcpp::SensorDataQoS(),
@@ -157,15 +178,33 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
+  if (state_hold_ns_ > 0) {
+    std::lock_guard<std::mutex> lock(target_state_mutex_);
+    if (pending_target_states_.size() >= 100) {
+      throw std::runtime_error("lockstep timeout: target state hold queue overflow");
+    }
+    pending_target_states_.push_back(msg);
+  } else {
+    apply_target_state(msg);
+  }
+  if (send_ack_) {
+    send_ack_(msg->header);
+  }
+}
+
+void PointToCvTarget::apply_target_state(TargetState::ConstSharedPtr msg)
+{
   const rclcpp::Time now = clock_now();
   const bool stale = latest_state_ && seconds(
     now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
+    state_history_.clear();
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
     spinning_ = false;
     held_panel_yaw_.reset();
   }
   if (!msg->valid || stale) {
+    state_history_.clear();
     spinning_ = false;
     held_panel_yaw_.reset();
   }
@@ -173,6 +212,8 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
     held_panel_yaw_.reset();
   }
   latest_state_ = msg;
+  state_history_.push_back(msg);
+  while (state_history_.size() > 100) {state_history_.pop_front();}
   target_active_ = true;
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
@@ -184,37 +225,112 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
       "target_state age on arrival: %.1f ms now, %.1f ms mean over %d samples",
       latency_s * 1e3, latency_stat_.mean() * 1e3, latency_stat_.count());
   }
-
-  if (send_ack_) {
-    send_ack_(msg->header);
-  }
 }
 
 void PointToCvTarget::on_robot_pose(const RobotPose & msg)
 {
   chassis_vel_root_ = Vector3d(msg.vel_x, msg.vel_y, 0.0);
+  robot_pose_stamp_ = rclcpp::Time(msg.header.stamp, clock_now().get_clock_type());
+  if (raw_pose_ack_pub_ && robot_pose_callback_count_ < 3) {
+    ++robot_pose_callback_count_;
+    RCLCPP_INFO(
+      get_logger(), "raw RobotPose callback %zu at %ld ns; raw pose ACK readers=%zu",
+      robot_pose_callback_count_, rclcpp::Time(msg.header.stamp).nanoseconds(),
+      raw_pose_ack_pub_->get_subscription_count());
+  }
+  if (raw_pose_ack_pub_ && rclcpp::Time(msg.header.stamp).nanoseconds() > 0) {
+    {
+      std::lock_guard<std::mutex> lock(raw_pose_ack_mutex_);
+      if (pending_raw_pose_acks_.size() >= 100) {
+        throw std::runtime_error("lockstep timeout: raw pose TF acknowledgement queue overflow");
+      }
+      pending_raw_pose_acks_.push_back(msg.header);
+    }
+    acknowledge_raw_poses();
+  }
 }
 
-std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
+void PointToCvTarget::acknowledge_raw_poses()
 {
-  geometry_msgs::msg::TransformStamped tf;
+  std::lock_guard<std::mutex> lock(raw_pose_ack_mutex_);
+  while (raw_pose_ack_pub_ && !pending_raw_pose_acks_.empty()) {
+    const auto & header = pending_raw_pose_acks_.front();
+    const rclcpp::Time stamp(header.stamp, get_clock()->get_clock_type());
+    const int64_t stamp_ns = stamp.nanoseconds();
+    if (!raw_pose_ack_wait_stamp_ns_ || *raw_pose_ack_wait_stamp_ns_ != stamp_ns) {
+      raw_pose_ack_wait_stamp_ns_ = stamp_ns;
+      raw_pose_ack_wait_started_ = std::chrono::steady_clock::now();
+      raw_pose_ack_wait_reported_ = false;
+    }
+
+    std::string muzzle_error;
+    std::string camera_error;
+    const bool muzzle_ready = tf_buffer_->canTransform(
+      odom_frame_, muzzle_frame_, stamp, rclcpp::Duration::from_nanoseconds(0), &muzzle_error);
+    const bool camera_ready = tf_buffer_->canTransform(
+      odom_frame_, camera_frame_, stamp, rclcpp::Duration::from_nanoseconds(0), &camera_error);
+    if (!muzzle_ready || !camera_ready) {
+      const auto elapsed = std::chrono::steady_clock::now() - raw_pose_ack_wait_started_;
+      if (!raw_pose_ack_wait_reported_ && elapsed >= std::chrono::milliseconds(250)) {
+        RCLCPP_WARN(
+          get_logger(),
+          "raw pose TF wait at %ld ns: muzzle=%s error=\"%s\", camera=%s error=\"%s\"; "
+          "raw pose ACK readers=%zu, robot pose publishers=%zu",
+          stamp_ns, muzzle_ready ? "ready" : "missing", muzzle_error.c_str(),
+          camera_ready ? "ready" : "missing", camera_error.c_str(),
+          raw_pose_ack_pub_->get_subscription_count(), robot_pose_sub_->get_publisher_count());
+        raw_pose_ack_wait_reported_ = true;
+      }
+      return;
+    }
+    if (raw_pose_ack_wait_reported_) {
+      const auto elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - raw_pose_ack_wait_started_).count();
+      RCLCPP_INFO(
+        get_logger(), "raw pose TF wait recovered at %ld ns after %.3f s",
+        stamp_ns, elapsed);
+    }
+    raw_pose_ack_pub_->publish(header);
+    pending_raw_pose_acks_.pop_front();
+    raw_pose_ack_wait_stamp_ns_.reset();
+    raw_pose_ack_wait_reported_ = false;
+  }
+}
+
+std::optional<geometry_msgs::msg::TransformStamped> PointToCvTarget::stamped_transform(
+  const std::string & child, const rclcpp::Time & stamp)
+{
   try {
-    tf = tf_buffer_->lookupTransform(odom_frame_, muzzle_frame_, tf2::TimePointZero);
+    // TF interprets zero as latest, so never pass a zero capture stamp through.
+    if (stamp.nanoseconds() != 0 && tf_buffer_->canTransform(odom_frame_, child, stamp)) {
+      return tf_buffer_->lookupTransform(odom_frame_, child, stamp);
+    }
+    if (allow_latest_tf_) {
+      auto tf = tf_buffer_->lookupTransform(odom_frame_, child, tf2::TimePointZero);
+      ++latest_tf_fallbacks_;
+      return tf;
+    }
   } catch (const tf2::TransformException & ex) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
-      muzzle_frame_.c_str(), ex.what());
-    return std::nullopt;
+      child.c_str(), ex.what());
   }
-  const auto & t = tf.transform.translation;
-  const auto & q = tf.transform.rotation;
+  return std::nullopt;
+}
+
+std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose(const rclcpp::Time & stamp)
+{
+  const auto tf = stamped_transform(muzzle_frame_, stamp);
+  if (!tf) {return std::nullopt;}
+  const auto & t = tf->transform.translation;
+  const auto & q = tf->transform.rotation;
   const Matrix3d R = quat_to_rot(q.x, q.y, q.z, q.w);
   return std::make_pair(Vector3d(t.x, t.y, t.z), std::atan2(R(1, 0), R(0, 0)));
 }
 
 std::optional<Vector3d> PointToCvTarget::patrol_point_now(const rclcpp::Time & now)
 {
-  const auto gun = gun_pose();
+  const auto gun = gun_pose(robot_pose_stamp_.value_or(now));
   if (!gun) {
     return std::nullopt;
   }
@@ -266,6 +382,19 @@ void PointToCvTarget::on_publish_tick()
 {
   check_timeout();
   const rclcpp::Time now = clock_now();
+  while (state_hold_ns_ > 0) {
+    TargetState::ConstSharedPtr eligible;
+    {
+      std::lock_guard<std::mutex> lock(target_state_mutex_);
+      if (pending_target_states_.empty()) {break;}
+      const rclcpp::Time stamp(
+        pending_target_states_.front()->header.stamp, now.get_clock_type());
+      if ((now - stamp).nanoseconds() < state_hold_ns_) {break;}
+      eligible = pending_target_states_.front();
+      pending_target_states_.pop_front();
+    }
+    apply_target_state(eligible);
+  }
   std::optional<Aim> aim;
   bool patrol_point = false;
   if (target_active_) {
@@ -305,12 +434,29 @@ void PointToCvTarget::on_publish_tick()
     tick.frame_id = out_frame;
     send_tick_(tick);
   }
+  std_msgs::msg::UInt64 fallbacks;
+  fallbacks.data = latest_tf_fallbacks_;
+  fallback_pub_->publish(fallbacks);
 }
 
 std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
 {
-  const auto state = latest_state_;
+  auto state = latest_state_;
   const rclcpp::Time now = clock_now();
+  if (!allow_latest_tf_ && state->valid) {
+    // A newly delivered prediction may be ahead of TF. Retain the newest
+    // same-track state whose original stamp can be resolved, never latest TF.
+    for (auto i = state_history_.rbegin(); i != state_history_.rend(); ++i) {
+      const rclcpp::Time stamp((*i)->header.stamp, now.get_clock_type());
+      const double age = seconds(now - stamp);
+      if ((*i)->valid && stamp.nanoseconds() != 0 && age >= 0.0 &&
+        age <= target_timeout_s_ && tf_buffer_->canTransform(odom_frame_, root_frame_, stamp))
+      {
+        state = *i;
+        break;
+      }
+    }
+  }
   const rclcpp::Time state_stamp(state->header.stamp, now.get_clock_type());
   const double state_age_s = seconds(now - state_stamp);
 
@@ -331,21 +477,9 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
     return Aim{Vector3d(state->panel.x, state->panel.y, state->panel.z), std::nullopt};
   }
 
-  // Our pose at the state's stamp; if TF hasn't reached it yet, the newest one,
-  // carried forward below.
-  geometry_msgs::msg::TransformStamped tf_shooter;
-  try {
-    if (tf_buffer_->canTransform(odom_frame_, root_frame_, state_stamp)) {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, state_stamp);
-    } else {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, tf2::TimePointZero);
-    }
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR_THROTTLE(
-      get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
-      root_frame_.c_str(), ex.what());
-    return std::nullopt;
-  }
+  const auto stamped_shooter = stamped_transform(root_frame_, state_stamp);
+  if (!stamped_shooter) {return std::nullopt;}
+  const auto & tf_shooter = *stamped_shooter;
 
   const auto & st = tf_shooter.transform.translation;
   const auto & sq = tf_shooter.transform.rotation;
