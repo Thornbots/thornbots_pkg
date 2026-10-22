@@ -466,6 +466,9 @@ def generate_launch_description():
         parameters=[{
             'robot_description': robot_description,
             'use_sim_time': use_sim_time,
+            # Publish every 90 Hz POSE joint state. The 20 Hz default left the
+            # head-mounted lidar's TF up to 50 ms behind each scan; see README.
+            'publish_frequency': 1000.0,
         }],
         additional_env=udp_env,
     )
