@@ -214,7 +214,10 @@ under `root`. The head hangs off `root` with `headlink` at the MCB's world
 head yaw (both joints turn about +z, counter-clockwise from above like
 `head_yaw`; they turned about -z until 2026-10-03, which mirrored the camera
 whenever the gimbal was off zero), so `root->lidar` and `root->camera` don't depend on chassis yaw,
-and a spinning chassis can't reach localization. `vel_x/vel_y` are the
+and a spinning chassis can't reach localization. `robot_state_publisher`
+publishes every POSE joint state (90 Hz); its 20 Hz default left the head
+TF up to 50 ms behind each lidar scan, and rf2o read the head's swing in
+that gap as chassis motion ([rf2o grading](../sentry_localization/README.md#configrf2oyaml)). `vel_x/vel_y` are the
 MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 `root` would mean freeing rf2o's heading and fusing a yaw into the EKF.
