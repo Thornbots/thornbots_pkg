@@ -95,7 +95,7 @@ def generate_launch_description():
         'nodes or the camera launch, which keep the container default.'
     )
 
-    # mapping starts blank by default, so its map frame is the boot pose.
+    # Mapping starts a blank graph; field registration belongs to localization's workflow.
     load_map_arg = DeclareLaunchArgument(
         'load_map', default_value=PythonExpression(
             ["'false' if '", LaunchConfiguration('localization_mode'),
@@ -484,15 +484,29 @@ def generate_launch_description():
             'use_rf2o': LaunchConfiguration('use_rf2o'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
+            'amcl_initial_x': LaunchConfiguration('amcl_initial_x'),
+            'amcl_initial_y': LaunchConfiguration('amcl_initial_y'),
+            'amcl_initial_yaw': LaunchConfiguration('amcl_initial_yaw'),
             'autosave_map': LaunchConfiguration('autosave_map'),
         }.items(),
     )
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'initial_x', default_value='0.0', description='Known initial field X, meters'),
+            'initial_x', default_value='0.0',
+            description='Initial navigation X matching raw odometry, meters'),
         DeclareLaunchArgument(
-            'initial_y', default_value='0.0', description='Known initial field Y, meters'),
+            'initial_y', default_value='0.0',
+            description='Initial navigation Y matching raw odometry, meters'),
+        DeclareLaunchArgument(
+            'amcl_initial_x', default_value=LaunchConfiguration('initial_x'),
+            description='AMCL field X; see sentry_localization field-day workflow'),
+        DeclareLaunchArgument(
+            'amcl_initial_y', default_value=LaunchConfiguration('initial_y'),
+            description='AMCL field Y; independent of navigation seed'),
+        DeclareLaunchArgument(
+            'amcl_initial_yaw', default_value='0.0',
+            description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,

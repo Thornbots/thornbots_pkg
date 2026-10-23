@@ -96,7 +96,7 @@ and setting it false keeps the launch off the real serial devices.
 
 `localization_mode` (`mapping` default since 2026-10-02, `slam`, `amcl`,
 `none`) picks the `map->nav_odom` owner. Under `mapping`, `load_map` defaults
-false (a blank map from the boot pose) and `autosave_map` defaults to
+false (a blank pose graph) and `autosave_map` defaults to
 `real_hardware`. `/localization/odom` is published in every mode.
 `use_rf2o` (default `true`) controls whether the navigation pose fuses
 `/scan_odom` or passes through raw odometry; when enabled it starts
@@ -668,8 +668,6 @@ the angle-only firmware correction applied.
 
 ### Initial field position
 
-`auto.launch.py initial_x:=4.625 initial_y:=0.0` seeds the EKF and AMCL
-at a known team spawn; the default stays `(0, 0)`. `root` remains heading-fixed.
-Scan odometry initializes from the first `/odom` pose so it shares the
-firmware's origin. Starting the EKF at zero with a nonzero firmware pose
-would otherwise make `mcb_relay` immediately reset the firmware to zero.
+See [localization's initial-position contract](../sentry_localization/README.md#initial-field-position)
+and [field-day and room workflow](../sentry_localization/README.md#field-day-and-room-workflow)
+for navigation seeds, independent AMCL field poses and mapping a new field.
