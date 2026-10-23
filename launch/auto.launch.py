@@ -28,8 +28,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command, EnvironmentVariable, LaunchConfiguration, PythonExpression
@@ -95,7 +95,7 @@ def generate_launch_description():
         'nodes or the camera launch, which keep the container default.'
     )
 
-    # mapping starts blank by default, so its map frame is the boot pose.
+    # Mapping starts a blank graph; field registration belongs to localization's workflow.
     load_map_arg = DeclareLaunchArgument(
         'load_map', default_value=PythonExpression(
             ["'false' if '", LaunchConfiguration('localization_mode'),
@@ -107,8 +107,12 @@ def generate_launch_description():
     autosave_map_arg = DeclareLaunchArgument(
         'autosave_map', default_value=LaunchConfiguration('real_hardware'),
         description='Forwarded to sentry_localization: under mapping, save '
-        'the map every 30 s to /workspaces/isaac_ros-dev/maps/<boot time>/. '
+        'the map every 30 s to map_save_dir/<boot time>/. '
         'Default real_hardware.'
+    )
+    map_save_dir_arg = DeclareLaunchArgument(
+        'map_save_dir', default_value='/workspaces/isaac_ros-dev/maps',
+        description='Forwarded to sentry_localization: directory for map autosaves.'
     )
     map_file_arg = DeclareLaunchArgument(
         'map_file', default_value=os.path.join(
@@ -482,21 +486,54 @@ def generate_launch_description():
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
+            'seed_from_raw_odom': LaunchConfiguration('seed_from_raw_odom'),
+            'seed_require_team': LaunchConfiguration('seed_require_team'),
+            'seed_explicit_team': LaunchConfiguration('seed_explicit_team'),
+            'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
+            'amcl_initial_x': LaunchConfiguration('amcl_initial_x'),
+            'amcl_initial_y': LaunchConfiguration('amcl_initial_y'),
+            'amcl_initial_yaw': LaunchConfiguration('amcl_initial_yaw'),
             'autosave_map': LaunchConfiguration('autosave_map'),
         }.items(),
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('operator_inputs_only', default_value='false',
+                              choices=['true', 'false'],
+                              description='Only UART input and raw pose translation; '
+                              'no command producers or relay.'),
+        DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
+                              description='Practice-field team for seed position checks '
+                              'without referee.'),
         DeclareLaunchArgument(
-            'initial_x', default_value='0.0', description='Known initial field X, meters'),
+            'seed_from_raw_odom', default_value='false', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: seed EKF x/y from fresh '
+            'raw /odom before starting it; ignores initial_x/y for EKF.'),
         DeclareLaunchArgument(
-            'initial_y', default_value='0.0', description='Known initial field Y, meters'),
+            'seed_require_team', default_value='false', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: require referee team and '
+            'subsequent raw /odom at its team start before seeding EKF.'),
+        DeclareLaunchArgument(
+            'initial_x', default_value='0.0',
+            description='Initial navigation X matching raw odometry, meters'),
+        DeclareLaunchArgument(
+            'initial_y', default_value='0.0',
+            description='Initial navigation Y matching raw odometry, meters'),
+        DeclareLaunchArgument(
+            'amcl_initial_x', default_value=LaunchConfiguration('initial_x'),
+            description='AMCL field X; see sentry_localization field-day workflow'),
+        DeclareLaunchArgument(
+            'amcl_initial_y', default_value=LaunchConfiguration('initial_y'),
+            description='AMCL field Y; defaults to initial_y, independent of navigation seed'),
+        DeclareLaunchArgument(
+            'amcl_initial_yaw', default_value='0.0',
+            description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
-        localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
+        localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
@@ -506,10 +543,14 @@ def generate_launch_description():
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
-        dji_serial_bridge_node, mcb_relay_node,
-        target_selector_node, target_tracker_node, point_to_cv_target_node,
-        lidar_node, lidar_self_filter_node,
-        pose_translator_node, odom_tf_broadcaster_node,
-        robot_state_publisher_node,
-        localization_launch_include,
+        dji_serial_bridge_node, pose_translator_node,
+        GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
+                    actions=[
+            mcb_relay_node,
+            target_selector_node, target_tracker_node, point_to_cv_target_node,
+            lidar_node, lidar_self_filter_node,
+            odom_tf_broadcaster_node,
+            robot_state_publisher_node,
+            localization_launch_include,
+        ]),
     ])
