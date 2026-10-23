@@ -28,8 +28,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command, EnvironmentVariable, LaunchConfiguration, PythonExpression
@@ -487,6 +487,8 @@ def generate_launch_description():
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
             'seed_from_raw_odom': LaunchConfiguration('seed_from_raw_odom'),
+            'seed_require_team': LaunchConfiguration('seed_require_team'),
+            'seed_explicit_team': LaunchConfiguration('seed_explicit_team'),
             'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
@@ -498,10 +500,21 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('operator_inputs_only', default_value='false',
+                              choices=['true', 'false'],
+                              description='Only UART input and raw pose translation; '
+                              'no command producers or relay.'),
+        DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
+                              description='Practice-field team for seed position checks '
+                              'without referee.'),
         DeclareLaunchArgument(
             'seed_from_raw_odom', default_value='false', choices=['true', 'false'],
             description='Forwarded to sentry_localization: seed EKF x/y from fresh '
             'raw /odom before starting it; ignores initial_x/y for EKF.'),
+        DeclareLaunchArgument(
+            'seed_require_team', default_value='false', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: require referee team and '
+            'subsequent raw /odom at its team start before seeding EKF.'),
         DeclareLaunchArgument(
             'initial_x', default_value='0.0',
             description='Initial navigation X matching raw odometry, meters'),
@@ -530,10 +543,14 @@ def generate_launch_description():
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
-        dji_serial_bridge_node, mcb_relay_node,
-        target_selector_node, target_tracker_node, point_to_cv_target_node,
-        lidar_node, lidar_self_filter_node,
-        pose_translator_node, odom_tf_broadcaster_node,
-        robot_state_publisher_node,
-        localization_launch_include,
+        dji_serial_bridge_node, pose_translator_node,
+        GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
+                    actions=[
+            mcb_relay_node,
+            target_selector_node, target_tracker_node, point_to_cv_target_node,
+            lidar_node, lidar_self_filter_node,
+            odom_tf_broadcaster_node,
+            robot_state_publisher_node,
+            localization_launch_include,
+        ]),
     ])
