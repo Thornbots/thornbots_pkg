@@ -107,8 +107,12 @@ def generate_launch_description():
     autosave_map_arg = DeclareLaunchArgument(
         'autosave_map', default_value=LaunchConfiguration('real_hardware'),
         description='Forwarded to sentry_localization: under mapping, save '
-        'the map every 30 s to /workspaces/isaac_ros-dev/maps/<boot time>/. '
+        'the map every 30 s to map_save_dir/<boot time>/. '
         'Default real_hardware.'
+    )
+    map_save_dir_arg = DeclareLaunchArgument(
+        'map_save_dir', default_value='/workspaces/isaac_ros-dev/maps',
+        description='Forwarded to sentry_localization: directory for map autosaves.'
     )
     map_file_arg = DeclareLaunchArgument(
         'map_file', default_value=os.path.join(
@@ -482,6 +486,8 @@ def generate_launch_description():
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
+            'seed_from_raw_odom': LaunchConfiguration('seed_from_raw_odom'),
+            'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
             'amcl_initial_x': LaunchConfiguration('amcl_initial_x'),
@@ -493,6 +499,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
+            'seed_from_raw_odom', default_value='false', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: seed EKF x/y from fresh '
+            'raw /odom before starting it; ignores initial_x/y for EKF.'),
+        DeclareLaunchArgument(
             'initial_x', default_value='0.0',
             description='Initial navigation X matching raw odometry, meters'),
         DeclareLaunchArgument(
@@ -503,14 +513,14 @@ def generate_launch_description():
             description='AMCL field X; see sentry_localization field-day workflow'),
         DeclareLaunchArgument(
             'amcl_initial_y', default_value=LaunchConfiguration('initial_y'),
-            description='AMCL field Y; independent of navigation seed'),
+            description='AMCL field Y; defaults to initial_y, independent of navigation seed'),
         DeclareLaunchArgument(
             'amcl_initial_yaw', default_value='0.0',
             description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
-        localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
+        localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
