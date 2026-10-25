@@ -16,6 +16,7 @@ localization backends are in
 | --- | --- | --- |
 | `pose_translator` | `/dji_serial_bridge/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
 | `odom_tf_broadcaster` | `/odom`, `/localization/odom` | raw `odom->root` and fused `nav_odom->odom` TF |
+| `lidar_tracker` | `/scan`, `/map`, `/joint_states`, `/cv/target_state`, `/cv/panel_detections`, TF | `/lidar/tracks`, `/lidar/markers` (publishing only) |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
@@ -468,6 +469,47 @@ payload. Raw POSE and the CV aim frame remain unchanged. See the
 
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
+
+### lidar_tracker
+
+Stage 3 observes `/scan` and publishes `/lidar/tracks` (`LidarTrackArray`) and
+`/lidar/markers` (rviz `MarkerArray`). It has no head or movement command
+publisher. `auto.launch.py` starts it independently of the CV aiming node.
+`lidar_looks` is reserved for stage 4; either value leaves stage 3 publishing
+only. `lidar_obstacle_margin_m` controls map rejection.
+
+The ROS-free core removes returns within the configured margin of occupied
+cell **areas**, respecting map origin rotation. Unknown and out-of-map returns
+are also rejected. Only saved-map `amcl`/`slam` modes enable tracks; `none`,
+`mapping`, or a missing `/map` publish an empty array and a throttled warning.
+Saved-map localization must be accurate within the margin: misregistered
+walls can become false tracks, and robots near obstacles are suppressed.
+
+Ordered neighboring returns form 0.10–0.40 m clusters. One-to-one nearest
+predicted-position association and an alpha-beta position/velocity filter
+retain tracks for 3 s without returns. Position is the visible head surface's
+centroid, not a fitted chassis center; expect a silhouette-dependent bias.
+The output header is the end of the carried scan sweep, and `last_return` is
+the latest supporting sweep time; dropout positions are predicted to the
+header time. IDs change after expiry or a backwards clock reset.
+
+The adapter waits up to 0.5 s for capture-time TF and head joint history.
+Head yaw rates above `max_head_rate_rad_s` (0.5 rad/s), joint gaps over 0.1 s,
+or missing coverage suppress that sweep. It interpolates sensor transforms
+across hardware sweeps. Gazebo captures instantaneous scans with nominal
+rotary metadata; `auto.launch.py` sets `scan_is_instantaneous` in simulation
+so points retain the actual Gazebo capture time. No map or camera TF lookup
+uses a latest-time substitute.
+
+Camera `TargetState` centers are transformed into `map` at their carried
+stamp and predicted for at most 0.3 s; the nearest track within 0.65 m becomes
+`ENEMY`. A track held within the camera's central 20 degrees for 0.6 s without
+an enemy match becomes `CHECKED_EMPTY`, only while fresh
+`/cv/panel_detections` prove camera activity. This is a view heuristic, not
+proof of visibility through occlusions or a teammate classifier. Labels expire
+after 3 s; fresh enemy matches take precedence. Colors: unchecked yellow,
+enemy red, checked-empty blue. Stage 4 must assess visibility before using
+these labels for head control.
 
 ### lidar_self_filter
 

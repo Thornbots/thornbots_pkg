@@ -23,6 +23,13 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/LidarTrack.msg" "msg/LidarTrackArray.msg"
+  DEPENDENCIES std_msgs geometry_msgs builtin_interfaces)
+rosidl_get_typesupport_target(lidar_typesupport ${PROJECT_NAME} rosidl_typesupport_cpp)
+ament_export_dependencies(rosidl_default_runtime)
 
 add_executable(room_check src/room_check.cpp)
 target_compile_features(room_check PUBLIC cxx_std_17)
@@ -43,7 +50,7 @@ ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames)
+foreach(core lidar_tracker_core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
@@ -77,6 +84,11 @@ ament_target_dependencies(pose_translator_node PUBLIC
 add_executable(pose_translator src/pose_translator.cpp)
 target_link_libraries(pose_translator pose_translator_node)
 
+add_executable(lidar_tracker src/lidar_tracker.cpp)
+target_link_libraries(lidar_tracker lidar_tracker_core "${lidar_typesupport}")
+ament_target_dependencies(lidar_tracker
+  rclcpp sensor_msgs nav_msgs tf2 tf2_ros dji_serial_bridge visualization_msgs)
+
 add_executable(lidar_self_filter src/lidar_self_filter.cpp)
 ament_target_dependencies(lidar_self_filter rclcpp sensor_msgs)
 
@@ -85,7 +97,7 @@ target_link_libraries(odom_tf_broadcaster aim_frames)
 ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
 
 install(TARGETS target_tracker target_selector mcb_relay point_to_cv_target pose_translator
-  lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
+  lidar_tracker lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY urdf DESTINATION share/${PROJECT_NAME}
@@ -95,6 +107,8 @@ install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_lidar_tracker_core test/test_lidar_tracker_core.cpp)
+  target_link_libraries(test_lidar_tracker_core lidar_tracker_core)
   ament_add_gtest(test_room_check_core test/test_room_check_core.cpp)
   target_compile_features(test_room_check_core PUBLIC cxx_std_17)
   target_include_directories(test_room_check_core PRIVATE include)
