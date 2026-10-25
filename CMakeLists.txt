@@ -19,6 +19,17 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
+
+add_executable(room_check src/room_check.cpp)
+target_compile_features(room_check PUBLIC cxx_std_17)
+target_include_directories(room_check PRIVATE include)
+ament_target_dependencies(room_check rclcpp dji_serial_bridge geometry_msgs nav_msgs
+  sensor_msgs std_msgs diagnostic_msgs rcl_interfaces tf2_msgs tf2_ros vision_msgs)
+install(TARGETS room_check DESTINATION lib/${PROJECT_NAME})
 
 add_library(armor_tracker STATIC src/armor_tracker.cpp)
 target_compile_features(armor_tracker PUBLIC cxx_std_17)
@@ -84,6 +95,9 @@ install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_room_check_core test/test_room_check_core.cpp)
+  target_compile_features(test_room_check_core PUBLIC cxx_std_17)
+  target_include_directories(test_room_check_core PRIVATE include)
   ament_add_gtest(test_armor_tracker test/test_armor_tracker.cpp)
   target_link_libraries(test_armor_tracker armor_tracker)
   ament_add_gtest(test_target_selector_core test/test_target_selector_core.cpp)

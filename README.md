@@ -671,3 +671,99 @@ the angle-only firmware correction applied.
 See [localization's initial-position contract](../sentry_localization/README.md#initial-field-position)
 and [field-day and room workflow](../sentry_localization/README.md#field-day-and-room-workflow)
 for navigation seeds, independent AMCL field poses and mapping a new field.
+
+## Parked room health check
+
+In a sourced robot-container terminal, start the normal stack, park the chassis
+**and head**, then run this passive observer (30 seconds plus 3 seconds discovery):
+
+```bash
+ros2 run thornbots_pkg room_check
+```
+
+It subscribes only: no motion commands, services, parameter writes, PINGs or MCB
+traffic. Leave the normal launch running. Each run creates a unique UTC-dated
+`room-evidence/` subdirectory containing `summary.txt`, per-message receipts,
+stamps and positions in `observations.csv`, per-stream `metrics.csv`, observed
+`rosout.csv`, graph snapshots
+and parameter/environment settings. Keep that directory alongside the normal
+stack/bag logs. It records metadata, not images or a replayable rosbag. Exit codes
+are 0 for passing observed checks, 1 for failed checks, 2 for a collection error.
+**SKIP is unverified**, including optional components absent from the graph.
+POSE, head TF, raw odometry and scans are always required; absence fails clearly.
+A publisher that disappears after discovery fails its delivery/coverage check.
+
+For a longer stationary drift sample ([T39](../docs/ROADMAP.md#short-todos)):
+
+```bash
+ros2 run thornbots_pkg room_check --ros-args -p duration_s:=60.0 -p output_dir:=/workspaces/isaac_ros-dev/evidence
+```
+
+Default screening limits are POSE/head TF 90 Hz ±20%, maximum 100 ms gap;
+REF_SYS 10 Hz ±30%, maximum 350 ms gap; scan delivery 10 Hz ±50%, maximum
+500 ms gap; 720 fixed bins and exactly constant angular bounds/increment (matching rf2o). Rates use
+counts over the entire observation window, including leading/trailing silence.
+Gaps include both boundaries; these are observer receipt gaps, not proof of wire
+loss. CSV stamps allow source-gap inspection. REF_SYS absence is SKIP without
+`require_referee:=true`; unassigned `robot_id=0` is explicitly reported.
+A present but stalled referee stream fails even without that flag.
+
+`rf2o accepts scans` requires output for at least 80% of observed scans and no
+500 ms output gap. It also reports `/scan_odom/quality` failed/no-increment
+counts when available. Geometry bad/changed counts are exact for **received**
+scans; rf2o skip/drop and SLAM/AMCL drop **log reports** are lower bounds because
+nodes can throttle warnings and DDS can lose observations. Zero reports does
+not prove zero internal drops. An absent rf2o/navigation/map backend is SKIP;
+`require_rf2o:=true` and `require_localization:=true` make these required.
+This accommodates the [room/field workflow](../sentry_localization/README.md#field-day-and-room-workflow),
+whose default raw-wheel mode intentionally does not run rf2o. The observer does
+not save/register maps or request stationary AMCL updates.
+
+Raw odometry must stay within 3 cm/0.03 rad of the first sample; navigation and
+TF `map->root` within 15 cm/0.03 rad, over at least 90% of the chosen interval.
+Maximum excursion (so a return to the start cannot hide drift), accumulated XY
+path and coverage span are printed. This tests parked repeatability, not surveyed
+accuracy. Stamps must be nonzero, monotonic, at most 500 ms old or 50 ms future;
+`map->nav_odom` alone allows 1.1 s future for the backend transform tolerance.
+Wall/ROS clock jumps, stopped sim time, stale/future stamps and interrupted
+collection fail. These are screening defaults, not hardware acceptance claims.
+Parameters `raw_drift_m`, `localization_drift_m`, `drift_rad`, `max_stamp_age_s`,
+`max_future_s`, `pose_hz` and `scan_bins` can tighten or adapt the test; their
+values are retained in the evidence. Use `use_sim_time:=true` in sim: rates/gaps
+then use ROS time, with wall gaps also shown; collection duration stays wall time.
+Sim startup allows up to 10 extra wall seconds for the first nonzero `/clock`;
+no clock still fails clearly. The default gz pose emulator is 100 Hz, inside
+the hardware screening band.
+
+Optional camera/inference block (show a visible, tracked panel):
+
+```bash
+ros2 run thornbots_pkg room_check --ros-args -p camera:=true
+```
+
+It measures **delivered** raw camera and YOLO fps (60 Hz ±20% by default;
+`camera_hz`/`yolo_hz` change expectations), not publisher-side sensor loss.
+`camera_topic` defaults to `/color/image_raw` (`sensor_msgs/Image`), `yolo_topic`
+to `/detections_output` (`vision_msgs/Detection2DArray`). Raw image subscription
+adds transport/observer load, especially on UDP. Camera-to-TargetState latency
+is a named **proxy**: state receipt minus the capture stamp of the nearest tracker
+measurement receipt within 3 ms, allowing either arrival order. There is no shared
+capture ID. At least 10 pairs and 80% state coverage are required, with p95 <=200 ms
+(`latency_s`). State header age is never called capture latency. Empty/no target
+or inadequate pairing fails this optional block instead of inventing a latency.
+
+Optional stale-CV rehearsal, in a separate run:
+
+```bash
+ros2 run thornbots_pkg room_check --ros-args -p stale_cv:=true -p duration_s:=30.0
+```
+
+First show a tracked panel and let active CV decisions arrive. During collection,
+**you** stop the YOLO launch in its terminal; keep tracker, aiming and relay running.
+The command never kills any process. It checks that non-patrol aim/fire decisions
+on `/cv/target` cease within 200 ms of the last YOLO receipt, with at least one
+second of continued consumer observation. Patrol traffic is allowed. No target,
+no producer stop or no subsequent consumer decisions fails as NOT EXERCISED.
+The bound is measured from last observer receipt, not the exact process-stop time.
+Current aiming/tracker timeouts may exceed this requested bound: a failure is
+useful evidence, not permission to change safety behavior during a room test.
