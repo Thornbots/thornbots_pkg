@@ -30,6 +30,10 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>eigen</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>tf2_msgs</depend>
+  <depend>vision_msgs</depend>
   <depend>dji_serial_bridge</depend>
   <export>
     <build_type>ament_cmake</build_type>
