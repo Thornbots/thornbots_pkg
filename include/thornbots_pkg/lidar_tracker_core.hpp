@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Filter the robot's own head out of the lidar scan: blank a fixed angular
-// sector of scan_raw where the head sits in the lidar's FOV (fixed in the
-// lidar's frame; no joint-state sub needed), republishing on scan. Works for
-// sim and real hardware.
-//
-// Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg CCW
-// from the gun), from sentry_v2's CAD. See README.md for design rationale and
-// retuning notes.
+// ROS-free core of lidar_tracker: drop scan points near saved-map obstacles,
+// cluster the rest into 0.10-0.40 m robot heads and track them in map with an
+// alpha-beta filter; camera views label tracks. Design: README.md#lidar_tracker.
 
 #pragma once
 
@@ -54,16 +49,21 @@ struct Parameters
 {
   double margin{0.25}, min_width{0.10}, max_width{0.40}, cluster_gap{0.18};
   double keep_s{3.0}, association_m{0.65}, label_keep_s{3.0}, look_s{0.6};
+  double min_separation_m{0.4};  // closer clusters in one sweep are one robot
 };
 class Tracker
 {
 public:
-  explicit Tracker(Parameters parameters = {}) : parameters_(parameters) {}
+  explicit Tracker(Parameters parameters = {})
+  : parameters_(parameters) {}
   std::vector<Track> update(
     double stamp, const std::vector<std::optional<Point>> & rays, const Grid & map);
-  void camera(double stamp, Point origin, double yaw, std::optional<Point> enemy, bool allow_empty = true);
+  void camera(
+    double stamp, Point origin, double yaw, std::optional<Point> enemy,
+    bool allow_empty = true);
   void clear();
   std::vector<Track> snapshot(double stamp) const;
+
 private:
   Parameters parameters_;
   std::vector<Track> tracks_;

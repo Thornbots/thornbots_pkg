@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Filter the robot's own head out of the lidar scan: blank a fixed angular
-// sector of scan_raw where the head sits in the lidar's FOV (fixed in the
-// lidar's frame; no joint-state sub needed), republishing on scan. Works for
-// sim and real hardware.
-//
-// Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg CCW
-// from the gun), from sentry_v2's CAD. See README.md for design rationale and
-// retuning notes.
+// ROS-free lidar_tracker core; see lidar_tracker_core.hpp and
+// README.md#lidar_tracker.
 
 #include "thornbots_pkg/lidar_tracker_core.hpp"
 
@@ -111,17 +105,41 @@ std::vector<Track> Tracker::update(
   tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(), [&](const Track & t) {
       return stamp - t.last_return > parameters_.keep_s;
     }), tracks_.end());
-  std::vector<bool> used(tracks_.size(), false);
+  struct Candidate
+  {
+    Point center;
+    double width;
+    size_t points;
+  };
+  std::vector<Candidate> candidates;
   for (const auto & points : clusters) {
     if (points.size() < 2) {continue;}
-    double width = 0;
-    Point center{};
+    Candidate c{{}, 0, points.size()};
     for (const auto & a : points) {
-      center.x += a.x; center.y += a.y;
-      for (const auto & b : points) {width = std::max(width, distance(a, b));}
+      c.center.x += a.x;
+      c.center.y += a.y;
+      for (const auto & b : points) {
+        c.width = std::max(c.width, distance(a, b));
+      }
     }
-    if (width < parameters_.min_width || width > parameters_.max_width) {continue;}
-    center.x /= points.size(); center.y /= points.size();
+    if (c.width < parameters_.min_width || c.width > parameters_.max_width) {continue;}
+    c.center.x /= points.size();
+    c.center.y /= points.size();
+    candidates.push_back(c);
+  }
+  // Fragments of one robot (head and lidar arm split by a gap): keep the largest.
+  std::stable_sort(candidates.begin(), candidates.end(),
+    [](const Candidate & a, const Candidate & b) {return a.points > b.points;});
+  std::vector<Point> kept;
+  std::vector<bool> used(tracks_.size(), false);
+  for (const auto & c : candidates) {
+    const bool fragment = std::any_of(kept.begin(), kept.end(), [&](const Point & k) {
+          return distance(k, c.center) < parameters_.min_separation_m;
+      });
+    if (fragment) {continue;}
+    kept.push_back(c.center);
+    const Point center = c.center;
+    const double width = c.width;
     size_t best = tracks_.size();
     double closest = parameters_.association_m;
     for (size_t i = 0; i < tracks_.size(); ++i) {
@@ -148,14 +166,19 @@ std::vector<Track> Tracker::update(
 }
 std::vector<Track> Tracker::snapshot(double stamp) const
 {
-  auto result = tracks_;
-  for (auto & t : result) {
-    t.position = predict(t, stamp); t.stamp = stamp;
+  std::vector<Track> result;
+  for (auto t : tracks_) {
+    if (stamp - t.last_return > parameters_.keep_s) {continue;}
+    t.position = predict(t, stamp);
+    t.stamp = stamp;
     if (stamp > t.label_until) {t.label = Label::Unchecked;}
+    result.push_back(t);
   }
   return result;
 }
-void Tracker::camera(double stamp, Point origin, double yaw, std::optional<Point> enemy, bool allow_empty)
+void Tracker::camera(
+  double stamp, Point origin, double yaw, std::optional<Point> enemy,
+  bool allow_empty)
 {
   size_t matched = tracks_.size();
   double nearest = parameters_.association_m;
@@ -175,7 +198,8 @@ void Tracker::camera(double stamp, Point origin, double yaw, std::optional<Point
     const Point p = predict(t, stamp);
     const double bearing = std::atan2(p.y - origin.y, p.x - origin.x) - yaw;
     // Central 20 degrees only; "checked-empty" is a camera heuristic, not free space.
-    const bool looking = allow_empty && std::abs(std::atan2(std::sin(bearing), std::cos(bearing))) < 0.175;
+    const bool looking = allow_empty && std::abs(std::atan2(std::sin(bearing),
+        std::cos(bearing))) < 0.175;
     if (!looking) {t.looking_since = -1; continue;}
     if (t.looking_since < 0) {t.looking_since = stamp;}
     if (stamp - t.looking_since >= parameters_.look_s && t.label != Label::Enemy) {

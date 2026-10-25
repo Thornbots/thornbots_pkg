@@ -485,7 +485,9 @@ are also rejected. Only saved-map `amcl`/`slam` modes enable tracks; `none`,
 Saved-map localization must be accurate within the margin: misregistered
 walls can become false tracks, and robots near obstacles are suppressed.
 
-Ordered neighboring returns form 0.10–0.40 m clusters. One-to-one nearest
+Ordered neighboring returns form 0.10–0.40 m clusters. Clusters within
+`min_separation_m` (0.4 m) of a larger one in the same sweep are fragments of
+that robot (head and lidar arm split by a gap) and are dropped. One-to-one nearest
 predicted-position association and an alpha-beta position/velocity filter
 retain tracks for 3 s without returns. Position is the visible head surface's
 centroid, not a fitted chassis center; expect a silhouette-dependent bias.
@@ -493,9 +495,11 @@ The output header is the end of the carried scan sweep, and `last_return` is
 the latest supporting sweep time; dropout positions are predicted to the
 header time. IDs change after expiry or a backwards clock reset.
 
-The adapter waits up to 0.5 s for capture-time TF and head joint history.
-Head yaw rates above `max_head_rate_rad_s` (0.5 rad/s), joint gaps over 0.1 s,
-or missing coverage suppress that sweep. It interpolates sensor transforms
+The adapter waits up to 0.5 s for capture-time TF. It samples the lidar's
+heading in raw `odom` (`aim_frame`) at nine points across each sweep; a yaw
+rate above `max_head_rate_rad_s` (0.5 rad/s) between samples, from the head
+or the chassis turning, suppresses that sweep's returns. Held tracks are
+still published. It interpolates sensor transforms
 across hardware sweeps. Gazebo captures instantaneous scans with nominal
 rotary metadata; `auto.launch.py` sets `scan_is_instantaneous` in simulation
 so points retain the actual Gazebo capture time. No map or camera TF lookup

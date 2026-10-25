@@ -12,14 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Filter the robot's own head out of the lidar scan: blank a fixed angular
-// sector of scan_raw where the head sits in the lidar's FOV (fixed in the
-// lidar's frame; no joint-state sub needed), republishing on scan. Works for
-// sim and real hardware.
-//
-// Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg CCW
-// from the gun), from sentry_v2's CAD. See README.md for design rationale and
-// retuning notes.
+// Unit tests for the ROS-free lidar_tracker core.
 
 #include "thornbots_pkg/lidar_tracker_core.hpp"
 
@@ -59,7 +52,9 @@ TEST(LidarTracker, MapAndCellExtent)
 TEST(LidarTracker, MarginRejectsNearWallButKeepsRobot)
 {
   auto map = field();
-  for (int y = 0; y < 100; ++y) {map.cells[y * 100 + 20] = 100;}
+  for (int y = 0; y < 100; ++y) {
+    map.cells[y * 100 + 20] = 100;
+                                                               }
   EXPECT_TRUE(Tracker().update(0, head(2.3), map).empty());
   EXPECT_EQ(Tracker().update(0, head(2.5), map).size(), 1U);
   thornbots_pkg::lidar::Parameters parameters; parameters.margin = 0.4;
@@ -79,6 +74,8 @@ TEST(LidarTracker, VelocityDropoutsAndExpiry)
   auto tracks = tracker.update(3.9, {}, map);
   ASSERT_EQ(tracks.size(), 1U); EXPECT_NEAR(tracks[0].position.x, 4.95, 0.03);
   EXPECT_DOUBLE_EQ(tracks[0].last_return, 2.9);
+  EXPECT_EQ(tracker.snapshot(5.8).size(), 1U);
+  EXPECT_TRUE(tracker.snapshot(6.0).empty());  // skipped sweeps still expire tracks
   EXPECT_TRUE(tracker.update(6.0, {}, map).empty());
 }
 TEST(LidarTracker, LabelsAndClockReset)
@@ -100,18 +97,31 @@ TEST(LidarTracker, NoiseAndOversizeDoNotBecomeTracks)
   Tracker tracker; auto map = field();
   EXPECT_TRUE(tracker.update(0, {Point{2, 2}}, map).empty());
   std::vector<std::optional<Point>> wall;
-  for (int i = 0; i < 20; ++i) {wall.push_back(Point{3, 2 + i * 0.1});}
+  for (int i = 0; i < 20; ++i) {
+    wall.push_back(Point{3, 2 + i * 0.1});
+                                                                      }
   EXPECT_TRUE(tracker.update(1, wall, map).empty());
 }
 TEST(LidarTracker, TwoObjectsAssociateOnlyOnceAndSeamJoins)
 {
   Tracker tracker; auto map = field();
-  auto rays = head(3); const auto other = head(4); rays.insert(rays.end(), other.begin(), other.end());
+  auto rays = head(3); const auto other = head(4);
+    rays.insert(rays.end(), other.begin(), other.end());
   EXPECT_EQ(tracker.update(0, rays, map).size(), 2U);
   EXPECT_EQ(tracker.update(0.1, rays, map).size(), 2U);
   Tracker seam;
   EXPECT_EQ(seam.update(0, {Point{3, 2}, Point{3, 2.1}, std::nullopt,
       Point{3, 1.9}}, map).size(), 1U);
+}
+TEST(LidarTracker, FragmentsOfOneRobotMakeOneTrack)
+{
+  Tracker tracker; auto map = field();
+  // Head (3 points) and a 0.25 m-away arm fragment (2 points), split by a gap.
+  std::vector<std::optional<Point>> rays{Point{3, 1.9}, Point{3, 2}, Point{3, 2.1},
+    std::nullopt, Point{3.1, 2.3}, Point{3.1, 2.41}};
+  const auto tracks = tracker.update(0, rays, map);
+  ASSERT_EQ(tracks.size(), 1U);
+  EXPECT_NEAR(tracks[0].position.y, 2.0, 1e-9);
 }
 TEST(LidarTracker, SmearedAndUnknownSweepsAreRejected)
 {

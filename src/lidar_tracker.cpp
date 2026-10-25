@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Filter the robot's own head out of the lidar scan: blank a fixed angular
-// sector of scan_raw where the head sits in the lidar's FOV (fixed in the
-// lidar's frame; no joint-state sub needed), republishing on scan. Works for
-// sim and real hardware.
-//
-// Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg CCW
-// from the gun), from sentry_v2's CAD. See README.md for design rationale and
-// retuning notes.
+// lidar_tracker node: /scan (skipping sweeps while the lidar turns fast) + saved /map -> map-frame
+// robot tracks on /lidar/tracks and rviz markers on /lidar/markers. Publishing
+// only; nothing here steers the head. Design: README.md#lidar_tracker.
 
 #include <algorithm>
 #include <chrono>
@@ -34,7 +29,6 @@
 #include "dji_serial_bridge/msg/panel_detection_array.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/joint_state.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "tf2/LinearMath/Transform.h"
 #include "tf2_ros/buffer.h"
@@ -62,7 +56,8 @@ double yaw(const tf2::Transform & t)
 class LidarTracker : public rclcpp::Node
 {
 public:
-  LidarTracker() : Node("lidar_tracker"), buffer_(get_clock()), listener_(buffer_, this, true)
+  LidarTracker()
+  : Node("lidar_tracker"), buffer_(get_clock()), listener_(buffer_, this, true)
   {
     lidar::Parameters parameters;
     parameters.margin = declare_parameter("lidar_obstacle_margin_m", 0.25);
@@ -72,6 +67,7 @@ public:
     tracker_ = lidar::Tracker(parameters);
     mode_ = declare_parameter("localization_mode", std::string("none"));
     instantaneous_ = declare_parameter("scan_is_instantaneous", false);
+    odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
     max_rate_ = declare_parameter("max_head_rate_rad_s", 0.5);
     if (!std::isfinite(max_rate_) || max_rate_ <= 0) {
       throw std::invalid_argument("max_head_rate_rad_s must be positive");
@@ -91,18 +87,6 @@ public:
         map_.yaw = yaw(tf2::Transform(tf2::Quaternion(q.x, q.y, q.z, q.w)));
         map_.cells = m->data;
       });
-    joint_sub_ = create_subscription<sensor_msgs::msg::JointState>(
-      "/joint_states", 100, [this](sensor_msgs::msg::JointState::ConstSharedPtr m) {
-        auto it = std::find(m->name.begin(), m->name.end(), "headlink");
-        if (it == m->name.end()) {return;}
-        const size_t index = std::distance(m->name.begin(), it);
-        if (index >= m->position.size() || !std::isfinite(m->position[index])) {return;}
-        const double stamp = rclcpp::Time(m->header.stamp).seconds();
-        if (!head_.empty() && stamp < head_.back().first) {head_.clear(); tracker_.clear();}
-        if (!head_.empty() && stamp == head_.back().first) {return;}
-        head_.emplace_back(stamp, m->position[index]);
-        while (head_.size() > 2 && head_[1].first < stamp - 5) {head_.pop_front();}
-      });
     camera_sub_ = create_subscription<dji_serial_bridge::msg::PanelDetectionArray>(
       "/cv/panel_detections", 10,
       [this](dji_serial_bridge::msg::PanelDetectionArray::ConstSharedPtr m) {
@@ -118,6 +102,7 @@ public:
       });
     timer_ = create_wall_timer(std::chrono::milliseconds(10), [this]() {drain();});
   }
+
 private:
   using Scan = sensor_msgs::msg::LaserScan;
   void drain()
@@ -126,8 +111,15 @@ private:
       const auto scan = pending_.front().first;
       const auto arrival = pending_.front().second;
       if ((now() - arrival).seconds() < 0) {pending_.clear(); tracker_.clear(); return;}
-      if (process(*scan) || (now() - arrival).seconds() > 0.5) {pending_.pop_front();}
-      else {break;}
+      if (process(*scan)) {
+        pending_.pop_front();
+      } else if ((now() - arrival).seconds() > 0.5) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+          "Dropped scan: no capture-time TF within 0.5 s (%s)", tf_error_.c_str());
+        pending_.pop_front();
+      } else {
+        break;
+      }
     }
   }
   bool process(const Scan & scan)
@@ -142,16 +134,22 @@ private:
         "No saved field map: lidar tracks unavailable (mode=%s)", mode_.c_str());
       return true;
     }
-    if (head_.empty() || head_.back().first < end.seconds()) {return false;}
     const double sweep_start = instantaneous_ ? start.seconds() - duration : start.seconds();
-    if (!lidar::sweep_is_still(
-        {head_.begin(), head_.end()}, sweep_start, end.seconds(), max_rate_)) {
+    const auto headings = sweep_headings(scan.header.frame_id, sweep_start, end.seconds());
+    if (!headings) {return false;}
+    if (end.seconds() > sweep_start &&
+      !lidar::sweep_is_still(*headings, sweep_start, end.seconds(), max_rate_))
+    {
+      // Held tracks stay published (predicted, last_return unchanged).
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Skipping smeared/unknown head sweep");
-      publish({}, end); return true;
+      publish(tracker_.snapshot(end.seconds()), end);
+      return true;
     }
     try {
-      const auto first = transform(buffer_.lookupTransform("map", scan.header.frame_id, start).transform);
-      const auto last = transform(buffer_.lookupTransform("map", scan.header.frame_id, end).transform);
+      const auto first = transform(buffer_.lookupTransform("map", scan.header.frame_id,
+          start).transform);
+      const auto last = transform(buffer_.lookupTransform("map", scan.header.frame_id,
+          end).transform);
       std::vector<std::optional<lidar::Point>> rays;
       rays.reserve(scan.ranges.size());
       for (size_t i = 0; i < scan.ranges.size(); ++i) {
@@ -172,10 +170,30 @@ private:
       publish(tracker_.snapshot(end.seconds()), end);
       return true;
     } catch (const tf2::TransformException & error) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-        "Waiting for capture-time lidar TF: %s", error.what());
+      tf_error_ = error.what();  // usually TF a few ms behind the scan; drain() retries
       return false;
     }
+  }
+  // Lidar heading in odom_frame across the sweep, so chassis turns count as
+  // well as head turns; nullopt until TF covers the sweep.
+  std::optional<std::vector<std::pair<double, double>>> sweep_headings(
+    const std::string & frame, double from, double to)
+  {
+    constexpr int kSteps = 8;
+    std::vector<std::pair<double, double>> headings;
+    for (int k = 0; k <= kSteps; ++k) {
+      const double t = from + (to - from) * k / kSteps;
+      const rclcpp::Time stamp(static_cast<int64_t>(std::llround(t * 1e9)),
+        get_clock()->get_clock_type());
+      try {
+        headings.emplace_back(t,
+          yaw(transform(buffer_.lookupTransform(odom_frame_, frame, stamp).transform)));
+      } catch (const tf2::TransformException & error) {
+        tf_error_ = error.what();
+        return std::nullopt;
+      }
+    }
+    return headings;
   }
   void label(const rclcpp::Time & end)
   {
@@ -186,14 +204,16 @@ private:
         const rclcpp::Time stamp(target_->header.stamp, get_clock()->get_clock_type());
         const double age = (end - stamp).seconds();
         if (age >= 0 && age <= 0.3) {
-          const auto cv = transform(buffer_.lookupTransform("map", target_->header.frame_id, stamp).transform);
+          const auto cv = transform(buffer_.lookupTransform("map", target_->header.frame_id,
+              stamp).transform);
           const auto & c = target_->center;
           const auto & v = target_->velocity;
           const auto p = cv * tf2::Vector3(c.x + v.x * age, c.y + v.y * age, c.z + v.z * age);
           enemy = lidar::Point{p.x(), p.y()};
         }
       }
-      tracker_.camera(end.seconds(), {camera.getOrigin().x(), camera.getOrigin().y()}, yaw(camera), enemy,
+      tracker_.camera(end.seconds(), {camera.getOrigin().x(), camera.getOrigin().y()}, yaw(camera),
+          enemy,
         camera_stamp_ && end.seconds() - *camera_stamp_ >= 0 &&
         end.seconds() - *camera_stamp_ <= 0.3);
     } catch (const tf2::TransformException &) {
@@ -231,19 +251,17 @@ private:
   }
   std::optional<double> camera_stamp_;
   rclcpp::Subscription<dji_serial_bridge::msg::PanelDetectionArray>::SharedPtr camera_sub_;
-  std::string mode_;
+  std::string mode_, odom_frame_, tf_error_;
   double max_rate_{};
   bool instantaneous_{};
   lidar::Grid map_;
   lidar::Tracker tracker_;
   tf2_ros::Buffer buffer_;
   tf2_ros::TransformListener listener_;
-  std::deque<std::pair<double, double>> head_;
   std::deque<std::pair<Scan::ConstSharedPtr, rclcpp::Time>> pending_;
   dji_serial_bridge::msg::TargetState::ConstSharedPtr target_;
   rclcpp::Subscription<Scan>::SharedPtr scan_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_sub_;
   rclcpp::Publisher<msg::LidarTrackArray>::SharedPtr pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_;
