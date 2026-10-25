@@ -49,6 +49,7 @@ public:
 
   using tp::PointToCvTarget::on_publish_tick;
   using tp::PointToCvTarget::on_target_state;
+  using tp::PointToCvTarget::on_ref_sys;
 
   void gun_transform()
   {
@@ -61,6 +62,8 @@ public:
   void set_active(bool active) {target_active_ = active;}
   void non_firing_target() {fire_target_ = false;}
   void fail_aim() {fail_aim_ = true;}
+  tp::IdleLook::Source idle_source() const
+  {return idle_.source(clock_now().seconds(), target_timeout_s_, false);}
   bool active() const {return target_active_;}
   void hold(double yaw) {held_panel_yaw_ = yaw;}
   bool held() const {return held_panel_yaw_.has_value();}
@@ -101,7 +104,7 @@ protected:
   static std::shared_ptr<Probe> make()
   {
     rclcpp::NodeOptions options;
-    options.append_parameter_override("patrol_enabled", false);
+    options.append_parameter_override("idle_direction", "hold");
     return std::make_shared<Probe>(options);
   }
 };
@@ -116,9 +119,12 @@ TEST_F(NodeTest, NoTargetTickDoesNotRequireAnAbsentAimPoint)
   node->capture(&points, &ticks);
   node->set_active(false);
   node->on_publish_tick();
-  EXPECT_TRUE(points.empty());
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_TRUE(points.back().turn_to_hit);
+  EXPECT_FALSE(points.back().fire);
   ASSERT_EQ(ticks.size(), 1u);
-  EXPECT_EQ(ticks[0].frame_id, "");
+  EXPECT_EQ(ticks[0].frame_id, "odom");
   EXPECT_EQ(rclcpp::Time(ticks[0].stamp).nanoseconds(), 123000000);
 }
 
@@ -127,6 +133,7 @@ TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
   auto node = make();
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   model->header.frame_id = "odom";
   node->on_target_state(model);
   std::vector<CVTarget> points;
@@ -149,6 +156,7 @@ TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
   auto node = make();
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   model->header.frame_id = "odom";
   std::vector<Header> acknowledged;
   node->on_target_state_hook(
@@ -162,7 +170,7 @@ TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
   EXPECT_EQ(acknowledged[0], model->header);
 }
 
-TEST_F(NodeTest, SubscribesToTargetStateAndRobotPoseOnly)
+TEST_F(NodeTest, SubscribesToTargetStatePoseAndReferee)
 {
   rclcpp::NodeOptions options;
   auto node = std::make_shared<Probe>(options);
@@ -178,6 +186,7 @@ TEST_F(NodeTest, SubscribesToTargetStateAndRobotPoseOnly)
   }
   EXPECT_EQ(
     types, (std::set<std::string>{
+    "dji_serial_bridge/msg/RefSysStatus",
     "dji_serial_bridge/msg/RobotPose",
     "dji_serial_bridge/msg/TargetState"}));
 }
@@ -187,6 +196,7 @@ TEST_F(NodeTest, PanelHoldSurvivesUpdatesButResetsOnNewTrackInvalidOrSpin)
   auto node = make();
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   model->robot_track_id = 1;
   model->valid = true;
   node->on_target_state(model);
@@ -212,12 +222,14 @@ TEST_F(NodeTest, PanelHoldResetsOnTimeoutAndLateSameTrackReplacement)
   auto node = make();
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   model->valid = true;
   node->on_target_state(model);
   node->hold(1.0);
   node->time_ns(1000000000);
   auto fresh = std::make_shared<TargetState>(*model);
   fresh->header.stamp = rclcpp::Time(int64_t{1000000000}, RCL_ROS_TIME);
+  fresh->detection_stamp = fresh->header.stamp;
   node->on_target_state(fresh);
   EXPECT_FALSE(node->held());
   node->hold(1.0);
@@ -253,6 +265,7 @@ TEST_F(NodeTest, HitPermissionChangesImmediatelyWithAnyTargetEstimate)
   EXPECT_TRUE(points.back().turn_to_hit);
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   model->valid = true;
   node->on_target_state(model);
   node->on_publish_tick();
@@ -281,18 +294,20 @@ TEST_F(NodeTest, HitPermissionChangesImmediatelyWithAnyTargetEstimate)
   EXPECT_TRUE(points.back().turn_to_hit);
   model = std::make_shared<TargetState>(*model);
   model->header.stamp = rclcpp::Time(int64_t{950000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   node->on_target_state(model);
   node->on_publish_tick();
   EXPECT_FALSE(points.back().turn_to_hit);
 }
 
-TEST_F(NodeTest, HeldEstimateBlocksHitTurnEvenWhenAimCannotBeComputed)
+TEST_F(NodeTest, EveryNonTargetFramePermitsHitTurnWhenAimCannotBeComputed)
 {
   auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
   node->gun_transform();
   node->fail_aim();
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
   node->on_target_state(model);
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
@@ -300,5 +315,85 @@ TEST_F(NodeTest, HeldEstimateBlocksHitTurnEvenWhenAimCannotBeComputed)
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 1u);
   EXPECT_TRUE(points.back().patrol);
+  EXPECT_TRUE(points.back().turn_to_hit);
+}
+
+TEST_F(NodeTest, FireAgeBoundaryCoastsUntilTargetTimeout)
+{
+  auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
+  node->on_target_state(model);
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->time_ns(250000000);
+  node->on_publish_tick();
+  EXPECT_TRUE(points.back().fire);
+  node->time_ns(250000001);
+  node->on_publish_tick();
+  EXPECT_FALSE(points.back().fire);
+  EXPECT_FALSE(points.back().patrol);
   EXPECT_FALSE(points.back().turn_to_hit);
+  node->time_ns(600000001);
+  node->on_publish_tick();
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_TRUE(points.back().turn_to_hit);
+  EXPECT_FALSE(points.back().fire);
+}
+
+TEST_F(NodeTest, BlueArrivingLateChangesFallbackZoneWithoutRobotIdGate)
+{
+  auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_publish_tick();
+  EXPECT_FLOAT_EQ(points.back().x, 4.625);
+  dji_serial_bridge::msg::RefSysStatus ref;
+  ref.delta_angle_got_hit_in = 123.0;
+  ref.is_on_blue_team = true;
+  ref.robot_id = 0;
+  node->on_ref_sys(ref);
+  node->on_publish_tick();
+  EXPECT_FLOAT_EQ(points.back().x, -4.625);
+  ref.is_on_blue_team = false;
+  node->on_ref_sys(ref);
+  node->on_publish_tick();
+  EXPECT_FLOAT_EQ(points.back().x, 4.625);
+}
+
+TEST_F(NodeTest, PublicationTimeCannotRefreshAnOldDetection)
+{
+  auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{300000000}, RCL_ROS_TIME);
+  model->detection_stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  node->time_ns(325000000);
+  node->on_target_state(model);
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_publish_tick();
+  EXPECT_FALSE(points.back().fire);
+  EXPECT_FALSE(points.back().patrol);
+  node->time_ns(600000001);
+  node->on_publish_tick();
+  EXPECT_TRUE(points.back().patrol);
+  EXPECT_TRUE(points.back().turn_to_hit);
+}
+
+TEST_F(NodeTest, FloatRearHitsHoldButSentinelDoesNot)
+{
+  for (float angle : {static_cast<float>(M_PI), static_cast<float>(-M_PI), 123.0F}) {
+    auto node = make();
+    dji_serial_bridge::msg::RefSysStatus ref;
+    ref.header.stamp = rclcpp::Time(int64_t{123000000}, RCL_ROS_TIME);
+    ref.delta_angle_got_hit_in = angle;
+    node->on_ref_sys(ref);
+    EXPECT_EQ(node->idle_source() == tp::IdleLook::Source::Hit, angle != 123.0F);
+    node->time_ns(2123000001);
+    EXPECT_NE(node->idle_source(), tp::IdleLook::Source::Hit);
+  }
 }

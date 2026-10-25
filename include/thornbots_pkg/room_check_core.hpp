@@ -34,6 +34,13 @@ inline Result verdict(const std::string & name, bool pass, const std::string & d
 {
   return {name, pass ? "PASS" : "FAIL", detail};
 }
+// Reported as INFO with its outcome in the detail; never fails the run.
+inline Result diagnostic(Result r)
+{
+  r.detail = r.status + " (diagnostic only): " + r.detail;
+  r.status = "INFO";
+  return r;
+}
 inline std::string number(double value, int precision = 3)
 {
   std::ostringstream out;

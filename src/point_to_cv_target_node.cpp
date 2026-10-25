@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -54,6 +53,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     "robot_pose_topic", std::string("/dji_serial_bridge/pose"));
   const auto output_topic = declare_parameter("output_topic", std::string("/cv/target"));
   target_timeout_s_ = declare_parameter("target_timeout_s", 0.5);
+  fire_max_state_age_s_ = declare_parameter("fire_max_state_age_s", 0.15);
   fire_confidence_threshold_ = declare_parameter("fire_confidence_threshold", 0.5);
   fire_rate_hz_ = declare_parameter("fire_rate_hz", 2.0);
   root_frame_ = declare_parameter("root_frame", std::string("root"));
@@ -91,19 +91,26 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   }
   // Firmware patrol permission is independent of the per-frame hit-turn decision.
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
-  // Jetson patrol sweeps a point patrol_range_m out and patrol_pitch_down_rad below level.
-  const bool patrol_enabled = declare_parameter("patrol_enabled", true);
-  const double patrol_after_s = declare_parameter("patrol_after_s", 0.2);
-  const double patrol_rate_rad_s = declare_parameter("patrol_rate_rad_s", -2.0);
-  patrol_range_m_ = declare_parameter("patrol_range_m", 3.0);
-  patrol_pitch_down_rad_ = declare_parameter("patrol_pitch_down_rad", 0.05);
+  idle_direction_ = declare_parameter("idle_direction", std::string("zone"));
+  if (idle_direction_ != "zone" && idle_direction_ != "hold") {
+    throw std::invalid_argument("idle_direction must be zone or hold");
+  }
+  // Match OdometrySubsystemConstants.hpp; blue arrival changes raw odom's origin.
+  zone_start_x_m_ = declare_parameter("zone_start_x_m", 4.625);
+  zone_start_y_m_ = declare_parameter("zone_start_y_m", 0.0);
+  idle_height_m_ = declare_parameter("idle_height_m", 0.15);
+  idle_rate_rad_s_ = declare_parameter("idle_rate_rad_s", 0.5);
+  idle_switch_rad_ = declare_parameter("idle_switch_rad", M_PI / 6.0);
+  if (!std::isfinite(idle_rate_rad_s_) || idle_rate_rad_s_ <= 0.0 ||
+    !std::isfinite(idle_switch_rad_) || idle_switch_rad_ < 0.0 ||
+    !std::isfinite(fire_max_state_age_s_) || fire_max_state_age_s_ < 0.0)
+  {
+    throw std::invalid_argument("idle rate/switch and fire age must be finite and nonnegative");
+  }
   muzzle_frame_ = declare_parameter("muzzle_frame", std::string("muzzle"));
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
-  if (patrol_enabled) {
-    patrol_.emplace(patrol_rate_rad_s, patrol_after_s);
-  }
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   // /tf shares this node's executor, so every lookup below is non-blocking: a
@@ -135,31 +142,20 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     this, get_clock(), rclcpp::Duration::from_seconds(1.0 / publish_rate_hz),
     [this]() {on_publish_tick();});
 
-  std::ostringstream patrol_text;
-  if (patrol_) {
-    patrol_text << patrol_->rate_rad_s() << " rad/s";
-  } else {
-    patrol_text << "off";
-  }
-  const std::string patrol_str = patrol_text.str();
-  RCLCPP_INFO(
-    get_logger(),
-    "point_to_cv_target ready\n  %s + %s\n  -> %s (CVTarget, %s frame, aim + fire, @ %.1fHz)\n"
-    "  lead_enabled=%s v_muzzle=%g firmware_latency_s=%g gimbal_lag_s=%g\n"
-    "  target_timeout_s=%.2f\n  fire <= %.2fHz, spin-timed above %g rad/s, confidence >= %g\n"
-    "  patrol: %s",
-    target_state_topic_.c_str(), robot_pose_topic.c_str(), output_topic.c_str(),
-    odom_frame_.c_str(), publish_rate_hz, lead_enabled_ ? "True" : "False", v_muzzle_,
-    firmware_latency_s_, gimbal_lag_s_, target_timeout_s_, fire_rate_hz_, spin_enter_rad_s_,
-    fire_confidence_threshold_,
-    patrol_str.c_str());
+  const auto ref_sys_topic = declare_parameter(
+    "ref_sys_topic", std::string("/dji_serial_bridge/ref_sys"));
+  ref_sys_sub_ = create_subscription<dji_serial_bridge::msg::RefSysStatus>(
+    ref_sys_topic, rclcpp::SensorDataQoS(),
+    [this](dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr m) {on_ref_sys(*m);});
+  RCLCPP_INFO(get_logger(), "point_to_cv_target ready: idle=%s, fire age <= %.3fs",
+    idle_direction_.c_str(), fire_max_state_age_s_);
 }
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
   const rclcpp::Time now = clock_now();
   const bool stale = latest_state_ && seconds(
-    now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type())) > target_timeout_s_;
+    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
     spinning_ = false;
@@ -212,17 +208,36 @@ std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
   return std::make_pair(Vector3d(t.x, t.y, t.z), std::atan2(R(1, 0), R(0, 0)));
 }
 
-std::optional<Vector3d> PointToCvTarget::patrol_point_now(const rclcpp::Time & now)
+void PointToCvTarget::on_ref_sys(const dji_serial_bridge::msg::RefSysStatus & msg)
 {
+  if (blue_ != msg.is_on_blue_team) {
+    idle_.reset();
+    last_sent_point_.reset();
+  }
+  blue_ = msg.is_on_blue_team;
+  if (std::isfinite(msg.delta_angle_got_hit_in) &&
+    std::abs(msg.delta_angle_got_hit_in) <= static_cast<float>(M_PI))
+  {
+    const auto now = clock_now();
+    idle_.hit(seconds(rclcpp::Time(msg.header.stamp, now.get_clock_type())));
+  }
+}
+
+Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
+{
+  const auto zone = enemy_zone(blue_, zone_start_x_m_, zone_start_y_m_, idle_height_m_);
   const auto gun = gun_pose();
-  if (!gun) {
-    return std::nullopt;
+  if (!gun) {return last_sent_point_.value_or(zone);}
+  const auto source = idle_.source(seconds(now), target_timeout_s_, idle_direction_ == "hold");
+  if (source == IdleLook::Source::Hit || source == IdleLook::Source::Hold) {
+    idle_.reset();
+    return {gun->first.x() + 3.0 * std::cos(gun->second),
+      gun->first.y() + 3.0 * std::sin(gun->second), idle_height_m_};
   }
-  const auto yaw = patrol_->step(seconds(now), gun->second);
-  if (!yaw) {
-    return std::nullopt;
-  }
-  return patrol_point(gun->first, *yaw, patrol_range_m_, patrol_pitch_down_rad_);
+  Vector3d desired = source == IdleLook::Source::LastEnemy ? idle_.last_enemy() : zone;
+  desired.z() = idle_height_m_;
+  return idle_.point(seconds(now), gun->first, gun->second, desired,
+    idle_rate_rad_s_, idle_switch_rad_);
 }
 
 std::pair<bool, int> PointToCvTarget::fire_decision(
@@ -249,7 +264,7 @@ void PointToCvTarget::check_timeout()
   }
   const rclcpp::Time now = clock_now();
   const double age_s = seconds(
-    now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type()));
+    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type()));
   if (age_s <= target_timeout_s_) {
     return;
   }
@@ -267,21 +282,20 @@ void PointToCvTarget::on_publish_tick()
   check_timeout();
   const rclcpp::Time now = clock_now();
   std::optional<Aim> aim;
-  bool patrol_point = false;
   if (target_active_) {
     aim = compute_aim_point();
   }
-  if (aim && patrol_) {
-    patrol_->target_seen(seconds(now));
-  } else if (!aim && patrol_) {
-    const auto point = patrol_point_now(now);
-    if (point) {
-      aim = Aim{*point, std::nullopt};
-      patrol_point = true;
-    }
+  const bool idle_frame = !aim;
+  if (aim) {
+    const double stamp = seconds(rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type()));
+    idle_.target_seen(stamp, aim->pos);
+    const double age = seconds(now) - stamp;
+    if (age < 0.0 || age > fire_max_state_age_s_) {aim->fire_delay_s.reset();}
+  } else {
+    aim = Aim{idle_point_now(now), std::nullopt};
   }
   std::string out_frame;  // empty means no aim was published
-  if (aim) {  // no target and no patrol: send nothing, the MCB holds still
+  if (aim) {
     CVTarget out;
     out.header.stamp = now;
     out.header.frame_id = odom_frame_;
@@ -292,9 +306,9 @@ void PointToCvTarget::on_publish_tick()
     out.fire = fire.first;
     out.delay_ms = static_cast<uint16_t>(fire.second);
     out.type_c_based_patrol = type_c_based_patrol_;
-    // A held estimate includes unconverged and coasting tracks, even if TF fails.
-    out.turn_to_hit = !target_active_;
-    out.patrol = patrol_point;
+    out.turn_to_hit = idle_frame;
+    out.patrol = idle_frame;
+    last_sent_point_ = aim->pos;
     out_frame = out.header.frame_id;
     send_target_(out);
   }
@@ -314,13 +328,15 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
   const rclcpp::Time state_stamp(state->header.stamp, now.get_clock_type());
   const double state_age_s = seconds(now - state_stamp);
 
-  if (state_age_s > target_timeout_s_) {
+  const double detection_age_s = seconds(now - rclcpp::Time(
+      state->detection_stamp, now.get_clock_type()));
+  if (detection_age_s > target_timeout_s_) {
     held_panel_yaw_.reset();
     spinning_ = false;
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 1000,
       "Newest '%s' is %.2f s old (> target_timeout_s=%.2f) -- not aiming on it.",
-      target_state_topic_.c_str(), state_age_s, target_timeout_s_);
+      target_state_topic_.c_str(), detection_age_s, target_timeout_s_);
     return std::nullopt;
   }
 

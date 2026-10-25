@@ -17,7 +17,7 @@
 //
 // /cv/target_state (odom armor model) -> /cv/target (odom aim plus fire decision).
 // Each publish tick aims and gates firmware hit turns by estimate availability.
-// No target: sweep without firing and permit firmware hit turns. See README.md.
+// No target: idle looks without firing and permit firmware hit turns. See README.md.
 //
 // The protected members are seams for test/test_point_to_cv_target_node.cpp:
 // the clock, the outgoing publishes and the aim/fire decisions.
@@ -33,6 +33,7 @@
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
 #include "dji_serial_bridge/msg/robot_pose.hpp"
+#include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
@@ -57,19 +58,20 @@ protected:
 
   void on_target_state(dji_serial_bridge::msg::TargetState::ConstSharedPtr msg);
   void on_robot_pose(const dji_serial_bridge::msg::RobotPose & msg);
+  void on_ref_sys(const dji_serial_bridge::msg::RefSysStatus & msg);
   void check_timeout();
   void on_publish_tick();
 
   // The muzzle's newest odom (position, yaw), or nullopt.
   std::optional<std::pair<Vector3d, double>> gun_pose();
-  std::optional<Vector3d> patrol_point_now(const rclcpp::Time & now);
+  Vector3d idle_point_now(const rclcpp::Time & now);
   // (fire, delay_ms) for this tick's CVTarget. The MCB runs the delay from
   // receiving the frame, so aim and fire cross the wire as one frame. Rate
   // limited to fire_rate_hz; delay_ms is clamped to the uint16 field.
   virtual std::pair<bool, int> fire_decision(
     std::optional<double> delay_s, const rclcpp::Time & now);
   // The odom aim point, or nullopt if the newest target_state is stale or TF
-  // fails (logged loudly): the caller may publish a non-firing patrol point.
+  // fails (logged loudly): the caller may publish a non-firing idle point.
   virtual std::optional<Aim> compute_aim_point();
   virtual rclcpp::Time clock_now() const {return get_clock()->now();}
 
@@ -78,7 +80,7 @@ protected:
   std::function<void(const std_msgs::msg::Header &)> send_tick_, send_ack_;
 
   std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
-  double target_timeout_s_, fire_confidence_threshold_, fire_rate_hz_;
+  double target_timeout_s_, fire_max_state_age_s_, fire_confidence_threshold_, fire_rate_hz_;
   bool lead_enabled_;
   double firmware_latency_s_, gimbal_lag_s_, v_muzzle_;
   int tof_iterations_;
@@ -86,8 +88,11 @@ protected:
   std::optional<double> chase_settle_s_;
   double chase_margin_s_, panel_switch_margin_rad_;
   bool type_c_based_patrol_;
-  std::optional<Patrol> patrol_;
-  double patrol_range_m_, patrol_pitch_down_rad_;
+  IdleLook idle_;
+  std::string idle_direction_;
+  bool blue_ = false;
+  double zone_start_x_m_, zone_start_y_m_, idle_height_m_, idle_rate_rad_s_, idle_switch_rad_;
+  std::optional<Vector3d> last_sent_point_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -105,6 +110,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RobotPose>::SharedPtr robot_pose_sub_;
+  rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_;
 };
 

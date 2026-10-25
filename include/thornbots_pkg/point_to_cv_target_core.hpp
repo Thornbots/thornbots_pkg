@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Pure intercept-solve, shot-planner and patrol math for point_to_cv_target
+// Pure intercept-solve, shot-planner and idle-look math for point_to_cv_target
 // (no rclcpp), unit-tested standalone in test/test_point_to_cv_target_core.cpp.
 // See README.md's ### point_to_cv_target Notes for the design rationale.
 
@@ -119,31 +119,27 @@ private:
 // Wrap an angle to [-pi, pi).
 double wrap_to_pi(double a);
 
-// Where the gun looks with no target: sweep. Starts
-// after_s after the last target, from the gun's own yaw, and turns at
-// rate_rad_s. Firmware owns turns toward chassis-relative hits. Times in
-// seconds, yaws in odom radians.
-class Patrol
+// Idle look priority and bounded yaw changes. Times are capture/event seconds;
+// gun yaw and points are in raw field-centred odom. Firmware owns hit turns.
+class IdleLook
 {
 public:
-  Patrol(double rate_rad_s, double after_s)
-  : rate_rad_s_(rate_rad_s), after_s_(after_s) {}
-
-  double rate_rad_s() const {return rate_rad_s_;}
-  void target_seen(double now_s);
-  // This tick's patrol yaw, or nullopt while a target is recent.
-  std::optional<double> step(double now_s, double gun_yaw);
+  enum class Source {LastEnemy, Hit, Zone, Hold};
+  Source source(double now_s, double target_timeout_s, bool hold) const;
+  void target_seen(double stamp_s, const Vector3d & point);
+  void hit(double stamp_s) {last_hit_s_ = stamp_s; reset();}
+  void reset() {yaw_.reset(); desired_yaw_.reset();}
+  Vector3d point(double now_s, const Vector3d & gun, double gun_yaw,
+    const Vector3d & desired, double rate_rad_s, double switch_rad);
+  const Vector3d & last_enemy() const {return last_enemy_;}
 
 private:
-  double rate_rad_s_, after_s_;
-  std::optional<double> last_target_s_;
-  std::optional<double> yaw_;  // commanded yaw; nullopt until patrol starts
+  std::optional<double> last_target_s_, last_hit_s_, yaw_, desired_yaw_;
+  Vector3d last_enemy_ = Vector3d::Zero();
   double last_step_s_ = 0.0;
 };
 
-// Odom point range_m out from gun_pos along yaw, pitch_down_rad below level.
-Vector3d patrol_point(
-  const Vector3d & gun_pos, double yaw, double range_m, double pitch_down_rad);
+Vector3d enemy_zone(bool blue, double start_x, double start_y, double height);
 
 }  // namespace thornbots_pkg
 
