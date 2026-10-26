@@ -49,22 +49,22 @@ public:
 private:
   void scan_callback(const LaserScan & msg)
   {
-    const double start = get_parameter("blind_angle_start").as_double();
-    const double end = get_parameter("blind_angle_end").as_double();
-
     LaserScan out = msg;
     const double two_pi = 2.0 * M_PI;
+    const auto wrap = [two_pi](double angle) {
+        double wrapped = std::fmod(angle, two_pi);
+        return wrapped < 0.0 ? wrapped + two_pi : wrapped;
+      };
+    const double start = wrap(get_parameter("blind_angle_start").as_double());
+    const double end = wrap(get_parameter("blind_angle_end").as_double());
     const double angle_min = msg.angle_min, increment = msg.angle_increment;
     for (size_t i = 0; i < out.ranges.size(); ++i) {
       const double angle = angle_min + static_cast<double>(i) * increment;
-      // Wrap into [0, 2*pi) so this compares correctly for any angle_min.
-      // Sim and the RPLIDAR driver both publish -pi..+pi (720 bins); the
-      // sector is stated in 0..2*pi. Floor modulo.
-      double wrapped = std::fmod(angle, two_pi);
-      if (wrapped < 0.0) {
-        wrapped += two_pi;
-      }
-      if (start <= wrapped && wrapped <= end) {
+      // Wrap scan angles and bounds alike, including sectors across scan zero.
+      const double wrapped = wrap(angle);
+      const bool in_sector = start <= end ?
+        start <= wrapped && wrapped <= end : start <= wrapped || wrapped <= end;
+      if (in_sector) {
         out.ranges[i] = std::numeric_limits<float>::infinity();
         if (i < out.intensities.size()) {
           out.intensities[i] = 0.0f;

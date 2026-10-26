@@ -73,6 +73,20 @@ def generate_launch_description():
         description='Baud rate for the RPLIDAR A2M8, only used when '
         'real_hardware:=true.'
     )
+    lidar_x_arg = DeclareLaunchArgument(
+        'lidar_x', default_value='-0.119391', description='Lidar X in head frame, meters.')
+    lidar_y_arg = DeclareLaunchArgument(
+        'lidar_y', default_value='-0.18501', description='Lidar Y in head frame, meters.')
+    lidar_z_arg = DeclareLaunchArgument(
+        'lidar_z', default_value='0.0968001', description='Lidar Z in head frame, meters.')
+    lidar_yaw_arg = DeclareLaunchArgument(
+        'lidar_yaw', default_value='0', description='Lidar yaw CCW from head +X, radians.')
+    lidar_blind_angle_start_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_start', default_value='0.09',
+        description='Self-filter sector start in scan frame, radians CCW from scan zero.')
+    lidar_blind_angle_end_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_end', default_value='1.41',
+        description='Self-filter sector end in scan frame, radians CCW from scan zero.')
 
     odom_frame_arg = DeclareLaunchArgument(
         'odom_frame', default_value='nav_odom',
@@ -430,7 +444,13 @@ def generate_launch_description():
         executable='lidar_self_filter',
         name='lidar_self_filter',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'blind_angle_start': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_start'), value_type=float),
+            'blind_angle_end': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_end'), value_type=float),
+        }],
         additional_env=shm_env,
     )
 
@@ -460,7 +480,13 @@ def generate_launch_description():
     )
 
     robot_description = ParameterValue(
-        Command(['xacro ', sentry_xacro]), value_type=str
+        Command([
+            'xacro ', sentry_xacro,
+            ' lidar_x:=', LaunchConfiguration('lidar_x'),
+            ' lidar_y:=', LaunchConfiguration('lidar_y'),
+            ' lidar_z:=', LaunchConfiguration('lidar_z'),
+            ' lidar_yaw:=', LaunchConfiguration('lidar_yaw'),
+        ]), value_type=str
     )
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
@@ -532,6 +558,8 @@ def generate_launch_description():
             description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
+        lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
+        lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,

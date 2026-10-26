@@ -134,6 +134,10 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 the RPLIDAR A2M8 on hardware. The driver uses `angle_compensate: true` to
 keep a fixed angular grid (720 bins on the measured A2M8), required by
 rf2o and slam_toolbox. Uncompensated scans vary in beam count.
+`lidar_x`, `lidar_y`, `lidar_z` (meters in `head`) and `lidar_yaw` (radians CCW
+from head +X) override the lidar TF at launch; omitted args retain the existing mount.
+`lidar_blind_angle_start` / `lidar_blind_angle_end` (0.09 / 1.41 rad in the scan
+frame) set the [self-filter sector](#lidar_self_filter), including across scan zero.
 The docstring at the top of
 `launch/auto.launch.py` documents only `real_hardware`; the other args are
 described in their `DeclareLaunchArgument` `description=` strings.
@@ -493,7 +497,13 @@ pans with the gimbal.
 
 The defaults add 1 deg of margin to the 6-79.5 deg union.
 
-On hardware the sector is unverified. The URDF gives the `lidar` frame no
+The filter compares scan-frame angles, without TF. When correcting scan-zero
+yaw, also adjust `lidar_blind_angle_start` / `lidar_blind_angle_end`: at yaw
+`0.597`, subtracting that yaw gives provisional bounds `-0.507` / `0.813` rad.
+These retain the old head-relative sector; another analysis is measuring the
+physical sector. Negative bounds and sectors crossing scan zero are supported.
+
+On hardware the sector is unverified. The default URDF gives the `lidar` frame no
 rotation (same axes as the head, +x along the gun), but nobody has measured
 where the real RPLIDAR's 0 deg points relative to the gun. The CAD's lidar
 part has its local x 30.7 deg counter-clockwise of the gun, which may or may
