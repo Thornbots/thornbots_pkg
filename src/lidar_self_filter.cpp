@@ -17,8 +17,8 @@
 // lidar's frame; no joint-state sub needed), republishing on scan. Works for
 // sim and real hardware.
 //
-// Current values: blind_angle_start=0.09, blind_angle_end=1.41 (5-81 deg CCW
-// from the gun), from sentry_v2's CAD. See README.md for design rationale and
+// Current values: blind_angle_start=0.32, blind_angle_end=1.62 in the scan frame
+// (18.3-92.8 deg CCW from scan zero), from the 2026-10-26 CAD. See README.md for design rationale and
 // retuning notes.
 
 #include <cmath>
@@ -39,8 +39,8 @@ public:
   LidarSelfFilter()
   : Node("lidar_self_filter")
   {
-    declare_parameter("blind_angle_start", 0.09);
-    declare_parameter("blind_angle_end", 1.41);
+    declare_parameter("blind_angle_start", 0.32);
+    declare_parameter("blind_angle_end", 1.62);
     sub_ = create_subscription<LaserScan>(
       "scan_raw", 10, [this](LaserScan::ConstSharedPtr m) {scan_callback(*m);});
     pub_ = create_publisher<LaserScan>("scan", 10);
