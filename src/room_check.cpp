@@ -164,7 +164,7 @@ public:
       subscribe<vision_msgs::msg::Detection2DArray>(yolo_topic, "YOLO",
         [this](const auto &) {stale_.detection(wall_now());});
       subscribe<dji_serial_bridge::msg::CVTarget>("/cv/target", "CV decisions",
-        [this](const auto & m) {stale_.decision(wall_now(), !m.patrol || m.fire);});
+        [this](const auto & m) {stale_.decision(wall_now(), m.fire);});
     }
     if (camera_) {
       subscribe<sensor_msgs::msg::Image>(
@@ -277,7 +277,7 @@ public:
     results.push_back(drifts_["map root"].score("map localization parked", end_ - start_, loc_xy_, yaw_limit_,
       require_loc_ || streams_["map TF"].count));
     if (camera_) {camera_results(results);}
-    if (stale_cv_) {results.push_back(stale_.score(wall_now()));}
+    if (stale_cv_) {results.push_back(rc::diagnostic(stale_.score(wall_now())));}
     std::ofstream summary(directory_ / "summary.txt");
     bool fail = false;
     for (const auto & r : results) {

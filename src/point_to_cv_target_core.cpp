@@ -207,32 +207,47 @@ double wrap_to_pi(double a)
   return py_mod(a + M_PI, 2.0 * M_PI) - M_PI;
 }
 
-void Patrol::target_seen(double now_s)
+void IdleLook::target_seen(double stamp_s, const Vector3d & point)
 {
-  last_target_s_ = now_s;
-  yaw_.reset();
+  last_target_s_ = stamp_s;
+  last_enemy_ = point;
+  reset();
 }
 
-std::optional<double> Patrol::step(double now_s, double gun_yaw)
+IdleLook::Source IdleLook::source(double now_s, double timeout_s, bool hold) const
 {
-  if (last_target_s_ && now_s - *last_target_s_ < after_s_) {
-    return std::nullopt;
+  const bool enemy = last_target_s_ && now_s - *last_target_s_ <= timeout_s + 3.0;
+  const bool hit = last_hit_s_ && now_s - *last_hit_s_ <= 2.0;
+  if (hit && (!enemy || *last_hit_s_ > *last_target_s_)) {
+    return Source::Hit;
   }
+  if (enemy) {return Source::LastEnemy;}
+  return hold ? Source::Hold : Source::Zone;
+}
+
+Vector3d IdleLook::point(double now_s, const Vector3d & gun, double gun_yaw,
+  const Vector3d & desired, double rate_rad_s, double switch_rad)
+{
+  const double bearing = std::atan2(desired.y() - gun.y(), desired.x() - gun.x());
+  if (!desired_yaw_ || std::abs(wrap_to_pi(bearing - *desired_yaw_)) >= switch_rad) {
+    desired_yaw_ = bearing;
+  }
+  double dt = 0.0;
   if (!yaw_) {
     yaw_ = gun_yaw;
   } else {
-    *yaw_ += rate_rad_s_ * (now_s - last_step_s_);
+    dt = std::max(0.0, now_s - last_step_s_);
   }
+  const double step = rate_rad_s * dt;
+  *yaw_ = wrap_to_pi(*yaw_ + std::clamp(wrap_to_pi(*desired_yaw_ - *yaw_), -step, step));
   last_step_s_ = now_s;
-  yaw_ = wrap_to_pi(*yaw_);
-  return yaw_;
+  const double range = std::max(1.0, (desired - gun).head<2>().norm());
+  return {gun.x() + range * std::cos(*yaw_), gun.y() + range * std::sin(*yaw_), desired.z()};
 }
 
-Vector3d patrol_point(const Vector3d & gun_pos, double yaw, double range_m, double pitch_down_rad)
+Vector3d enemy_zone(bool blue, double start_x, double start_y, double height)
 {
-  return Vector3d(
-    gun_pos.x() + range_m * std::cos(yaw), gun_pos.y() + range_m * std::sin(yaw),
-    gun_pos.z() - range_m * std::tan(pitch_down_rad));
+  return {blue ? -start_x : start_x, start_y, height};
 }
 
 }  // namespace thornbots_pkg
