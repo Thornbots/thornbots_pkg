@@ -149,6 +149,7 @@ Stop a launch with Ctrl+C and wait for every node to exit before relaunching;
 don't `pkill` individual nodes. Leftover nodes keep publishing TF and make the
 next run jitter. `pgrep -af -- --ros-args` lists every running node and should
 come back empty (sim's nodes show up too while `sim.launch.py` runs).
+Agents stopping backgrounded launches use `kill_launch.sh`: [Docker skill](../.claude/skills/isaac-ros-docker/SKILL.md#helper-scripts-never-hand-rolled-docker-exec).
 
 ## Testing
 
