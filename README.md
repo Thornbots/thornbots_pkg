@@ -228,6 +228,14 @@ MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 `root` would mean freeing rf2o's heading and fusing a yaw into the EKF.
 
+#### Odometry pods
+
+The [CAD pod table and firmware channel/sign derivation](../docs/investigations/sentry-cad-2026-10-26.md#odometry-pods)
+record the start-frame encoder axes, red/blue signs and exported wheel geometry.
+The motor-to-CAD yaw datum is unknown, so source-part/channel labels are conditional.
+The pods were omitted from the imported model; its four `wheel_*` links are
+drive wheels, not encoder pods.
+
 ### target_selector
 
 Team colour comes from `RefSysStatus.is_on_blue_team`: on blue it drops class
