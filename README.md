@@ -492,8 +492,9 @@ wheel bottoms differ by 32.5 mm, so this does not establish the real settled
 ground plane. The heading-fixed [root convention](#pose_translator) is
 unchanged. The [dated CAD investigation](../docs/investigations/sentry-cad-2026-10-26.md)
 records the archive checksum, derivation, transform comparison, tests and
-hardware checks still required. CAD and the Oct 25 fitted lidar position
-disagree by **10.6 cm** in XY; the CAD was selected explicitly.
+hardware checks still required. The earlier Oct 25 position-only fit differed
+from CAD by **10.6 cm** in XY; the Oct 26 joint fit resolves the scan-zero yaw
+and supports the CAD radius (see [self-filter](#lidar_self_filter)).
 
 ### lidar_self_filter
 
