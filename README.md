@@ -477,7 +477,9 @@ horizontal forward direction, +y is left, and positive head yaw is CCW.
 The CAD gun points along `lpr_yaw` -y and is elevated 20° in its exported
 pose; imported pitch assets are rebased so zero pitch is horizontal.
 `camera` is at the IR FOV apex with REP 103 body axes, not optical axes.
-`muzzle` is at the front bore centre, pointing along pitch-frame +x.
+`muzzle` is on the pitch axis between the flywheels, pointing along
+pitch-frame +x. Its 1.903 mm lateral offset comes from the CAD bore centre;
+the bore front is 172.976 mm ahead of this aiming origin.
 
 The clearance datum places the lowest exported wheel on z=0. The exported
 wheel bottoms differ by 32.5 mm, so this does not establish the real settled

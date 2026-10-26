@@ -216,13 +216,13 @@
     <child link="camera"/>
     <origin xyz="0.095699877 -0.011500052 0.055000043" rpy="0 0 0"/>
   </joint>
-  <!-- Where the shot leaves: at the front bore centre of the 2026-10-26 CAD,
-       pointing along head_pitch +x. Not in the generated
-       model; sim/urdf/sentry_v2.urdf.xacro adds the same frame. -->
+  <!-- Aiming origin on the pitch axis, between the flywheels, pointing
+       along head_pitch +x. Only the lateral offset comes from the CAD;
+       sim/urdf/sentry_v2.urdf.xacro adds the same frame. -->
   <link name="muzzle"/>
   <joint name="muzzlelink" type="fixed">
     <parent link="head_pitch"/>
     <child link="muzzle"/>
-    <origin xyz="0.1729764 0.00190269 0" rpy="0 0 0"/>
+    <origin xyz="0 0.00190269 0" rpy="0 0 0"/>
   </joint>
 </robot>
