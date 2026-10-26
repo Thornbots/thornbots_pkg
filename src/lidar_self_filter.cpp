@@ -17,9 +17,8 @@
 // lidar's frame; no joint-state sub needed), republishing on scan. Works for
 // sim and real hardware.
 //
-// Current values: blind_angle_start=0.32, blind_angle_end=1.62 in the scan frame
-// (18.3-92.8 deg CCW from scan zero), from the 2026-10-26 CAD. See README.md for design rationale and
-// retuning notes.
+// Robot-verified 2026-10-26: -0.5585..1.0123 rad (-32..58 deg) in the scan
+// frame, with scan zero 0.5907 rad CCW of the gun. See README.md for evidence.
 
 #include <cmath>
 #include <limits>
@@ -39,8 +38,8 @@ public:
   LidarSelfFilter()
   : Node("lidar_self_filter")
   {
-    declare_parameter("blind_angle_start", 0.32);
-    declare_parameter("blind_angle_end", 1.62);
+    declare_parameter("blind_angle_start", -0.5585);
+    declare_parameter("blind_angle_end", 1.0123);
     sub_ = create_subscription<LaserScan>(
       "scan_raw", 10, [this](LaserScan::ConstSharedPtr m) {scan_callback(*m);});
     pub_ = create_publisher<LaserScan>("scan", 10);
@@ -49,22 +48,22 @@ public:
 private:
   void scan_callback(const LaserScan & msg)
   {
-    const double start = get_parameter("blind_angle_start").as_double();
-    const double end = get_parameter("blind_angle_end").as_double();
-
     LaserScan out = msg;
     const double two_pi = 2.0 * M_PI;
+    const auto wrap = [two_pi](double angle) {
+        double wrapped = std::fmod(angle, two_pi);
+        return wrapped < 0.0 ? wrapped + two_pi : wrapped;
+      };
+    const double start = wrap(get_parameter("blind_angle_start").as_double());
+    const double end = wrap(get_parameter("blind_angle_end").as_double());
     const double angle_min = msg.angle_min, increment = msg.angle_increment;
     for (size_t i = 0; i < out.ranges.size(); ++i) {
       const double angle = angle_min + static_cast<double>(i) * increment;
-      // Wrap into [0, 2*pi) so this compares correctly for any angle_min.
-      // Sim and the RPLIDAR driver both publish -pi..+pi (720 bins); the
-      // sector is stated in 0..2*pi. Floor modulo.
-      double wrapped = std::fmod(angle, two_pi);
-      if (wrapped < 0.0) {
-        wrapped += two_pi;
-      }
-      if (start <= wrapped && wrapped <= end) {
+      // Wrap scan angles and bounds alike, including sectors across scan zero.
+      const double wrapped = wrap(angle);
+      const bool in_sector = start <= end ?
+        start <= wrapped && wrapped <= end : start <= wrapped || wrapped <= end;
+      if (in_sector) {
         out.ranges[i] = std::numeric_limits<float>::infinity();
         if (i < out.intensities.size()) {
           out.intensities[i] = 0.0f;

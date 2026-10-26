@@ -73,6 +73,20 @@ def generate_launch_description():
         description='Baud rate for the RPLIDAR A2M8, only used when '
         'real_hardware:=true.'
     )
+    lidar_x_arg = DeclareLaunchArgument(
+        'lidar_x', default_value='-0.105', description='Lidar X in head frame, meters.')
+    lidar_y_arg = DeclareLaunchArgument(
+        'lidar_y', default_value='-0.193326', description='Lidar Y in head frame, meters.')
+    lidar_z_arg = DeclareLaunchArgument(
+        'lidar_z', default_value='0.101293', description='Lidar Z in head frame, meters.')
+    lidar_yaw_arg = DeclareLaunchArgument(
+        'lidar_yaw', default_value='0.5907', description='Lidar yaw CCW from head +X, radians.')
+    lidar_blind_angle_start_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_start', default_value='-0.5585',
+        description='Self-filter sector start in scan frame, radians CCW from scan zero.')
+    lidar_blind_angle_end_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_end', default_value='1.0123',
+        description='Self-filter sector end in scan frame, radians CCW from scan zero.')
 
     odom_frame_arg = DeclareLaunchArgument(
         'odom_frame', default_value='nav_odom',
@@ -191,11 +205,9 @@ def generate_launch_description():
         description='point_to_cv_target: /cv/target publish rate, '
         'decoupled from the ~60Hz detection rate.'
     )
-    patrol_enabled_arg = DeclareLaunchArgument(
-        'patrol_enabled', default_value='true',
-        description='point_to_cv_target: with no target, sweep the gun and '
-        'permit firmware hit turns, never firing. false sends nothing between '
-        'targets.'
+    idle_direction_arg = DeclareLaunchArgument(
+        'idle_direction', default_value='zone', choices=['zone', 'hold'],
+        description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
     enable_target_selector_arg = DeclareLaunchArgument(
@@ -344,9 +356,8 @@ def generate_launch_description():
             'cv_target_publish_rate_hz': ParameterValue(
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
-            'patrol_enabled': ParameterValue(
-                LaunchConfiguration('patrol_enabled'), value_type=bool
-            ),
+            'idle_direction': LaunchConfiguration('idle_direction'),
+            'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
     )
@@ -430,7 +441,13 @@ def generate_launch_description():
         executable='lidar_self_filter',
         name='lidar_self_filter',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'blind_angle_start': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_start'), value_type=float),
+            'blind_angle_end': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_end'), value_type=float),
+        }],
         additional_env=shm_env,
     )
 
@@ -460,7 +477,13 @@ def generate_launch_description():
     )
 
     robot_description = ParameterValue(
-        Command(['xacro ', sentry_xacro]), value_type=str
+        Command([
+            'xacro ', sentry_xacro,
+            ' lidar_x:=', LaunchConfiguration('lidar_x'),
+            ' lidar_y:=', LaunchConfiguration('lidar_y'),
+            ' lidar_z:=', LaunchConfiguration('lidar_z'),
+            ' lidar_yaw:=', LaunchConfiguration('lidar_yaw'),
+        ]), value_type=str
     )
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
@@ -532,13 +555,15 @@ def generate_launch_description():
             description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
+        lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
+        lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
         chase_margin_s_arg, v_muzzle_arg,
-        cv_target_publish_rate_hz_arg, patrol_enabled_arg,
+        cv_target_publish_rate_hz_arg, idle_direction_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
