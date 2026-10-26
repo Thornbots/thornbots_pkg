@@ -96,6 +96,9 @@ TEST(RoomCheck, StaleCvNeedsLiveTargetAndCutoffEvidence)
   EXPECT_EQ(cv.score(3).status, "PASS");
   cv.decision(1.31, true);
   EXPECT_EQ(cv.score(3).status, "FAIL");
+  const auto info = rc::diagnostic(cv.score(3));
+  EXPECT_EQ(info.status, "INFO");
+  EXPECT_EQ(info.detail.rfind("FAIL (diagnostic only): ", 0), 0u);
 }
 TEST(RoomCheck, LoggedDropReports)
 {

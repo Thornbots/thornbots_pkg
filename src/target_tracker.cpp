@@ -279,6 +279,7 @@ private:
     const auto [s, P] = tracker_->predicted(now_t.seconds());
     TargetState out;
     out.header.stamp = now_t;
+    out.detection_stamp = stamp;
     out.header.frame_id = odom_frame_;
     out.robot_track_id = first.robot_track_id;
     out.confidence = first.confidence;

@@ -20,7 +20,7 @@ localization backends are in
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a patrol point); `tick_topic` if set (bench only) |
+| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a non-firing idle look); `tick_topic` if set (bench only) |
 
 `mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
 pose translation, target selection and aiming consume the incoming pose/referee
@@ -166,10 +166,10 @@ colcon test --packages-select thornbots_pkg && colcon test-result --verbose
 gating and the still hypothesis; `test_target_selector_core.cpp` scoring,
 centrality, grouping and hysteresis; `test_mcb_relay_core.cpp` the relocalize
 decision; `test_point_to_cv_target_core.cpp` the intercept solve, shot planner,
-latency stat and patrol; `test_pose_translator_node.cpp` the stamp, frame,
+latency stat and idle looks; `test_pose_translator_node.cpp` the stamp, frame,
 joint and covariance mapping; `test_point_to_cv_target_node.cpp` the publish tick,
 the consumer acknowledgment and the node's subscriptions: `TargetState`,
-`RobotPose` and `RefSysStatus` (patrol only), nothing else. The pytest run is
+`RobotPose` and `RefSysStatus` (idle team/hit events), nothing else. The pytest run is
 the ament copyright check of `include/`, `launch/`, `src/` and `test/`, and
 the flake8 and pep257 checks of `launch/` and `test/`.
 
@@ -517,7 +517,7 @@ A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `compute_aim_point()` handles three cases per tick:
 
-- No usable state, or TF fails: no target aim; Jetson patrol may supply a
+- No usable state, or TF fails: no target aim; idle logic supplies a
   non-firing point instead. TF failure logs a throttled `ERROR`.
   Usable means present and younger than
   `target_timeout_s`. With `tick_topic` set (the lockstep benches), a
@@ -622,50 +622,43 @@ Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
 only above `fire_confidence_threshold`, so a failed TF lookup or stale state
 holds fire. HP, heat and power gating are not built.
 
-Every frame carries `type_c_based_patrol` (default false) and a per-frame
-`turn_to_hit` decision. A held target estimate clears `turn_to_hit`, including
-an unconverged estimate or a coasting/predicted track during brief occlusion.
-When the estimate expires, patrol frames set it. Reacquisition clears it on
-the next frame, with no cooldown. The decision does not depend on whether the
-aim solve succeeds or the frame permits firing.
+`TargetState.detection_stamp` carries the newest contributing detection's corrected
+capture time; `header.stamp` still identifies the prediction time. Firing requires
+that capture stamp to be at most
+`fire_max_state_age_s` (0.15 s) old. A held prediction still aims, without
+firing, until `target_timeout_s` (0.5 s). The fire-age limit is a node parameter,
+not a launch argument.
 
-Every Jetson patrol point sets `CVTarget.patrol`;
-target aim points leave it clear, including non-firing holds. This identifies
-the source of the point and is independent of `type_c_based_patrol`, which
-permits firmware patrol. Wire semantics live in the
-[CV_TARGET flag table](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+Every non-target frame clears `fire`, sets `turn_to_hit`, and sets the existing
+`CVTarget.patrol` bit to identify an idle look. Target points leave both bits
+clear, including non-firing coasting estimates. The wire layout is unchanged;
+see the [CV_TARGET flag table](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+`type_c_based_patrol` remains false by default. There is no Jetson patrol or
+patrol launch argument.
 
-The Jetson patrols itself (`patrol_enabled`, default true; `auto.launch.py`
-arg of the same name). After `patrol_after_s` (0.2) with no aim point it
-sends patrol points at the publish rate, never with `fire` set: a point
-`patrol_range_m` (3.0) out from the `muzzle` frame, `patrol_pitch_down_rad`
-(0.05) below level, its yaw starting at the gun's and turning at
-`patrol_rate_rad_s` (-2.0, clockwise). Firmware patrol is slower: the compiled MCB uses -0.0002 rad per 1 ms
-cycle (0.2 rad/s clockwise), with pitch 0.05. The Jetson sweep remains its
-separate configured rate. The yaw
-is integrated on itself, not on the gun's, so a gun that lags can't stall
-the sweep. Firmware owns turns toward hits: REF_SYS reports a chassis-relative
-angle, while the current POSE payload does not carry chassis yaw. The removed
-Jetson `hit_angle_sign`/`hit_turn_s` path incorrectly added that angle to gun
-yaw. The `turn_to_hit` parameter is also removed; the decision now follows
-estimate availability on each frame.
+Idle looks choose the last enemy until 3 s after the 0.5 s target hold expires,
+or follow the gun for 2 s after REF_SYS reports a hit; the newer capture/event
+wins. The last predicted position is held once aiming expires. Firmware owns
+the hit turn; the Jetson never converts its chassis-relative hit angle. With
+neither recent event, `idle_direction:=zone` (default) looks at the enemy's
+starting zone. `idle_direction:=hold` follows the current gun direction while
+continuing non-firing frames, so hit-turn permission remains live.
 
-Why the Jetson and not the MCB: a patrol frame keeps a `CV_TARGET` going
-between targets, so the MCB hears the flags all the time and never patrols
-on its own. MCBV3#78 found the other way broken: the MCB only patrols with
-no frame coming, the one time it hears no flags. A patrol frame is an
-aim point with `fire` clear and `patrol` set; the payload size is unchanged. That holds because
-MCBV3 `nightly` requests a shot only when `fire` is set
-(`AutoAimAndFireCommand.cpp`). The aiming and estimation benches disable
-patrol; every `mcb_*` match stage enables it. The old E1 scorer is gone.
-Firmware may interrupt Jetson patrol toward a hit only while no target
-estimate is held. Its next target frame cancels that turn. See
-[firmware coordination](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
-The [three-run hosted comparison](docs/hit-permission-2026-10-15.md#hosted-drive-and-match)
-records the unit checks and drive/match regression guard against nightly with
-the angle-only firmware correction applied.
+The enemy zone mirrors only our firmware start x: red boots at (-4.625, 0),
+blue at (+4.625, 0). `zone_start_x_m` (4.625) and `zone_start_y_m` (0.0) default
+to `OdometrySubsystemConstants.hpp`; the REF_SYS blue flag alone chooses the
+side, including late blue arrival and missing/zero robot ID. Idle points use
+`idle_height_m` (0.15), near armor height. Idle yaw commands change at most
+`idle_rate_rad_s` (0.5 rad/s); a new bearing must differ by `idle_switch_rad`
+(pi/6, 30 degrees) before adoption. Hit/hold looks follow the actual gun so
+firmware hit turns are not pulled back. Target aiming retains its existing
+response. Before muzzle TF is available, idle frames retain the last commanded
+point, or the enemy zone at boot.
 
-
+For the robot service, set `AUTO_LAUNCH_ARGS="idle_direction:=hold"` in
+`/etc/thornbots/launch.env` and restart `thornbots` to hold instead of looking
+at the zone. The startup script already forwards these arguments to
+`auto.launch.py`; other launch settings can remain in the same variable.
 
 ### Initial field position
 
@@ -753,7 +746,7 @@ capture ID. At least 10 pairs and 80% state coverage are required, with p95 <=20
 (`latency_s`). State header age is never called capture latency. Empty/no target
 or inadequate pairing fails this optional block instead of inventing a latency.
 
-Optional stale-CV rehearsal, in a separate run:
+Optional stale-CV diagnostic, in a separate run (not an acceptance requirement):
 
 ```bash
 ros2 run thornbots_pkg room_check --ros-args -p stale_cv:=true -p duration_s:=30.0
@@ -761,10 +754,11 @@ ros2 run thornbots_pkg room_check --ros-args -p stale_cv:=true -p duration_s:=30
 
 First show a tracked panel and let active CV decisions arrive. During collection,
 **you** stop the YOLO launch in its terminal; keep tracker, aiming and relay running.
-The command never kills any process. It checks that non-patrol aim/fire decisions
-on `/cv/target` cease within 200 ms of the last YOLO receipt, with at least one
-second of continued consumer observation. Patrol traffic is allowed. No target,
-no producer stop or no subsequent consumer decisions fails as NOT EXERCISED.
-The bound is measured from last observer receipt, not the exact process-stop time.
-Current aiming/tracker timeouts may exceed this requested bound: a failure is
-useful evidence, not permission to change safety behavior during a room test.
+The command never kills any process. It counts actual `/cv/target` fire decisions
+and checks that they cease within 200 ms of the last YOLO receipt, with at least
+one second of continued consumer observation. Aim-only and idle traffic are
+allowed. No firing before the stop, no producer stop or no subsequent consumer
+decisions reports NOT EXERCISED. The line is INFO with PASS/FAIL in its detail
+and never changes the run's verdict or exit code. This diagnostic uses observer receipt time,
+not capture time or the exact process-stop time; the aiming node's 150 ms
+capture-age firing gate is tested separately.

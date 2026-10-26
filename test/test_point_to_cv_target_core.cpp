@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Unit tests for point_to_cv_target_core.hpp's intercept solve, shot planner
-// and patrol. No rclcpp.
+// and idle looks. No rclcpp.
 
 #include <gtest/gtest.h>
 
@@ -31,7 +31,7 @@
 namespace tp = thornbots_pkg;
 using Eigen::Vector3d;
 using tp::ArmorState;
-using tp::Patrol;
+using tp::IdleLook;
 using tp::ShotOptions;
 
 namespace
@@ -680,51 +680,46 @@ TEST(PlanShot, MovingShooterChaseLandsOnAFacingPanel)
   EXPECT_LT(miss, 1e-6);
 }
 
-// ── patrol ────────────────────────────────────────────────────────────────
-
-TEST(Patrol, StartsAtOnceWithNoTargetEver)
+TEST(IdleLook, PriorityUsesNewerEnemyOrHitAndExpiresToZoneOrHold)
 {
-  Patrol p(-2.0, 0.2);
-  const auto yaw = p.step(10.0, 1.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, 1.0));
+  IdleLook look;
+  using Source = IdleLook::Source;
+  EXPECT_EQ(look.source(1.0, 0.5, false), Source::Zone);
+  EXPECT_EQ(look.source(1.0, 0.5, true), Source::Hold);
+  look.target_seen(1.0, {2.0, 3.0, 0.15});
+  EXPECT_EQ(look.source(4.4, 0.5, false), Source::LastEnemy);
+  EXPECT_EQ(look.source(4.6, 0.5, false), Source::Zone);
+  look.hit(2.0);
+  EXPECT_EQ(look.source(2.1, 0.5, false), Source::Hit);
+  look.target_seen(2.2, {3.0, 4.0, 0.15});
+  EXPECT_EQ(look.source(2.3, 0.5, false), Source::LastEnemy);
+  EXPECT_EQ(look.last_enemy().x(), 3.0);
+  look.hit(5.5);
+  EXPECT_EQ(look.source(6.0, 0.5, false), Source::Hit);
+  EXPECT_EQ(look.source(7.6, 0.5, false), Source::Zone);
 }
 
-TEST(Patrol, WaitsAfterSThenStartsFromTheGunYaw)
+TEST(IdleLook, RateCapsWrapsAndIgnoresSmallDirectionChanges)
 {
-  Patrol p(-2.0, 0.2);
-  p.target_seen(10.0);
-  EXPECT_FALSE(p.step(10.1, 1.0));
-  const auto yaw = p.step(10.25, 1.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, 1.0));
+  IdleLook look;
+  const Vector3d gun(0.0, 0.0, 0.3);
+  look.point(0.0, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  auto p = look.point(0.2, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), 0.1, 1e-9);
+  p = look.point(4.0, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2, 1e-9);
+  p = look.point(5.0, gun, 0.0, {-0.3, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2, 1e-9);
+  p = look.point(6.0, gun, 0.0, {-3.0, 0.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2 + 0.5, 1e-9);
+  EXPECT_DOUBLE_EQ(p.z(), 0.15);
 }
 
-TEST(Patrol, SweepsAtItsRateFromItsOwnYawAndWraps)
+TEST(IdleLook, EnemyZoneMirrorsOnlyXForFirmwareTeam)
 {
-  Patrol p(-2.0, 0.2);
-  p.step(0.0, -3.0);
-  // The command integrates on itself, so a lagging gun can't stall it.
-  const auto yaw = p.step(0.1, 0.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, -3.2 + 2.0 * M_PI));
-}
-
-TEST(Patrol, RestartsFromTheGunAfterATarget)
-{
-  Patrol p(-2.0, 0.2);
-  p.step(0.0, 0.0);
-  p.step(1.0, 0.0);
-  p.target_seen(2.0);
-  EXPECT_TRUE(approx(*p.step(2.3, 0.7), 0.7));
-}
-
-TEST(PatrolPoint, IsRangeOutAlongYawAndPitchedDown)
-{
-  const Vector3d p = tp::patrol_point({1.0, 2.0, 0.4}, M_PI / 2, 3.0, 0.05);
-  EXPECT_TRUE(approx(p.x(), 1.0));
-  EXPECT_TRUE(approx(p.y(), 5.0));
-  EXPECT_TRUE(approx(p.z(), 0.4 - 3.0 * std::tan(0.05)));
+  EXPECT_EQ(tp::enemy_zone(false, 4.625, 0.0, 0.15), Vector3d(4.625, 0.0, 0.15));
+  EXPECT_EQ(tp::enemy_zone(true, 4.625, 0.0, 0.15), Vector3d(-4.625, 0.0, 0.15));
+  EXPECT_EQ(tp::enemy_zone(true, 5.0, 0.4, 0.15), Vector3d(-5.0, 0.4, 0.15));
 }
 
 TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)
