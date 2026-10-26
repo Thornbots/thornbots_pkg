@@ -7,7 +7,11 @@
      under it on chassis_yaw, and the head hangs off root with headlink at
      the MCB's world head yaw, so lidar and camera never see chassis yaw.
      The yaw bearing sits 0.2 mm off root's z axis; that offset is ignored. -->
-<robot name="sentry">
+<robot name="sentry" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="lidar_x" default="-0.105"/>
+  <xacro:arg name="lidar_y" default="-0.193326"/>
+  <xacro:arg name="lidar_z" default="0.101293"/>
+  <xacro:arg name="lidar_yaw" default="0.5907"/>
   <link name="root">
     <visual>
       <geometry>
@@ -208,7 +212,7 @@
   <joint name="lidarlink" type="fixed">
     <parent link="head"/>
     <child link="lidar"/>
-    <origin xyz="-0.119391 -0.18501 0.0968001" rpy="0 0 0"/>
+    <origin xyz="$(arg lidar_x) $(arg lidar_y) $(arg lidar_z)" rpy="0 0 $(arg lidar_yaw)"/>
   </joint>
   <link name="camera"/>
   <joint name="cameralink" type="fixed">

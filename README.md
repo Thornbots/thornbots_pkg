@@ -134,6 +134,11 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 the RPLIDAR A2M8 on hardware. The driver uses `angle_compensate: true` to
 keep a fixed angular grid (720 bins on the measured A2M8), required by
 rf2o and slam_toolbox. Uncompensated scans vary in beam count.
+`lidar_x`, `lidar_y`, `lidar_z` (meters in `head`) and `lidar_yaw` (radians CCW
+from head +X) override the lidar TF at launch; defaults use the Oct 26 CAD
+translation and robot-measured scan-zero yaw (see [self-filter](#lidar_self_filter)).
+`lidar_blind_angle_start` / `lidar_blind_angle_end` (-0.5585 / 1.0123 rad in the scan
+frame) set the [self-filter sector](#lidar_self_filter), including across scan zero.
 The docstring at the top of
 `launch/auto.launch.py` documents only `real_hardware`; the other args are
 described in their `DeclareLaunchArgument` `description=` strings.
@@ -478,27 +483,21 @@ states. It runs in sim and on hardware. Sim's lidar doesn't see the robot at
 all (see `sim/README.md`), so this filter is the only thing modelling the
 blind sector.
 
-The sector, `blind_angle_start` 0.09 to `blind_angle_end` 1.41 rad (5-81 deg
-counter-clockwise from the gun, +x), comes from the `sentry_v2` CAD. We sliced
-the Onshape export at the RPLIDAR's scan plane (z ~0.355 m, +-6 mm). The lidar
-sits on the head at (-0.120, -0.185) in root, 0.22 m from the yaw axis, so it
-pans with the gimbal.
+The Oct 26 robot measurement sets the sector to -0.5585..1.0123 rad
+(-32..58 degrees) in the scan frame. Both Oct 25 bags and the live level
+probe showed zero leaking head returns. The former 0.09..1.41 rad sector
+leaked about 8.5 head hits per scan and blanked real returns at 53..81 degrees.
 
-- Head-fixed parts (gimbal body, the GM6020 and M2006 motors, the lidar's own
-  cover and standoffs) block 17-79.5 deg, from 0.045 to 0.34 m out.
-- The pitch stage (shooter, flywheels) blocks more as the gun pitches nose
-  down. Over +-0.6 rad of pitch the union is 6-79 deg.
-- Chassis parts top out at 0.347-0.348 m, 7 mm under the scan plane, so the
-  chassis blocks nothing at any head yaw.
+The mount translation in `head` is the team's CAD (-0.105, -0.193326,
+0.101293) m. Scan zero is 0.5907 rad (33.84 degrees) CCW of the gun,
+from a joint head-turn fit over five poses; the fitted radius is 0.2225 m,
+consistent with the CAD's 0.220 m. The CAD FOV-marker yaw is superseded.
+The [dated measurement note](../docs/investigations/lidar-mount-2026-10-26.md)
+records the evidence, uncertainty and head-turn SLAM comparison.
 
-The defaults add 1 deg of margin to the 6-79.5 deg union.
-
-On hardware the sector is unverified. The URDF gives the `lidar` frame no
-rotation (same axes as the head, +x along the gun), but nobody has measured
-where the real RPLIDAR's 0 deg points relative to the gun. The CAD's lidar
-part has its local x 30.7 deg counter-clockwise of the gun, which may or may
-not be the sensor's 0 deg. Check the sector against a real `/scan_raw` before
-trusting it.
+The filter compares scan-frame angles without TF. Negative bounds and sectors
+crossing scan zero are supported. Keep the simulated sensor mount and robot
+TF consistent when overriding the mount; sim uses this same filter.
 
 ### point_to_cv_target
 
