@@ -210,6 +210,13 @@ def generate_launch_description():
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
+    zone_start_x_arg = DeclareLaunchArgument(
+        'zone_start_x_m', default_value='4.625',
+        description='Idle-look enemy start-zone X magnitude in the aim frame, meters.')
+    zone_start_y_arg = DeclareLaunchArgument(
+        'zone_start_y_m', default_value='0.0',
+        description='Idle-look enemy start-zone Y in the aim frame, meters.')
+
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
         description="Launch target_selector to turn roi_depth_query's "
@@ -357,6 +364,10 @@ def generate_launch_description():
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
             'idle_direction': LaunchConfiguration('idle_direction'),
+            'zone_start_x_m': ParameterValue(
+                LaunchConfiguration('zone_start_x_m'), value_type=float),
+            'zone_start_y_m': ParameterValue(
+                LaunchConfiguration('zone_start_y_m'), value_type=float),
             'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
@@ -564,6 +575,7 @@ def generate_launch_description():
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
         chase_margin_s_arg, v_muzzle_arg,
         cv_target_publish_rate_hz_arg, idle_direction_arg,
+        zone_start_x_arg, zone_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,

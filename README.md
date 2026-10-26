@@ -673,7 +673,8 @@ starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
 The enemy zone mirrors only our firmware start x: red boots at (-4.625, 0),
-blue at (+4.625, 0). `zone_start_x_m` (4.625) and `zone_start_y_m` (0.0) default
+blue at (+4.625, 0). `zone_start_x_m` and `zone_start_y_m` are also `auto.launch.py` arguments,
+so simulation fixtures can express the zone in their scene frame. They default
 to `OdometrySubsystemConstants.hpp`; the REF_SYS blue flag alone chooses the
 side, including late blue arrival and missing/zero robot ID. Idle points use
 `idle_height_m` (0.15), near armor height. Idle yaw commands change at most
