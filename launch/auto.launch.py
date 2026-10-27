@@ -451,6 +451,31 @@ def generate_launch_description():
         additional_env=shm_env,
     )
 
+    lidar_looks_arg = DeclareLaunchArgument(
+        'lidar_looks', default_value='true', choices=['true', 'false'],
+        description='false: lidar tracks never steer the head. Reserved: '
+        'lidar_tracker only publishes, so neither value moves the head yet.'
+    )
+    lidar_obstacle_margin_m_arg = DeclareLaunchArgument(
+        'lidar_obstacle_margin_m', default_value='0.25',
+        description='lidar_tracker: scan points this close (m) to an occupied '
+        'saved-map cell count as obstacle, not robot.'
+    )
+    # Publishing only: neither lidar argument reaches point_to_cv_target.
+    lidar_tracker_node = Node(
+        package='thornbots_pkg', executable='lidar_tracker', output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'localization_mode': LaunchConfiguration('localization_mode'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
+            'scan_is_instantaneous': ParameterValue(use_sim_time, value_type=bool),
+            'target_state_topic': LaunchConfiguration('target_state_topic'),
+            'lidar_looks': ParameterValue(LaunchConfiguration('lidar_looks'), value_type=bool),
+            'lidar_obstacle_margin_m': ParameterValue(
+                LaunchConfiguration('lidar_obstacle_margin_m'), value_type=float),
+        }], additional_env=udp_env,
+    )
+
     pose_translator_node = Node(
         package='thornbots_pkg',
         executable='pose_translator',
@@ -560,6 +585,7 @@ def generate_launch_description():
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
+        lidar_looks_arg, lidar_obstacle_margin_m_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
         chase_margin_s_arg, v_muzzle_arg,
@@ -573,7 +599,7 @@ def generate_launch_description():
                     actions=[
             mcb_relay_node,
             target_selector_node, target_tracker_node, point_to_cv_target_node,
-            lidar_node, lidar_self_filter_node,
+            lidar_node, lidar_self_filter_node, lidar_tracker_node,
             odom_tf_broadcaster_node,
             robot_state_publisher_node,
             localization_launch_include,
