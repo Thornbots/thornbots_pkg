@@ -1,0 +1,1265 @@
+#!/usr/bin/env python3
+# Copyright 2026 Thornbots
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
+"""Explicit operator mapping, field registration and localization; see README."""
+
+import argparse
+from collections import deque
+import json
+import math
+import os
+import re
+import signal
+import sys
+import uuid
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+
+import numpy as np
+from PIL import Image
+import yaml
+
+
+FOXGLOVE_COMMAND = [
+    "ros2", "run", "foxglove_bridge", "foxglove_bridge", "--ros-args",
+    "-p", "port:=8765", "-p", "address:=0.0.0.0",
+    "-p", "capabilities:=[connectionGraph, assets]",
+]
+
+
+def angle(value):
+    """Wrap radians to [-pi, pi]."""
+    return math.atan2(math.sin(value), math.cos(value))
+
+
+def transform(point, pose):
+    """Apply a planar rigid transform."""
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    return (
+        pose[0] + c * point[0] - s * point[1],
+        pose[1] + s * point[0] + c * point[1],
+    )
+
+
+def registration(boot_root, x, y, yaw, boot_chassis_yaw):
+    """Map boot root onto measured root; heading inputs describe the chassis."""
+    field_yaw = angle(yaw - boot_chassis_yaw)
+    rotation = angle(field_yaw - boot_root[2])
+    offset = transform(boot_root[:2], (0, 0, rotation))
+    return (x - offset[0], y - offset[1], rotation), (x, y, field_yaw)
+
+
+def validate_field(boot, team, x, y, yaw):
+    """Reject symmetric but physically inconsistent field registrations."""
+    if team not in ("red", "blue") or team != boot["team"]:
+        raise ValueError("team disagrees with captured referee team")
+    # Float32 telemetry can place a valid +/-pi heading just beyond double pi.
+    if not all(math.isfinite(v) for v in (x, y, yaw)) or abs(yaw) > math.pi + 1e-6:
+        raise ValueError("yaw must be radians in [-pi, pi], never degrees")
+    if (x < 0) != (team == "red") or x == 0:
+        raise ValueError("field x must be negative for red, positive for blue")
+    raw = boot["raw_odom"]
+    if len(raw) != 2 or not all(math.isfinite(v) for v in raw):
+        raise ValueError("invalid captured raw /odom")
+    if (raw[0] < 0) != (team == "red") or raw[0] == 0:
+        raise ValueError("raw /odom sign disagrees with referee team; reboot correctly")
+    if math.dist(raw, (x, y)) > 0.3:
+        raise ValueError("surveyed start differs from boot raw /odom by more than 0.3 m")
+    if abs(angle(yaw - boot["chassis_yaw"])) > 0.25:
+        raise ValueError("field_yaw must be near zero: check team and chassis heading")
+
+
+def verify_return(boot, current, session_id):
+    """Saving requires the same live mapping session and a parked return to boot."""
+    if boot.get("session_id") != session_id:
+        raise ValueError("wrong-session boot pose; recapture before mapping")
+    if not all(math.isfinite(v) for v in [*boot["root"], *current]):
+        raise ValueError("nonfinite boot/current root pose")
+    if (
+        math.dist(boot["root"][:2], current[:2]) > 0.15
+        or abs(angle(boot["root"][2] - current[2])) > 0.15
+    ):
+        raise ValueError(
+            f"return to boot before save: observed={current}, expected={boot['root']}"
+        )
+
+
+def read_map(base):
+    """Read and validate a trinary occupancy image and metadata."""
+    path = Path(str(base) + ".yaml")
+    meta = yaml.safe_load(path.read_text())
+    values = [
+        meta["resolution"],
+        *meta["origin"],
+        meta["free_thresh"],
+        meta["occupied_thresh"],
+    ]
+    if not all(math.isfinite(float(v)) for v in values) or meta["resolution"] <= 0:
+        raise ValueError("map metadata must be finite with positive resolution")
+    if (
+        len(meta["origin"]) != 3
+        or not 0 <= meta["free_thresh"] < meta["occupied_thresh"] <= 1
+    ):
+        raise ValueError("invalid map origin or occupancy thresholds")
+    if meta.get("mode", "trinary") != "trinary" or meta.get("negate", 0) != 0:
+        raise ValueError("expected non-negated trinary occupancy map")
+    with Image.open(path.parent / meta["image"]) as image:
+        pixels = np.array(image.convert("L"))
+    if not pixels.size:
+        raise ValueError("empty occupancy image")
+    return meta, pixels
+
+
+def rotate_grid(meta, pixels, correction):
+    """Inverse-sample cell centres into a yaw-zero field raster; exterior is unknown."""
+    res = meta["resolution"]
+    height, width = pixels.shape
+    ox, oy = transform(meta["origin"][:2], correction)
+    yaw = angle(meta["origin"][2] + correction[2])
+    corners = [
+        transform(p, (ox, oy, yaw))
+        for p in [
+            (0, 0),
+            (width * res, 0),
+            (0, height * res),
+            (width * res, height * res),
+        ]
+    ]
+    low = np.min(corners, axis=0)
+    high = np.max(corners, axis=0)
+    size = np.ceil((high - low) / res - 1e-9).astype(int)
+    if np.prod(size.astype(float)) > 100_000_000:
+        raise ValueError("transformed map exceeds 100 million cells")
+    result = np.full((size[1], size[0]), 205, dtype=np.uint8)
+    c, s = math.cos(yaw), math.sin(yaw)
+    for row in range(size[1]):
+        x = low[0] + (np.arange(size[0]) + 0.5) * res - ox
+        y = low[1] + (size[1] - row - 0.5) * res - oy
+        ix = np.floor((c * x + s * y) / res).astype(int)
+        iy = np.floor((-s * x + c * y) / res).astype(int)
+        valid = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+        result[row, valid] = pixels[height - 1 - iy[valid], ix[valid]]
+    output = dict(meta, origin=[float(low[0]), float(low[1]), 0.0], image="field.pgm")
+    return output, result
+
+
+def validate_bundle(directory):
+    """Require both saved map representations; graph remains in its boot frame."""
+    directory = Path(directory)
+    for suffix in (".pgm", ".yaml", ".posegraph", ".data"):
+        path = directory / ("map" + suffix)
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"missing or empty {path}")
+    read_map(directory / "map")
+    boot = json.loads((directory / "boot.json").read_text())
+    if len(boot["root"]) != 3 or not all(
+        math.isfinite(v) for v in [*boot["root"], boot["chassis_yaw"]]
+    ):
+        raise ValueError("invalid captured boot pose")
+    if not boot.get("session_id") or (
+        boot.get("frame_mode", "field") != "room"
+        and boot.get("team") not in ("red", "blue")
+    ):
+        raise ValueError("boot capture lacks session ID or referee team; recapture")
+
+
+def align(args):
+    """Create a distinct field occupancy bundle without modifying the saved graph."""
+    source, target = Path(args.source).resolve(), Path(args.output).resolve()
+    validate_bundle(source)
+    boot = json.loads((source / "boot.json").read_text())
+    args.team = args.team or boot["team"]
+    args.x = (-4.625 if args.team == "red" else 4.625) if args.x is None else args.x
+    args.y = 0.0 if args.y is None else args.y
+    validate_field(boot, args.team, args.x, args.y, args.yaw)
+    correction, root = registration(
+        boot["root"], args.x, args.y, args.yaw, boot["chassis_yaw"]
+    )
+    meta, pixels = read_map(source / "map")
+    meta, pixels = rotate_grid(meta, pixels, correction)
+    target.mkdir(parents=True, exist_ok=False)
+    Image.fromarray(pixels).save(target / "field.pgm")
+    (target / "field.yaml").write_text(yaml.safe_dump(meta))
+    manifest = dict(
+        version=1,
+        session_id=boot["session_id"],
+        frame_mode="field",
+        team=args.team,
+        source=os.path.relpath(source, target),
+        boot_root=boot["root"],
+        measured_chassis_yaw=args.yaw,
+        boot_chassis_yaw=boot["chassis_yaw"],
+        field_from_boot=correction,
+        initial_root=root,
+    )
+    (target / "registration.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    check(target)
+
+
+def prepare_room(args):
+    """Keep captured SLAM coordinates, with no team or measured field pose."""
+    source, target = Path(args.source).resolve(), Path(args.output).resolve()
+    validate_bundle(source)
+    boot = json.loads((source / "boot.json").read_text())
+    meta, pixels = read_map(source / "map")
+    target.mkdir(parents=True, exist_ok=False)
+    meta, pixels = rotate_grid(meta, pixels, (0.0, 0.0, 0.0))
+    Image.fromarray(pixels).save(target / "field.pgm")
+    (target / "field.yaml").write_text(yaml.safe_dump(meta))
+    manifest = dict(
+        version=1,
+        frame_mode="room",
+        source=os.path.relpath(source, target),
+        field_from_boot=[0.0, 0.0, 0.0],
+        initial_root=boot["root"],
+    )
+    (target / "registration.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    check(target)
+
+
+def check(directory):
+    """Check saved artifacts and root occupancy; print the transform for human review."""
+    directory = Path(directory)
+    manifest = json.loads((directory / "registration.json").read_text())
+    source = directory / manifest["source"]
+    validate_bundle(source)
+    boot = json.loads((source / "boot.json").read_text())
+    if manifest.get("frame_mode") == "field":
+        validate_field(
+            boot,
+            manifest["team"],
+            *manifest["initial_root"][:2],
+            manifest["measured_chassis_yaw"],
+        )
+        if manifest.get("session_id") != boot.get("session_id"):
+            raise ValueError("registration session differs from boot capture")
+        correction, root = registration(
+            boot["root"],
+            *manifest["initial_root"][:2],
+            manifest["measured_chassis_yaw"],
+            boot["chassis_yaw"],
+        )
+        if not np.allclose(root, manifest["initial_root"]) or not np.allclose(
+            correction, manifest["field_from_boot"]
+        ):
+            raise ValueError("registration pose/transform disagrees with boot evidence")
+    meta, pixels = read_map(directory / "field")
+    if meta["origin"][2] != 0:
+        raise ValueError("AMCL field map must have zero origin yaw")
+    x, y, yaw = manifest["initial_root"]
+    col = math.floor((x - meta["origin"][0]) / meta["resolution"])
+    row = pixels.shape[0] - 1 - math.floor((y - meta["origin"][1]) / meta["resolution"])
+    if not (0 <= row < pixels.shape[0] and 0 <= col < pixels.shape[1]):
+        raise ValueError("measured root lies outside map")
+    occupancy = (255 - int(pixels[row, col])) / 255
+    if occupancy >= meta["free_thresh"]:
+        raise ValueError(
+            "measured root is occupied or unknown; inspect registration in RViz"
+        )
+    print(json.dumps(manifest, indent=2))
+    print(
+        f"CHECK OK ({manifest.get('frame_mode', 'field')}): root ({x:.3f}, {y:.3f}, {yaw:.3f}); inspect /map and /scan in RViz"
+    )
+    return manifest
+
+
+class Runtime:
+    """Bound ROS operations by wall time, including with a paused simulation clock."""
+
+    def __init__(self, sim_time=False):
+        import rclpy
+        from rclpy.parameter import Parameter
+
+        self.ros = rclpy
+        rclpy.init(args=[])
+        self.node = rclpy.create_node("operator_workflow")
+        self.node.set_parameters([Parameter("use_sim_time", value=sim_time)])
+        self.subscriptions = []
+        if sim_time:
+            self.wait(lambda: self.node.get_clock().now().nanoseconds > 0, 10.0)
+
+    def wait(self, predicate, timeout):
+        deadline = time.monotonic() + timeout
+        while self.ros.ok() and time.monotonic() < deadline:
+            self.ros.spin_once(self.node, timeout_sec=0.1)
+            if predicate():
+                return
+        raise RuntimeError(
+            "timed out waiting for fresh ROS data/service; no success declared"
+        )
+
+    def close(self):
+        self.node.destroy_node()
+        self.ros.try_shutdown()
+
+
+def scan_geometry(scan):
+    """Validate a complete scan lattice; variable geometry is a known driver blocker."""
+    values = [scan.angle_min, scan.angle_max, scan.angle_increment]
+    if not all(math.isfinite(v) for v in values) or scan.angle_increment <= 0:
+        raise ValueError("invalid lidar angular geometry")
+    count = len(scan.ranges)
+    if (
+        count < 10
+        or abs(scan.angle_max - scan.angle_min - (count - 1) * scan.angle_increment)
+        > scan.angle_increment * 0.02
+    ):
+        raise ValueError(
+            "lidar beam count disagrees with angular geometry; driver repair required"
+        )
+    return np.array([count, *values])
+
+
+def geometry_matches(reference, current):
+    """Beam count is exact; angles tolerate only float serialization noise."""
+    return reference[0] == current[0] and np.allclose(
+        reference[1:], current[1:], rtol=1e-6, atol=1e-7
+    )
+
+
+def preflight(runtime, args):
+    """Observe consecutive live scans, failing on variable lattice or stale stamps."""
+    from sensor_msgs.msg import LaserScan
+    from rclpy.qos import qos_profile_sensor_data
+
+    state = dict(geometry=None, count=0, stamp=None)
+
+    def receive(message):
+        current = scan_geometry(message)
+        if state["geometry"] is not None and not geometry_matches(
+            state["geometry"], current
+        ):
+            raise ValueError(
+                "VARIABLE LIDAR GEOMETRY: beam count/angular lattice changed; "
+                "Karto cannot map this stream. Repair driver before mapping/localization"
+            )
+        stamp = message.header.stamp.sec * 10**9 + message.header.stamp.nanosec
+        age = (runtime.node.get_clock().now().nanoseconds - stamp) / 1e9
+        if not -0.2 <= age <= args.max_age or (
+            state["stamp"] is not None and stamp <= state["stamp"]
+        ):
+            raise ValueError("lidar scan stamp is stale or non-increasing")
+        state.update(geometry=current, count=state["count"] + 1, stamp=stamp)
+
+    sub = runtime.node.create_subscription(
+        LaserScan, "/scan", receive, qos_profile_sensor_data
+    )
+    try:
+        runtime.wait(lambda: state["count"] >= 20, args.timeout)
+    finally:
+        runtime.node.destroy_subscription(sub)
+    print(f"PREFLIGHT OK: 20 fresh scans, fixed geometry {state['geometry'].tolist()}")
+    return state["geometry"]
+
+
+def capture_boot(args):
+    """Capture fresh stationary root and chassis before any hand mapping motion."""
+    from sensor_msgs.msg import JointState
+    from rclpy.time import Time
+    from tf2_ros import Buffer, TransformListener, TransformException
+
+    path = Path(args.output).resolve()
+    if path.exists():
+        raise ValueError("boot capture exists; choose a new file")
+    runtime = Runtime(args.sim_time)
+    buffer = Buffer()
+    listener = TransformListener(buffer, runtime.node)
+    samples = []
+    pending = deque(maxlen=300)
+    live = observe_inputs(runtime, args)
+
+    def receive(message):
+        pending.append(message)
+
+    def collect():
+        if not pending:
+            return False
+        message = pending[0]
+        if "chassis_yaw" not in message.name:
+            pending.popleft()
+            return False
+        stamp = message.header.stamp.sec * 10**9 + message.header.stamp.nanosec
+        age = (runtime.node.get_clock().now().nanoseconds - stamp) / 1e9
+        if age > args.max_age or (samples and stamp <= samples[-1]["stamp_ns"]):
+            pending.popleft()
+            return False
+        if age < 0:
+            return False
+        try:
+            tf = buffer.lookup_transform(
+                "map", "root", Time.from_msg(message.header.stamp)
+            )
+        except TransformException:
+            return False
+        p, q = tf.transform.translation, tf.transform.rotation
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        chassis = message.position[message.name.index("chassis_yaw")]
+        samples.append(dict(stamp_ns=stamp, root=[p.x, p.y, yaw], chassis_yaw=chassis))
+        pending.popleft()
+        return (
+            len(samples) >= 20
+            and (samples[-1]["stamp_ns"] - samples[0]["stamp_ns"]) / 1e9 >= 2
+        )
+
+    try:
+        geometry = preflight(runtime, args)
+        runtime.subscriptions.append(
+            runtime.node.create_subscription(JointState, "/joint_states", receive, 20)
+        )
+        try:
+            runtime.wait(collect, args.timeout)
+        except RuntimeError as error:
+            raise RuntimeError(
+                "boot-pose timeout: need stamped map->root TF and fresh chassis_yaw"
+            ) from error
+        first = samples[0]
+        if any(
+            math.hypot(s["root"][0] - first["root"][0], s["root"][1] - first["root"][1])
+            > 0.03
+            or abs(angle(s["root"][2] - first["root"][2])) > 0.03
+            or abs(angle(s["chassis_yaw"] - first["chassis_yaw"])) > 0.03
+            for s in samples
+        ):
+            raise ValueError(
+                "boot capture moved >3 cm/0.03 rad; park and retry before mapping"
+            )
+        result = dict(samples[-1], geometry=geometry.tolist(), **live)
+        if not all(math.isfinite(v) for v in [*result["root"], result["chassis_yaw"]]):
+            raise ValueError("nonfinite boot pose")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x") as output:
+            json.dump(result, output, indent=2)
+        print(f"BOOT CAPTURE OK: {path}: {result}")
+    finally:
+        del listener
+        runtime.close()
+
+
+def observe_inputs(runtime, args, require_session=True):
+    """Capture fresh raw odometry, referee team and live supervisor session."""
+    from nav_msgs.msg import Odometry
+    from dji_serial_bridge.msg import RefSysStatus
+    from std_msgs.msg import String
+    from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
+
+    room = getattr(args, "room", False)
+    no_referee = getattr(args, "no_referee", False)
+    team = getattr(args, "team", None)
+    if no_referee and (room or team not in ("red", "blue")):
+        raise ValueError("--no-referee requires --team red|blue in field mode")
+    state = dict(team=None if room else team) if room or no_referee else {}
+
+    def odom(message):
+        stamp = message.header.stamp.sec * 10**9 + message.header.stamp.nanosec
+        age = (runtime.node.get_clock().now().nanoseconds - stamp) / 1e9
+        p = message.pose.pose.position
+        if 0 <= age <= args.max_age and all(math.isfinite(v) for v in (p.x, p.y)):
+            state["raw_odom"] = [p.x, p.y]
+
+    def referee(message):
+        if message.robot_id and not room:
+            observed = "blue" if message.is_on_blue_team else "red"
+            if no_referee and observed != team:
+                raise ValueError("explicit team disagrees with live referee")
+            state["team"] = "blue" if message.is_on_blue_team else "red"
+
+    streams = [
+        (Odometry, "/odom", odom, qos_profile_sensor_data),
+        (RefSysStatus, "/dji_serial_bridge/ref_sys", referee, qos_profile_sensor_data),
+    ]
+    if require_session:
+        streams.append(
+            (
+                String,
+                "/operator_workflow/session",
+                lambda m: state.update(session_id=m.data),
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            )
+        )
+    for message_type, topic, callback, qos in streams:
+        runtime.subscriptions.append(
+            runtime.node.create_subscription(message_type, topic, callback, qos)
+        )
+    try:
+        required = {"raw_odom", "team"} | ({"session_id"} if require_session else set())
+        def ready():
+            if not required <= state.keys():
+                return False
+            if room:
+                return True
+            expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+            return math.dist(state["raw_odom"], expected) <= 0.3
+
+        runtime.wait(ready, args.timeout)
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"timeout waiting for raw /odom at team start, referee team, live session; received {state}"
+        ) from error
+    if not room:
+        expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+        if math.dist(state["raw_odom"], expected) > 0.3:
+            raise ValueError(f"raw /odom disagrees with team start {expected}: {state['raw_odom']}")
+    return dict(state, frame_mode="room" if room else "field")
+
+
+def verify_start(boot, live):
+    """Field-aligned maps support either team; validate the live contract start."""
+    expected = [-4.625 if live["team"] == "red" else 4.625, 0.0]
+    if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], expected) > 0.3:
+        raise ValueError(
+            f"seed/team mismatch: observed={live}, expected raw_odom={expected}; return to team start"
+        )
+    return [*expected, 0.0]
+
+
+def current_root(runtime, args):
+    """Get a fresh map->root pose, never a stale cached transform."""
+    from tf2_ros import Buffer, TransformListener, TransformException
+    from rclpy.time import Time
+
+    buffer = Buffer()
+    listener = TransformListener(buffer, runtime.node)
+    result = []
+
+    def collect():
+        try:
+            tf = buffer.lookup_transform("map", "root", Time())
+        except TransformException:
+            return False
+        stamp = tf.header.stamp.sec * 10**9 + tf.header.stamp.nanosec
+        if abs(runtime.node.get_clock().now().nanoseconds - stamp) / 1e9 > args.max_age:
+            return False
+        p, q = tf.transform.translation, tf.transform.rotation
+        result[:] = [
+            p.x,
+            p.y,
+            math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+        ]
+        return True
+
+    try:
+        runtime.wait(collect, args.timeout)
+        return result
+    except RuntimeError as error:
+        raise RuntimeError(
+            "timeout waiting for fresh map->root TF; stay parked and check stack"
+        ) from error
+    finally:
+        del listener
+
+
+def save(args):
+    """Save one explicit snapshot with validated service result and new files."""
+    from nav_msgs.msg import OccupancyGrid
+    from rclpy.qos import DurabilityPolicy, QoSProfile
+    from slam_toolbox.srv import SerializePoseGraph
+
+    target = Path(args.output).resolve()
+    if target.exists():
+        raise ValueError("output exists; choose a new snapshot directory")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    runtime = Runtime(args.sim_time)
+    stage = Path(tempfile.mkdtemp(prefix=".mapping-", dir=target.parent))
+    try:
+        geometry = preflight(runtime, args)
+        boot = json.loads(Path(args.boot).read_text())
+        live = observe_inputs(runtime, args)
+        verify_return(boot, current_root(runtime, args), live["session_id"])
+        if not geometry_matches(np.array(boot["geometry"]), geometry):
+            raise ValueError("scan geometry differs from boot capture")
+        shutil.copyfile(args.boot, stage / "boot.json")
+        maps = []
+        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        runtime.subscriptions.append(
+            runtime.node.create_subscription(OccupancyGrid, "/map", maps.append, qos)
+        )
+        client = runtime.node.create_client(
+            SerializePoseGraph, "/slam_toolbox/serialize_map"
+        )
+        runtime.wait(lambda: maps and client.service_is_ready(), args.timeout)
+        grid = maps[-1]
+        age = (
+            runtime.node.get_clock().now().nanoseconds
+            - (grid.header.stamp.sec * 10**9 + grid.header.stamp.nanosec)
+        ) / 1e9
+        if grid.header.frame_id != "map" or not 0 <= age <= args.max_age:
+            raise ValueError(
+                f"expected fresh map frame; frame={grid.header.frame_id}, age={age}"
+            )
+        map_stamp = grid.header.stamp.sec * 10**9 + grid.header.stamp.nanosec
+        if map_stamp < boot["stamp_ns"]:
+            raise ValueError("map predates boot capture; wrong session or clock reset")
+        data = np.asarray(grid.data).reshape(grid.info.height, grid.info.width)
+        pixels = np.full(data.shape, 205, dtype=np.uint8)
+        pixels[(data >= 0) & (data <= 20)] = 254
+        pixels[(data >= 65) & (data <= 100)] = 0
+        Image.fromarray(pixels[::-1]).save(stage / "map.pgm")
+        origin = grid.info.origin
+        q = origin.orientation
+        meta = dict(
+            image="map.pgm",
+            mode="trinary",
+            resolution=grid.info.resolution,
+            origin=[
+                origin.position.x,
+                origin.position.y,
+                math.atan2(
+                    2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)
+                ),
+            ],
+            negate=0,
+            occupied_thresh=0.65,
+            free_thresh=0.196,
+        )
+        (stage / "map.yaml").write_text(yaml.safe_dump(meta))
+        request = SerializePoseGraph.Request()
+        request.filename = str(stage / "map")
+        future = client.call_async(request)
+        runtime.wait(future.done, args.timeout)
+        if future.result() is None or future.result().result != 0:
+            raise RuntimeError(f"serialize_map failed: {future.result()}")
+        validate_bundle(stage)
+        stage.rename(target)
+        print(f"SAVE OK: {target}/map.{{pgm,yaml,posegraph,data}}")
+    finally:
+        runtime.close()
+        if stage.exists():
+            shutil.rmtree(stage)
+
+
+def sample_ok(message, expected, max_std, max_yaw_std, max_distance, max_yaw):
+    """Reject nonfinite/asymmetric/indefinite planar covariance and wrong pose."""
+    p = message.pose.pose
+    cov = np.array(message.pose.covariance).reshape(6, 6)[np.ix_([0, 1, 5], [0, 1, 5])]
+    q = p.orientation
+    values = [p.position.x, p.position.y, q.x, q.y, q.z, q.w, *cov.flat]
+    if not np.isfinite(values).all() or not np.allclose(cov, cov.T):
+        return False
+    if (
+        np.linalg.eigvalsh(cov).min() < -1e-9
+        or abs(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w - 1) > 0.01
+    ):
+        return False
+    yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+    return (
+        np.linalg.eigvalsh(cov[:2, :2]).max() <= max_std**2
+        and cov[2, 2] <= max_yaw_std**2
+        and math.hypot(p.position.x - expected[0], p.position.y - expected[1])
+        <= max_distance
+        and abs(angle(yaw - expected[2])) <= max_yaw
+    )
+
+
+def convergence(args):
+    """Require sustained fresh AMCL updates and scan/TF evidence at the parked start."""
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    from sensor_msgs.msg import LaserScan
+    from std_srvs.srv import Empty
+    from tf2_ros import Buffer, TransformListener, TransformException
+    from rclpy.time import Time
+
+    manifest = check(args.directory)
+    runtime = Runtime(args.sim_time)
+    buffer = Buffer()
+    listener = TransformListener(buffer, runtime.node)
+    state = dict(start=None, count=0, stamp=None, scan=None, last=None)
+    scans = deque(maxlen=100)
+
+    def receive(message):
+        stamp = message.header.stamp.sec * 10**9 + message.header.stamp.nanosec
+        now = runtime.node.get_clock().now().nanoseconds
+        p = message.pose.pose
+        q = p.orientation
+        state["observed"] = [
+            p.position.x,
+            p.position.y,
+            math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+        ]
+        if stamp == state["stamp"]:
+            return
+        valid = (
+            message.header.frame_id == "map"
+            and -0.2 <= (now - stamp) / 1e9 <= args.max_age
+            and sample_ok(
+                message,
+                manifest["initial_root"],
+                args.max_std,
+                args.max_yaw_std,
+                args.max_distance,
+                args.max_yaw,
+            )
+        )
+        if state["stamp"] is not None and stamp <= state["stamp"]:
+            valid = False
+        if (
+            state["last"] is not None
+            and time.monotonic() - state["last"] > args.max_age
+        ):
+            valid = False
+        state["stamp"], state["last"] = stamp, time.monotonic()
+        if valid:
+            state["start"] = state["start"] or time.monotonic()
+            state["count"] += 1
+        else:
+            state["start"], state["count"] = None, 0
+
+    runtime.subscriptions.append(
+        runtime.node.create_subscription(
+            PoseWithCovarianceStamped, "/amcl_pose", receive, 10
+        )
+    )
+    from rclpy.qos import qos_profile_sensor_data
+
+    def scan(message):
+        current = scan_geometry(message)
+        if "geometry" in state and not geometry_matches(state["geometry"], current):
+            raise ValueError(
+                "VARIABLE LIDAR GEOMETRY: driver repair required; convergence rejected"
+            )
+        scans.append(message)
+        state["scan"] = message
+
+    runtime.subscriptions.append(
+        runtime.node.create_subscription(
+            LaserScan, "/scan", scan, qos_profile_sensor_data
+        )
+    )
+    client = runtime.node.create_client(Empty, "/request_nomotion_update")
+    pending = None
+    next_request = 0
+
+    def ready():
+        nonlocal pending, next_request
+        now = time.monotonic()
+        if (
+            now >= next_request
+            and client.service_is_ready()
+            and (pending is None or pending.done())
+        ):
+            pending = client.call_async(Empty.Request())
+            next_request = now + 1.0
+        laser = state["scan"]
+        if laser is None or state["start"] is None or state["last"] is None:
+            return False
+        age = (
+            runtime.node.get_clock().now().nanoseconds
+            - (laser.header.stamp.sec * 10**9 + laser.header.stamp.nanosec)
+        ) / 1e9
+        finite = [
+            v
+            for v in laser.ranges
+            if math.isfinite(v) and laser.range_min < v < laser.range_max
+        ]
+        if not 0 <= age <= args.max_age or len(finite) < 10:
+            state["start"], state["count"] = None, 0
+            return False
+        try:
+            matched = False
+            for candidate in reversed(scans):
+                candidate_age = (
+                    runtime.node.get_clock().now().nanoseconds
+                    - (
+                        candidate.header.stamp.sec * 10**9
+                        + candidate.header.stamp.nanosec
+                    )
+                ) / 1e9
+                if not 0 <= candidate_age <= args.max_age:
+                    continue
+                try:
+                    buffer.lookup_transform(
+                        "map", "root", Time.from_msg(candidate.header.stamp)
+                    )
+                    buffer.lookup_transform(
+                        "root",
+                        candidate.header.frame_id,
+                        Time.from_msg(candidate.header.stamp),
+                    )
+                    matched = True
+                    break
+                except TransformException:
+                    continue
+            if not matched:
+                return False
+        except TransformException:
+            return False
+        return (
+            state["count"] >= args.samples
+            and now - state["start"] >= args.hold
+            and now - state["last"] <= args.max_age
+        )
+
+    try:
+        reference = preflight(runtime, args)
+        if manifest.get("frame_mode") == "field":
+            boot = json.loads(
+                (Path(args.directory) / manifest["source"] / "boot.json").read_text()
+            )
+            manifest["initial_root"] = verify_start(
+                boot, observe_inputs(runtime, args, require_session=False))
+        state["geometry"] = reference
+        try:
+            runtime.wait(ready, args.timeout)
+        except RuntimeError as error:
+            observed = state.get("observed")
+            expected = manifest["initial_root"]
+            away = observed and (
+                math.dist(observed[:2], expected[:2]) > args.max_distance
+                or abs(angle(observed[2] - expected[2])) > args.max_yaw
+            )
+            reason = (
+                "away from registered start; return and park"
+                if away
+                else "fresh covariance/scan/TF gates did not pass"
+            )
+            raise RuntimeError(
+                f"convergence timeout: {reason}; observed={observed}, expected={expected}"
+            ) from error
+        print(
+            "CONVERGED: fresh AMCL covariance/pose, scan and TF gates passed; "
+            "confirm scan-wall agreement in RViz before use. This is not ground-truth accuracy."
+        )
+    finally:
+        del listener
+        runtime.close()
+
+
+def set_insertion(args, paused):
+    """Set slam_toolbox scan insertion; its service toggles, so read, call once, verify."""
+    from rcl_interfaces.srv import GetParameters
+    from slam_toolbox.srv import Pause
+    from std_msgs.msg import String
+    from rclpy.qos import QoSProfile, DurabilityPolicy
+
+    expected = json.loads((Path(args.session) / "session.json").read_text())["session_id"]
+    runtime = Runtime(args.sim_time)
+    try:
+        live = {}
+        runtime.subscriptions.append(
+            runtime.node.create_subscription(
+                String,
+                "/operator_workflow/session",
+                lambda m: live.update(session_id=m.data),
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            )
+        )
+        runtime.wait(lambda: "session_id" in live, args.timeout)
+        if live["session_id"] != expected:
+            raise ValueError("live mapping session differs from this session directory")
+        getter = runtime.node.create_client(GetParameters, "/slam_toolbox/get_parameters")
+        toggle = runtime.node.create_client(Pause, "/slam_toolbox/pause_new_measurements")
+
+        def call(client, request):
+            runtime.wait(client.service_is_ready, args.timeout)
+            future = client.call_async(request)
+            runtime.wait(future.done, args.timeout)
+            return future.result()
+
+        def state():
+            values = call(
+                getter, GetParameters.Request(names=["paused_new_measurements"])
+            ).values
+            if len(values) != 1 or values[0].type != 1:
+                raise RuntimeError("slam_toolbox paused_new_measurements is unavailable")
+            return values[0].bool_value
+
+        if state() != paused:
+            if not call(toggle, Pause.Request()).status:
+                raise RuntimeError("slam_toolbox refused the pause toggle")
+            if state() != paused:
+                raise RuntimeError("scan insertion state did not change; check before driving")
+    finally:
+        runtime.close()
+    if paused:
+        print("SCAN INSERTION PAUSED: transfer with existing controls, stop on level ground and settle.")
+    else:
+        print("SCAN INSERTION RESUMED: sweep the head parked; check scans stay on mapped walls.")
+
+
+def ensure_stack_stopped():
+    """Bound graph discovery and refuse a duplicate robot/localization stack."""
+    runtime = Runtime()
+    blocked = {
+        "pose_translator",
+        "slam_toolbox",
+        "amcl",
+        "map_server",
+        "localization_container",
+        "slam_container",
+        "ekf_filter_node",
+        "passthrough_odom_publisher",
+        "mcb_relay",
+    }
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            runtime.ros.spin_once(runtime.node, timeout_sec=0.1)
+            found = sorted(set(runtime.node.get_node_names()) & blocked)
+            if found:
+                raise ValueError(
+                    "existing robot stack: "
+                    + ", ".join(found)
+                    + "; stop the robot service/launch first (README field-day workflow)"
+                )
+    finally:
+        runtime.close()
+
+
+def field_start(args, extra):
+    """Bring up raw inputs first, then stop them before starting the backend."""
+    launch = ["ros2", "launch", "thornbots_pkg", "auto.launch.py",
+              "operator_inputs_only:=true", *extra]
+    old_handlers = {}
+
+    def interrupted(signum, _frame):
+        raise RuntimeError(f"raw-input validation interrupted by signal {signum}")
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        old_handlers[signum] = signal.signal(signum, interrupted)
+    process = None
+    runtime = None
+    try:
+        process = subprocess.Popen(launch, start_new_session=True)
+        runtime = Runtime(args.sim_time)
+        for signum in old_handlers:
+            signal.signal(signum, interrupted)
+        return verify_start({}, observe_inputs(runtime, args, require_session=False))
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGINT)
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+        if runtime:
+            runtime.close()
+        for signum, handler in old_handlers.items():
+            signal.signal(signum, handler)
+
+
+def run_stack(args, session, launch):
+    """Supervise the launch, retain backups and stop the whole owned process group."""
+    runtime = None
+    process = None
+    bridge = None
+    old_handlers = {}
+    warned = False
+    stopping = False
+
+    def warn_unsaved():
+        nonlocal warned
+        if args.command == "mapping" and not warned and not (session / "snapshot" / "map.posegraph").exists():
+            print(f"WARNING: UNSAVED mapping stop. Backup: {session / 'backup'}; explicit save has not passed.", flush=True)
+            warned = True
+
+    def stop(signum, _frame):
+        nonlocal stopping
+        stopping = True
+        warn_unsaved()
+        for owned in (process, bridge):
+            if owned is not None and owned.poll() is None:
+                os.killpg(owned.pid, signum)
+
+    try:
+        if args.command == "mapping":
+            from std_msgs.msg import String
+            from rclpy.qos import QoSProfile, DurabilityPolicy
+
+            runtime = Runtime(args.sim_time)
+            session_id = str(uuid.uuid4())
+            (session / "session.json").write_text(
+                json.dumps(dict(session_id=session_id, frame_mode="room" if args.room else "field",
+                                team=None if args.room else args.team,
+                                no_referee=args.no_referee))
+            )
+            publisher = runtime.node.create_publisher(
+                String,
+                "/operator_workflow/session",
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            )
+            publisher.publish(String(data=session_id))
+        process = subprocess.Popen(launch, start_new_session=True)
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            old_handlers[signum] = signal.signal(signum, stop)
+        bridge = subprocess.Popen(FOXGLOVE_COMMAND, start_new_session=True)
+        if args.command == "localize":
+            for name, value in dict(
+                max_std=0.25,
+                max_yaw_std=0.15,
+                max_distance=0.4,
+                max_yaw=0.25,
+                hold=5.0,
+                samples=5,
+                max_age=3.0,
+            ).items():
+                setattr(args, name, value)
+            convergence(args)
+            if process.poll() is not None:
+                raise RuntimeError("robot launch stopped before parked gates completed")
+            if not stopping and bridge.poll() is not None:
+                raise RuntimeError(f"Foxglove bridge exited {bridge.returncode}")
+            print(
+                "LOCALIZE PASS: parked gates passed; verify scan/wall overlap before use.",
+                flush=True,
+            )
+            print(
+                f"NEXT: keep this terminal running; stop with Ctrl-C when finished. Session: {session}",
+                flush=True,
+            )
+        else:
+            print(
+                f"NEXT (second terminal, before moving): ros2 run thornbots_pkg operator_workflow boot-pose {session}",
+                flush=True,
+            )
+        while process.poll() is None:
+            if not stopping and bridge.poll() is not None:
+                raise RuntimeError(f"Foxglove bridge exited {bridge.returncode}")
+            if runtime:
+                runtime.ros.spin_once(runtime.node, timeout_sec=0.1)
+            else:
+                time.sleep(0.1)
+        if process.returncode:
+            raise RuntimeError(f"robot launch exited {process.returncode}")
+    finally:
+        warn_unsaved()
+        for owned in (process, bridge):
+            if owned is not None and owned.poll() is None:
+                os.killpg(owned.pid, signal.SIGINT)
+                try:
+                    owned.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    os.killpg(owned.pid, signal.SIGKILL)
+                    owned.wait(timeout=5)
+        for signum, handler in old_handlers.items():
+            signal.signal(signum, handler)
+        if runtime:
+            runtime.close()
+
+
+def main():
+    """Dispatch explicit operator steps; launch always uses the existing robot entrypoint."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    mapping = commands.add_parser("mapping")
+    mapping.add_argument("--room", action="store_true")
+    mapping.add_argument("session")
+    mapping.add_argument("launch_args", nargs="*")
+    saving = commands.add_parser("save")
+    saving.add_argument("output")
+    booting = commands.add_parser("boot-pose")
+    booting.add_argument("output")
+    preflighting = commands.add_parser("preflight")
+    alignment = commands.add_parser("align")
+    alignment.add_argument("source")
+    alignment.add_argument("--team", choices=["red", "blue"])
+    for name in ("x", "y", "yaw"):
+        alignment.add_argument("--" + name, type=float, required=name == "yaw")
+    room = commands.add_parser("prepare-room")
+    room.add_argument("source")
+    checking = commands.add_parser("check")
+    checking.add_argument("directory")
+    pausing = commands.add_parser("pause")
+    resuming = commands.add_parser("resume")
+    for command in (pausing, resuming):
+        command.add_argument("session")
+    localizing = commands.add_parser("localize")
+    localizing.add_argument("directory")
+    for command in (mapping, localizing):
+        # Raw wheel input is the default; see README "Broad-field coverage".
+        inputs = command.add_mutually_exclusive_group()
+        inputs.add_argument("--raw-odom", action="store_true", help="Wheel odometry (default)")
+        inputs.add_argument("--rf2o", action="store_true", help="Fuse rf2o/EKF instead")
+        command.add_argument("--no-referee", action="store_true")
+        command.add_argument("--team", choices=["red", "blue"])
+    localizing.add_argument("launch_args", nargs="*")
+    monitoring = commands.add_parser("convergence")
+    monitoring.add_argument("directory")
+    monitoring.add_argument("--max-std", type=float, default=0.25)
+    monitoring.add_argument("--max-yaw-std", type=float, default=0.15)
+    monitoring.add_argument("--max-distance", type=float, default=0.4)
+    monitoring.add_argument("--max-yaw", type=float, default=0.25)
+    monitoring.add_argument("--hold", type=float, default=5.0)
+    monitoring.add_argument("--samples", type=int, default=5)
+    for command in (
+        saving, monitoring, booting, preflighting, mapping, localizing, pausing, resuming
+    ):
+        command.add_argument("--sim-time", action="store_true")
+        command.add_argument("--timeout", type=float, default=60.0)
+        command.add_argument(
+            "--max-age", type=float, default=3.0 if command == monitoring else 30.0
+        )
+    # Attach negative scientific values to their option; argparse otherwise sees flags.
+    tokens = list(sys.argv[1:])
+    for index in range(len(tokens) - 2, -1, -1):
+        if tokens[index] in ("--x", "--y", "--yaw") and re.fullmatch(
+            r"-\d*\.?\d+[eE][+-]?\d+", tokens[index + 1]
+        ):
+            tokens[index : index + 2] = [tokens[index] + "=" + tokens[index + 1]]
+    args, trailing = parser.parse_known_args(tokens)
+    session = Path(
+        getattr(
+            args,
+            "session",
+            getattr(
+                args, "source", getattr(args, "directory", getattr(args, "output", "."))
+            ),
+        )
+    ).resolve()
+    if args.command in ("align", "prepare-room"):
+        args.source, args.output = session / "snapshot", session / "deployment"
+    elif args.command == "save":
+        args.output, args.boot = session / "snapshot", session / "boot.json"
+    elif args.command == "boot-pose":
+        args.output = session / "boot.json"
+    elif args.command in ("check", "localize", "convergence"):
+        args.directory = session / "deployment"
+    if trailing:
+        if args.command not in ("mapping", "localize") or any(
+            "  " in a or ":=" not in a for a in trailing
+        ):
+            parser.error("unrecognized arguments: " + " ".join(trailing))
+        args.launch_args += trailing
+    for name, value in vars(args).items():
+        if isinstance(value, float) and not math.isfinite(value):
+            parser.error(f"{name} must be finite")
+        if isinstance(value, list) and any(
+            isinstance(v, float) and not math.isfinite(v) for v in value
+        ):
+            parser.error(f"{name} must be finite")
+    for name in (
+        "timeout",
+        "max_age",
+        "max_std",
+        "max_yaw_std",
+        "max_distance",
+        "max_yaw",
+        "hold",
+        "samples",
+    ):
+        if hasattr(args, name) and getattr(args, name) <= 0:
+            parser.error(f"{name} must be positive")
+    try:
+        if args.command in ("boot-pose", "save"):
+            metadata = json.loads((session / "session.json").read_text())
+            args.room = metadata.get("frame_mode", "field") == "room"
+            args.no_referee = metadata.get("no_referee", False)
+            args.team = metadata.get("team")
+        if args.command == "boot-pose":
+            capture_boot(args)
+        elif args.command == "preflight":
+            runtime = Runtime(args.sim_time)
+            try:
+                preflight(runtime, args)
+            finally:
+                runtime.close()
+        elif args.command == "save":
+            save(args)
+        elif args.command == "prepare-room":
+            prepare_room(args)
+        elif args.command == "align":
+            align(args)
+        elif args.command == "check":
+            check(args.directory)
+        elif args.command == "convergence":
+            convergence(args)
+        elif args.command in ("pause", "resume"):
+            set_insertion(args, args.command == "pause")
+        else:
+            extra = args.launch_args
+            if args.rf2o and getattr(args, "room", False):
+                raise ValueError("room mode always uses raw wheel passthrough; drop --rf2o")
+            if args.no_referee and (getattr(args, "room", False) or args.team is None):
+                raise ValueError("--no-referee requires --team red|blue in field mode")
+            protected = {
+                "localization_mode",
+                "load_map",
+                "autosave_map",
+                "map_file",
+                "initial_x",
+                "initial_y",
+                "use_rf2o",
+                "amcl_initial_x",
+                "amcl_initial_y",
+                "amcl_initial_yaw",
+                "seed_from_raw_odom",
+                "seed_require_team",
+                "seed_explicit_team",
+                "operator_inputs_only",
+                "map_save_dir",
+            }
+            if any(value.split(":=")[0] in protected for value in extra):
+                raise ValueError("workflow-owned launch arguments cannot be overridden")
+            ensure_stack_stopped()
+            launch = ["ros2", "launch", "thornbots_pkg", "auto.launch.py"]
+            if args.command == "mapping":
+                if not args.room:
+                    field_start(args, extra)
+                session.mkdir(parents=True, exist_ok=False)
+                launch += [
+                    "localization_mode:=mapping",
+                    "load_map:=false",
+                    "autosave_map:=true",
+                    f"map_save_dir:={session / 'backup'}",
+                    "seed_from_raw_odom:=true",
+                    f"use_rf2o:={str(args.rf2o and not args.room).lower()}",
+                ]
+            else:
+                manifest = check(args.directory)
+                room_mode = manifest.get("frame_mode") == "room"
+                if args.rf2o and room_mode:
+                    raise ValueError("room bundles always use raw wheel passthrough; drop --rf2o")
+                args.room = room_mode
+                x, y, yaw = manifest["initial_root"]
+                if not room_mode:
+                    x, y, yaw = field_start(args, extra)
+                launch += [
+                    "localization_mode:=amcl",
+                    "autosave_map:=false",
+                    f"map_file:={Path(args.directory).resolve() / 'field'}",
+                    "seed_from_raw_odom:=true",
+                    f"use_rf2o:={str(args.rf2o and not room_mode).lower()}",
+                    f"amcl_initial_x:={x}",
+                    f"amcl_initial_y:={y}",
+                    f"amcl_initial_yaw:={yaw}",
+                ]
+            room_mode = getattr(args, "room", False)
+            launch.append(f"seed_require_team:={str(not (room_mode or args.no_referee)).lower()}")
+            if args.no_referee:
+                launch.append(f"seed_explicit_team:={args.team}")
+            ensure_stack_stopped()
+            run_stack(args, session, launch + extra)
+        if args.command != "preflight":
+            next_step = {
+                "boot-pose": "save",
+                "save": "prepare-room" if getattr(args, "room", False) else "align",
+                "align": "localize",
+                "prepare-room": "localize",
+                "check": "localize",
+                "convergence": "check",
+                "pause": "resume",
+            }.get(args.command)
+            if next_step:
+                suffix = (
+                    " --yaw RADIANS"
+                    if next_step == "align"
+                    else ""
+                )
+                print(
+                    f"NEXT: ros2 run thornbots_pkg operator_workflow {next_step} {session}{suffix}"
+                )
+    except (ValueError, RuntimeError, OSError, KeyError) as error:
+        verdict = "LOCALIZE FAIL" if args.command == "localize" else "FAILED"
+        parser.exit(1, f"{verdict}: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
