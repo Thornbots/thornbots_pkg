@@ -30,8 +30,8 @@ topics shown above. `auto.launch.py` starts the relay with
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
 `enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
-`armor_tracker.hpp` for `target_tracker`). Every node is C++ (`src/`); only
-`launch/` is Python.
+`armor_tracker.hpp` for `target_tracker`). Runtime nodes are C++ (`src/`);
+launch and the operator workflow use Python.
 
 ```
 /dji_serial_bridge/pose --[pose_translator]--> /odom --[odom_tf_broadcaster]--> odom->root TF
@@ -177,6 +177,8 @@ the consumer acknowledgment and the node's subscriptions: `TargetState`,
 `RobotPose` and `RefSysStatus` (idle team/hit events), nothing else. The pytest run is
 the ament copyright check of `include/`, `launch/`, `src/` and `test/`, and
 the flake8 and pep257 checks of `launch/` and `test/`.
+It also runs the ROS-free operator workflow geometry, artifact, convergence
+and process-lifecycle regressions in `test/test_operator_workflow.py`.
 
 The localization drift suite is `ros2 launch sim
 localization_tests.launch.py`, which launches `auto.launch.py`; see
@@ -662,8 +664,166 @@ at the zone. The startup script already forwards these arguments to
 ### Initial field position
 
 See [localization's initial-position contract](../sentry_localization/README.md#initial-field-position)
-and [field-day and room workflow](../sentry_localization/README.md#field-day-and-room-workflow)
+and [field-day and room workflow](#field-day-and-room-workflow)
 for navigation seeds, independent AMCL field poses and mapping a new field.
+
+## Field-day and room workflow
+
+`operator_workflow` runs the mapping, boot-capture, save, registration and AMCL acceptance steps.
+`$SESSION` names one attempt's folder; choose a new name for every attempt.
+`--room` rehearses without a referee, keeping boot coordinates instead of field registration.
+
+### Field-day card — keep the robot parked at its start for steps 2, 4 and 5
+
+Before power-on, place the robot on its start mark and keep it still while the
+IMU settles; moving it during settling caused heading drift. After any SWD
+flash, power-cycle the MCB before trusting odometry: a warm reset leaves the
+Pico I2C dead. MCB power-cycling also reboots the Jetson (shared power); re-sync
+the clock, restart the container and begin a new session. Turning the controller
+off during a session invalidates that attempt; keep it on throughout.
+
+1. Stop the existing robot service with `sudo systemctl stop thornbots`
+   (or stop the manual launch). In a sourced robot-container terminal,
+   choose a **new** session and start mapping (keep this terminal open):
+   `export SESSION=/workspaces/isaac_ros-dev/maps/oct31-red-01`
+   then `ros2 run thornbots_pkg operator_workflow mapping "$SESSION"`.
+2. In a second terminal, set the same `SESSION`; check head yaw ≈ 0 with
+   `ros2 run tf2_ros tf2_echo root head` (Ctrl-C after checking), then capture **before moving**:
+   `ros2 run thornbots_pkg operator_workflow boot-pose "$SESSION"`.
+3. Drive ≤0.2 m/s with the head still, covering the whole field
+   ([broad-field coverage](../sentry_localization/README.md#broad-field-coverage)). Before crossing rough or
+   raised ground: `ros2 run thornbots_pkg operator_workflow pause "$SESSION"`.
+   Stop on level ground, let the chassis settle, then `... resume "$SESSION"`
+   and keep the head centred and still. Return to the captured start, park the
+   chassis and head, and inspect coverage/loop closure and scan/wall overlap.
+   Save **before stopping mapping**:
+   `ros2 run thornbots_pkg operator_workflow save "$SESSION"`.
+4. Register the boot chassis heading in radians. Team comes from
+   the captured referee message. **Red**, facing +x:
+   `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 0`.
+   **Blue**, facing -x (use `oct31-blue-01` as the session in step 1):
+   `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 3.141592653589793`.
+   x/y default to the team's contract start. Optional surveyed `--x`/`--y`
+   refinements must stay within 0.3 m of captured raw odometry. Never enter degrees.
+5. Stop mapping with Ctrl-C. Park at the live team's contract start. Run:
+   `ros2 run thornbots_pkg operator_workflow localize "$SESSION"`.
+   Wait for **LOCALIZE PASS**, check RViz scan/wall overlap, and leave it running.
+   **FAIL:** stay parked, read the observed/expected pose and fix the cause;
+   do not enable autonomous operation on a failed or visually wrong map.
+
+### Preparation and rationale
+
+`mapping` and `localize` also start `foxglove_bridge` on port 8765. Connect
+Foxglove to `ws://<robot IP>:8765` (use an SSH tunnel if the port is unreachable).
+Only `connectionGraph` and `assets` capabilities are enabled: clients cannot
+publish, call services or access parameters. The workflow stops its bridge
+with the robot launch, including on failure; keep the workflow terminal open.
+The robot image already supplies `ros-jazzy-foxglove-bridge`.
+
+Rebuild/source the overlay before use (`colcon build --symlink-install
+--packages-select sentry_localization thornbots_pkg`, then `source install/setup.bash`).
+These commands run in the robot container. For the existing robot service see
+[full robot pipeline](../realsense-yolov8-nitros-bridge/README.md#full-robot-pipeline).
+Use the same ROS domain/middleware as the robot. The bounded existing-stack
+check cannot detect nodes hidden in another domain.
+
+One new session holds `session.json`, `boot.json`, `snapshot/`, `deployment/`
+and independent `backup/` autosaves. Keep the whole directory. Autosaves run
+while mapping; an unsaved Ctrl-C/SIGTERM prints a prominent warning and the
+backup path. Backups are recovery material, not a validated deployment bundle.
+The same warning prints if the launch exits on its own.
+An explicit save validates fresh occupancy data and serialize service success,
+then atomically installs PGM/YAML plus nonempty `.posegraph/.data` and boot data.
+Saving requires the live mapping session ID and a fresh `map->root` within
+0.15 m/0.15 rad of captured boot. This is SLAM's pose, not raw odometry.
+Return to the boot mark and heading because boot anchors map registration and
+the AMCL start; saving away from it breaks that provenance. Keep parked
+throughout saving. Occupancy and graph are sequential snapshots, not one
+transactional SLAM snapshot.
+
+No operator odometry seed is accepted. Mapping and localize default to raw wheel
+passthrough in `nav_odom`; it needs no seed. On the level-station sim map, raw
+input passed the 21 m AMCL drive while rf2o/EKF failed it, and raw input keeps
+rf2o's lidar corrections out of SLAM's own scan matching. `--rf2o` opts in to
+rf2o/EKF. Sim wheels are exact, so wheel slip on the robot is untested.
+Field startup first runs the raw-input
+stack with only UART input and pose translation (no relay or command producers), verifies referee team and raw
+start, and stops that stack before launching the selected backend. Field
+rf2o/EKF startup independently waits up to 15 wall seconds for a nonzero referee
+assignment and a subsequent fresh `/odom` at that team's start. Explicit
+`--no-referee` bypasses only the referee gate: EKF still checks fresh raw x/y
+against the explicit team's start after restart. `--raw-odom` is retained as an
+explicit alias for the wheel default. Room rehearsal uses `mapping "$SESSION" --room`,
+then the same boot/save steps, `prepare-room "$SESSION"`, and `localize
+"$SESSION"`. Room mode keeps boot coordinates and raw passthrough. It makes no
+field registration claim. Map the whole field with the
+[broad-field coverage](../sentry_localization/README.md#broad-field-coverage) procedure; a central loop alone
+leaves much of the field unseen.
+
+Room sessions record `frame_mode: room` and `team: null`; boot/save and
+`prepare-room` need no referee (including `robot_id: 0`). On a practice field
+without a referee, use `mapping "$SESSION" --no-referee --team red` (or blue)
+and the same flags on `localize`. This explicit choice still requires raw
+`/odom` within 0.3 m of that team's contract start. It cannot repair a wrong-side
+firmware seed. Boot/save inherit the choice from `session.json`.
+
+Boot capture requires 20 fixed-geometry fresh lidar scans and at least two
+stationary seconds of stamped root/chassis data (3 cm/0.03 rad motion limit).
+It records raw `/odom`, referee team and the live mapping session ID. Field
+alignment derives team from that record; optional `--team` must agree. Raw
+odometry and measured field x must have the team's sign: red negative, blue
+positive. Firmware already adds the team heading to IMU yaw, so measured chassis
+heading minus captured chassis yaw must be within 0.25 rad of zero. A 180-degree
+team/heading mistake therefore fails even on the symmetric field. `--yaw`
+accepts radians only in [-pi, pi]; negative scientific notation is accepted.
+These checks cannot replace checking the referee configuration and surveyed
+heading against the physical field.
+
+A field-aligned map can be used by either team. AMCL starts from the live team's
+contract root (-4.625, 0, 0) or (4.625, 0, 0), checked against live raw odometry;
+the map's captured team describes registration provenance. AMCL supplies
+`map->nav_odom`, not `/localization/odom`: with rf2o that topic comes from EKF
+fusing raw velocity/fixed heading and rf2o position; room/`--raw-odom` uses
+passthrough raw odometry. The relay consumes this navigation odometry, so an
+incorrect EKF seed cannot be repaired by a correct AMCL map pose alone.
+Automatic `localize` and standalone `convergence` both require samples no older
+than 3 seconds, alongside the existing covariance, scan, TF and parked-pose gates.
+
+The rigid registration maps captured boot root to the surveyed physical start.
+It resamples cell centres into a yaw-zero occupancy raster; editing YAML yaw
+alone is incorrect for AMCL. Thin surfaces can change by a cell; inspect them.
+The graph stays untouched in its original boot frame. Do not load it as a
+transformed field graph. Registration adjusts map localization only; firmware
+routes, raw CV aim, odometry constants and movement are unchanged.
+
+`localize` runs artifact/registration `check`, starts AMCL, then automatically
+runs parked `convergence`; one final LOCALIZE PASS/FAIL reports the result.
+Field convergence additionally compares current referee team/raw odometry with
+the boot record. It requests stationary AMCL updates and requires five fresh
+pose stamps over five seconds, xy std <=0.25 m, yaw std <=0.15 rad, distance from
+registered start <=0.4 m and yaw difference <=0.25 rad, plus fresh scans and
+stamped map/root/lidar TF. A timeout prints observed and expected pose and says
+when the robot is away from its start. This is filter convergence, not an
+independent proof of field accuracy. RViz wall/scan inspection remains required.
+
+For a longer parked check in another terminal (keep the real head centred):
+`ros2 run thornbots_pkg operator_workflow convergence "$SESSION" --hold 30 --samples 20 --max-distance 0.15 --max-std 0.15`.
+`check "$SESSION"` and `preflight` are also available separately. Each successful
+step prints its next command. For simulation add `--sim-time` to mapping,
+boot-pose, save, localize and convergence, and `real_hardware:=false` to
+mapping/localize. Timeouts use wall time even when simulation pauses.
+
+The Oct 18 hardware lidar had variable beam count/angular increments; preflight
+rejects that stream. Hardware scan consistency remains unvalidated. On a failed
+save or doubtful boot provenance, retain the session and recapture/remap in a
+new session. On failed localization keep parked and stop the stack before using
+the existing odometry-only fallback (`auto.launch.py localization_mode:=none
+use_rf2o:=false`), which makes no map-localization claim.
+
+Offline workflow regression checks: `python3 -m pytest test/test_operator_workflow.py`
+from this package. Package suites run through `colcon test
+--packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises
+clock ordering, TF, serialization, seed gating and parked scan updates.
 
 ## Parked room health check
 
@@ -708,7 +868,7 @@ scans; rf2o skip/drop and SLAM/AMCL drop **log reports** are lower bounds becaus
 nodes can throttle warnings and DDS can lose observations. Zero reports does
 not prove zero internal drops. An absent rf2o/navigation/map backend is SKIP;
 `require_rf2o:=true` and `require_localization:=true` make these required.
-This accommodates the [room/field workflow](../sentry_localization/README.md#field-day-and-room-workflow),
+This accommodates the [room/field workflow](#field-day-and-room-workflow),
 whose default raw-wheel mode intentionally does not run rf2o. The observer does
 not save/register maps or request stationary AMCL updates.
 

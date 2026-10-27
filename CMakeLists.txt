@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(thornbots_pkg)
 
-# All nodes are C++; only the launch file is Python.
+# Runtime nodes are C++; launch and operator orchestration use Python.
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -88,6 +88,7 @@ install(TARGETS target_tracker target_selector mcb_relay point_to_cv_target pose
   lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/operator_workflow DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY urdf DESTINATION share/${PROJECT_NAME}
   FILES_MATCHING PATTERN "*.urdf.xacro")
 install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
@@ -113,7 +114,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_aim_frames test/test_aim_frames.cpp)
   target_link_libraries(test_aim_frames aim_frames)
 
-  # Python is left for the ament lint checks (launch/, test/).
+  # Includes launch checks and ROS-free operator workflow regressions.
   find_package(ament_cmake_pytest REQUIRED)
   # The image's pip anyio ships a pytest plugin that breaks apt pytest; see setup.cfg.
   ament_add_pytest_test(thornbots_pkg_pytest test TIMEOUT 300
