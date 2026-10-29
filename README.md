@@ -843,12 +843,15 @@ On a ROS-equipped host, for example:
 
 ```bash
 ros2 run thornbots_pkg operator_workflow mmm /workspaces/isaac_ros-dev/maps \
-  --stop-command 'sudo -n systemctl stop thornbots'
+  --stop-command 'sudo -n systemctl stop thornbots' \
+  --shutdown-command 'sudo -n systemctl poweroff'
 ```
 
 For a separate ROS container, supply an equivalent host-side command, for
 example `--stop-command 'ssh -o BatchMode=yes robot-host sudo -n systemctl stop thornbots'`.
-Provision that command beforehand; it must stop only the auto-start service,
+Supply the corresponding host power-off command with `--shutdown-command`
+(for example via the same SSH connection). Both command arguments are required
+for `mmm`. Provision them beforehand; the stop command must stop only the auto-start service,
 return success and leave the coordinator environment alive. Commands are split
 as argv, with no shell expansion. A failed stop aborts setup. A manual launch
 needs its own explicit stop command. The persistent environment must already
@@ -883,7 +886,8 @@ manual/MCB saves use the full 0.15 limits and also require two parked seconds;
 keep chassis and head parked throughout the sequential occupancy/graph save.
 
 On save receipt the protocol publishes ACK first, then rechecks the local pose
-condition: at-start selects the existing validated explicit `save`; otherwise
+condition. Only an at-start gate and a last completed even exchange of 2
+(MCB echoed ready) select the existing validated explicit `save`; otherwise
 `snapshot` makes an **unvalidated recovery save**, stored separately as
 `incomplete-<uuid>/`. Both preserve map/graph, boot/session and geometry checks;
 snapshot skips the start-position/parked check and does not require raw odometry
@@ -893,14 +897,18 @@ available explicitly. Normal validated output stays in `snapshot/`; an existing
 output is never overwritten. Registration/localization remain explicit manual
 steps after reviewing the map.
 
-This inference does not read or mirror MCB Ready/Mapping/Done states. A save
+This guard uses completed exchange evidence, not a mirror of MCB states. A save
 during setup or another save is still ACKed, then logged loudly without starting
 concurrent work. Save workers keep the protocol loop responsive. The log repeats
 **SAVE STILL RUNNING: DO NOT POWER OFF** every wall second and reports completion
-or failure. **The MCB may permit immediate power-off after the ACK; asynchronous
-save can therefore be interrupted and lost.** ACK proves receipt only. Keep
-power on until SAVE COMPLETE and inspect artifacts; there is no durable-save
-completion message. Retry, timeout, odd/final-echo disambiguation and the required
+or failure. Only successful exit of the validated save (after its `SAVE OK`)
+runs `--shutdown-command`, split as argv without a shell. Save failure logs a
+loud error and keeps the coordinator running for operator recovery. Incomplete
+snapshots never trigger shutdown. Shutdown command failure also logs an error
+and keeps running. **MCB powers off its own side independently; if that removes
+Jetson power before storage finishes, data can still be lost.** ACK proves
+receipt only; there is no durable-save completion message. Retry, timeout,
+odd/final-echo disambiguation and the required
 quiet intervals are defined only in the linked wire contract. Test these with
 updated firmware before physical use; no physical acceptance is claimed.
 

@@ -29,8 +29,10 @@ def test_even_three_legs_and_duplicate_late_frames(number):
     core.receive(number, .1)
     core.receive(number, .2)
     core.receive(number, 4)
+    core.receive(6 - number, 4.1)
     assert events == [('send', number), ('send', number)]
     assert core.pending is None
+    assert core.completed_even == number
     assert not core.request(number, 4)
     assert core.request(number, 5.1)
 
@@ -146,7 +148,12 @@ def test_save_cli_keeps_incomplete_output_separate(monkeypatch, tmp_path, comman
         assert args.output.name.startswith('incomplete-')
 
 
-def test_coordinator_waits_for_session_and_survives_bridge_restart(monkeypatch, tmp_path):
+@pytest.mark.parametrize('save_code,echo,at_start,expected', [
+    (0, 2, True, 'save'), (1, 2, True, 'save'),
+    (0, None, True, 'snapshot'), (0, 4, True, 'snapshot'),
+    (0, 2, False, 'snapshot')])
+def test_coordinator_waits_for_session_and_survives_bridge_restart(
+        monkeypatch, tmp_path, capsys, save_code, echo, at_start, expected):
     import json
     import sys
     from types import SimpleNamespace as NS
@@ -161,9 +168,15 @@ def test_coordinator_waits_for_session_and_survives_bridge_restart(monkeypatch, 
         pid = 999999
 
         def __init__(self, command, **kwargs):
-            self.name = command[2] if command[0] == sys.executable else 'stop'
+            self.name = command[2] if command[0] == sys.executable else command[0]
             events.append(('launch', self.name))
             self.code = None if self.name == 'mapping' else 0
+            if self.name in ('save', 'snapshot'):
+                self.code = None
+            if self.name == 'shutdown':
+                assert 'MMM SAVE COMPLETE:' in capsys.readouterr().out
+                assert command == ['shutdown', 'two words']
+                assert ('save-result', 0) in events
             if self.name == 'mapping':
                 state['session'] = workflow.Path(command[3])
                 state['session'].mkdir(parents=True)
@@ -189,9 +202,34 @@ def test_coordinator_waits_for_session_and_survives_bridge_restart(monkeypatch, 
         elif step == 3:
             (state['session'] / 'session.json').write_text('{}')
         elif step == 5:
-            state['callback'](NS(number=2))
+            if echo is not None:
+                if echo == 4:
+                    # Complete a later Mapping exchange, then return to start
+                    # before its new Ready exchange has completed.
+                    state['callback'](NS(number=2))
+                    tf.transform.translation.x = 1
+                else:
+                    state['callback'](NS(number=echo))
         elif step == 6:
+            if echo == 4:
+                state['callback'](NS(number=4))
+
+                def returned(self, *args):
+                    self.at_start = True
+                    return True
+                monkeypatch.setattr(workflow.StartGate, 'update', returned)
+                tf.transform.translation.x = 0
+            if not at_start:
+                tf.transform.translation.x = 1
             state['callback'](NS(number=3))
+        elif step == 7:
+            assert ('launch', 'shutdown') not in events
+            for process in processes:
+                if process.name in ('save', 'snapshot'):
+                    events.append(('save-result', save_code))
+                    process.code = save_code
+            # C echoes the final leg too; no new work or completion update.
+            state['callback'](NS(number=4 if echo == 2 else 2))
 
     node = NS(
         get_clock=lambda: NS(now=lambda: clock),
@@ -209,9 +247,16 @@ def test_coordinator_waits_for_session_and_survives_bridge_restart(monkeypatch, 
         Buffer=lambda: NS(lookup_transform=lambda *a: tf),
         TransformListener=lambda *a: None, TransformException=RuntimeError))
     workflow.mmm(NS(sim_time=False, timeout=60, max_age=30, sessions=tmp_path,
-                    stop_command='stop-service', room=True, no_referee=False, launch_args=[]))
-    assert events.index(('send', 1)) < events.index(('launch', 'stop'))
+                    stop_command='stop-service', shutdown_command='shutdown "two words"',
+                    room=True, no_referee=False, launch_args=[]))
+    assert events.index(('send', 1)) < events.index(('launch', 'stop-service'))
     assert events.index(('launch', 'mapping')) < events.index(('launch', 'boot-pose'))
-    assert events.index(('send', 3)) < events.index(('launch', 'save'))
-    assert [e for e in events if e == ('send', 2)] == [('send', 2)] * 2
+    assert events.index(('send', 3)) < events.index(('launch', expected))
+    shutdowns = [e for e in events if e == ('launch', 'shutdown')]
+    assert len(shutdowns) == int(expected == 'save' and save_code == 0)
+    if shutdowns:
+        assert events.index(('launch', 'save')) < events.index(shutdowns[0])
+    if save_code:
+        assert any('SAVE FAILED' in str(e) for e in events)
+        assert state['step'] == 8
     assert all(p.poll() is not None for p in processes)

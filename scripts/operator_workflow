@@ -568,6 +568,7 @@ class MmmProtocol:
         self.even_used = {}
         self.last_ping = -math.inf
         self.failed = None
+        self.completed_even = None
 
     def request(self, number, now):
         if self.pending or now - self.even_used.get(number, -math.inf) < 5.0:
@@ -588,6 +589,7 @@ class MmmProtocol:
             self.pending = None
             self.even_used[number] = now
             self.send(number)
+            self.completed_even = number
         # Zero and unsolicited/duplicate even echoes terminate here.
 
     def tick(self, now):
@@ -697,6 +699,7 @@ def mmm(args):
     desired = None
     announced = None
     stopped = False
+    shutdown_after_save = False
     last_warning = 0.0
     old_handlers = {}
     workflow = [sys.executable, str(Path(__file__).resolve())]
@@ -717,7 +720,7 @@ def mmm(args):
         publisher.publish(message)
 
     def dispatch(number):
-        nonlocal session
+        nonlocal session, shutdown_after_save
         if number == 1:
             if session is not None:
                 warn("MMM start already handled; restart coordinator for a new attempt")
@@ -733,10 +736,17 @@ def mmm(args):
                     gate.update(pose, stamp, runtime.node.get_clock().now().nanoseconds / 1e9)
                 except TransformException:
                     gate.update(None, 0, 0)
-            mmm_save(bool(gate and gate.at_start),
-                     lambda snapshot: launch("save", workflow + [
-                         "snapshot" if snapshot else "save", str(session), *common]),
-                     gate is None or "save" in children, warn)
+            ready = bool(gate and gate.at_start and protocol.completed_even == 2)
+            if gate is not None and "save" not in children:
+                shutdown_after_save = ready
+            try:
+                mmm_save(ready,
+                         lambda snapshot: launch("save", workflow + [
+                             "snapshot" if snapshot else "save", str(session), *common]),
+                         gate is None or "save" in children, warn)
+            except OSError as error:
+                shutdown_after_save = False
+                warn(f"MMM SAVE FAILED TO START: {error}; NOT SHUTTING DOWN; session={session}")
 
     protocol = MmmProtocol(send, dispatch, warn)
     runtime.subscriptions.append(runtime.node.create_subscription(
@@ -761,8 +771,10 @@ def mmm(args):
                 if code is None:
                     continue
                 del children[name]
-                if code and name == "save":
-                    warn(f"MMM SAVE FAILED ({code}): POWER-OFF MAY LOSE DATA; session={session}")
+                if code and name in ("save", "shutdown"):
+                    warn(f"MMM {name.upper()} FAILED ({code}): NOT SHUTTING DOWN; "
+                         f"POWER-OFF MAY LOSE DATA; session={session}")
+                    shutdown_after_save = False
                     continue
                 if code or name == "mapping":
                     raise RuntimeError(f"MMM {name} exited {code}; POWER-OFF MAY LOSE DATA; session={session}")
@@ -778,6 +790,12 @@ def mmm(args):
                     desired = 2
                 elif name == "save":
                     print(f"MMM SAVE COMPLETE: {session}", flush=True)
+                    if shutdown_after_save:
+                        shutdown_after_save = False
+                        try:
+                            launch("shutdown", shlex.split(args.shutdown_command))
+                        except OSError as error:
+                            warn(f"MMM SHUTDOWN FAILED: {error}; recover manually; session={session}")
             if (session and "mapping" in children and gate is None
                     and "boot" not in children and (session / "session.json").is_file()):
                 launch("boot", workflow + ["boot-pose", str(session), *common])
@@ -1320,6 +1338,7 @@ def main():
     coordinator = commands.add_parser("mmm")
     coordinator.add_argument("sessions")
     coordinator.add_argument("--stop-command", required=True)
+    coordinator.add_argument("--shutdown-command", required=True)
     coordinator.add_argument("--room", action="store_true")
     coordinator.add_argument("--no-referee", action="store_true")
     coordinator.add_argument("--team", choices=["red", "blue"])
@@ -1428,6 +1447,8 @@ def main():
         if args.command == "mmm":
             if not shlex.split(args.stop_command):
                 raise ValueError("stop command cannot be empty")
+            if not shlex.split(args.shutdown_command):
+                raise ValueError("shutdown command cannot be empty")
             if args.no_referee and (args.room or args.team is None):
                 raise ValueError("--no-referee requires --team red|blue in field mode")
             mmm(args)
