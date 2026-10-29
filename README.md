@@ -230,6 +230,14 @@ MCB's world-frame velocity, so they need no rotation either. Not REP-105's
 body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 `root` would mean freeing rf2o's heading and fusing a yaw into the EKF.
 
+#### Odometry pods
+
+The [CAD pod table and firmware channel/sign derivation](../docs/investigations/sentry-cad-2026-10-26.md#odometry-pods)
+record the start-frame encoder axes, red/blue signs and exported wheel geometry.
+The motor-to-CAD yaw datum is unknown, so source-part/channel labels are conditional.
+The pods were omitted from the imported model; its four `wheel_*` links are
+drive wheels, not encoder pods.
+
 ### target_selector
 
 Team colour comes from `RefSysStatus.is_on_blue_team`: on blue it drops class
@@ -477,6 +485,29 @@ payload. Raw POSE and the CV aim frame remain unchanged. See the
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
 
+### Robot geometry
+
+`urdf/sentry.urdf.xacro` uses the team's 2026-10-26 low-resolution CAD.
+Link and joint names retain their existing meanings: `head` +x is the gun's
+horizontal forward direction, +y is left, and positive head yaw is CCW.
+The CAD gun points along `lpr_yaw` -y and is elevated 20° in its exported
+pose; imported pitch assets are rebased so zero pitch is horizontal.
+`camera` is at the RGB FOV apex (44 mm left of the IR apex) with REP 103 body
+axes, not optical axes: `/cv/panel_detections` are deprojected with the colour
+intrinsics, so the frame is the colour lens.
+`muzzle` is on the pitch axis between the flywheels, pointing along
+pitch-frame +x. Its 1.903 mm lateral offset comes from the CAD bore centre;
+the bore front is 172.976 mm ahead of this aiming origin.
+
+The clearance datum places the lowest exported wheel on z=0. The exported
+wheel bottoms differ by 32.5 mm, so this does not establish the real settled
+ground plane. The heading-fixed [root convention](#pose_translator) is
+unchanged. The [dated CAD investigation](../docs/investigations/sentry-cad-2026-10-26.md)
+records the archive checksum, derivation, transform comparison, tests and
+hardware checks still required. The earlier Oct 25 position-only fit differed
+from CAD by **10.6 cm** in XY; the Oct 26 joint fit resolves the scan-zero yaw
+and supports the CAD radius (see [self-filter](#lidar_self_filter)).
+
 ### lidar_self_filter
 
 The lidar is bolted to the head, so the head's blind sector is fixed in the
@@ -579,13 +610,15 @@ the aim point, past the half tick each aim is held: the aim leads by
 the hardware default remains 50 ms. After filtering absolute setpoint rate, the hosted E2E fixture uses zero
 yaw lag from
 command/achieved-angle replay in the
-[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.094) is indexing request
-to muzzle exit, and times the fire against the spin. Aiming both from the
+[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.020) is indexing request
+to muzzle exit, the sentry's `FIRING_LATENCY_TIME` timed on the robot
+(2026-10-28). The wire delay never goes below `min_fire_delay_s` (0.025), so
+the MCB always waits before requesting; the larger of the two times the fire
+against the spin. Aiming both from the
 firmware latency overshot moving targets in sim by ~27 ms of their motion,
 in the earlier fixture. The outgoing wire delay includes this indexer estimate
 plus the planner's alignment wait, matching the
 [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
-The sentry default matches the 94 ms hosted chamber-exit calibration; hardware timing remains unmeasured.
 
 `plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
 no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
@@ -646,7 +679,8 @@ starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
 The enemy zone mirrors only our firmware start x: red boots at (-4.625, 0),
-blue at (+4.625, 0). `zone_start_x_m` (4.625) and `zone_start_y_m` (0.0) default
+blue at (+4.625, 0). `zone_start_x_m` and `zone_start_y_m` are also `auto.launch.py` arguments,
+so simulation fixtures can express the zone in their scene frame. They default
 to `OdometrySubsystemConstants.hpp`; the REF_SYS blue flag alone chooses the
 side, including late blue arrival and missing/zero robot ID. Idle points use
 `idle_height_m` (0.15), near armor height. Idle yaw commands change at most

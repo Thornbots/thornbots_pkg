@@ -89,7 +89,8 @@ Shot plan_shot(
   const Vector3d shooter_vel = options.shooter_vel;
   const int iterations = options.iterations;
   const double aim_horizon_s = age_s + options.gimbal_lag_s + tick_s / 2.0;
-  const double fire_horizon_s = age_s + options.firmware_latency_s;
+  const double fire_horizon_s =
+    age_s + fire_exit_s(options.firmware_latency_s, options.min_fire_delay_s);
 
   auto center = [&](double t) -> Vector3d {
       const double h = 0.5 * t * t;
@@ -190,9 +191,14 @@ Shot plan_shot(
   return {hit.aim_pos, delay < tick_s ? std::optional<double>(delay) : std::nullopt};
 }
 
-int wire_fire_delay_ms(double alignment_s, double firmware_latency_s)
+double fire_exit_s(double firmware_latency_s, double min_fire_delay_s)
 {
-  const double ms = std::nearbyint((alignment_s + firmware_latency_s) * 1000.0);
+  return std::max(firmware_latency_s, min_fire_delay_s);
+}
+
+int wire_fire_delay_ms(double alignment_s, double exit_s)
+{
+  const double ms = std::nearbyint((std::max(alignment_s, 0.0) + exit_s) * 1000.0);
   return static_cast<int>(std::clamp(ms, 0.0, 65535.0));
 }
 

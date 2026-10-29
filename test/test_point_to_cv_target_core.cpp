@@ -300,6 +300,7 @@ tp::Shot plan(
 {
   opt.gimbal_lag_s = horizon - TICK_S / 2.0;
   opt.firmware_latency_s = horizon;
+  opt.min_fire_delay_s = 0.0;
   return tp::plan_shot(state, RADII, z_offset, 0.0, SHOOTER, V_MUZZLE, spinning, TICK_S, opt);
 }
 
@@ -722,6 +723,16 @@ TEST(IdleLook, EnemyZoneMirrorsOnlyXForFirmwareTeam)
   EXPECT_EQ(tp::enemy_zone(true, 5.0, 0.4, 0.15), Vector3d(-5.0, 0.4, 0.15));
 }
 
+TEST(FireTiming, ExitNeverSendsUnderTheFloor)
+{
+  EXPECT_DOUBLE_EQ(tp::fire_exit_s(0.020, 0.025), 0.025);
+  EXPECT_DOUBLE_EQ(tp::fire_exit_s(0.094, 0.025), 0.094);
+  ShotOptions defaults;
+  EXPECT_EQ(tp::wire_fire_delay_ms(
+      0.0, tp::fire_exit_s(defaults.firmware_latency_s, defaults.min_fire_delay_s)), 25);
+  EXPECT_EQ(tp::wire_fire_delay_ms(-0.001, 0.025), 25);
+}
+
 TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)
 {
   EXPECT_EQ(tp::wire_fire_delay_ms(0.0, 0.094), 94);
@@ -751,7 +762,8 @@ TEST(PlanShot, OneHzAlignmentGatingHoldsYawAndMeetsTheExitHorizon)
       ++fired;
       EXPECT_GE(*s.delay_s, 0);
       EXPECT_LT(*s.delay_s, tick);
-      const double impact = age + opt.firmware_latency_s + *s.delay_s + flight(s.aim_pos);
+      const double impact = age + tp::fire_exit_s(opt.firmware_latency_s, opt.min_fire_delay_s) +
+        *s.delay_s + flight(s.aim_pos);
       const double phase = tp::py_mod(a.yaw + w * impact - M_PI, M_PI / 2);
       EXPECT_LT(std::min(phase, M_PI / 2 - phase), 1e-8);
     }
