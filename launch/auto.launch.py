@@ -195,7 +195,7 @@ def generate_launch_description():
         'chase_margin_s', default_value='0.0',
         description='point_to_cv_target: time margin before a panel stops facing, seconds')
     v_muzzle_arg = DeclareLaunchArgument(
-        'v_muzzle', default_value='25.0',
+        'v_muzzle', default_value='22.0',
         description='point_to_cv_target: projectile speed (m/s) used only '
         "to size the intercept solve's prediction horizon -- "
         'Type-C computes the real ballistic flight time.'

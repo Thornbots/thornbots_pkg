@@ -66,7 +66,7 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
   // ahead the aim point leads. See README.md.
   gimbal_lag_s_ = declare_parameter("gimbal_lag_s", 0.05);
-  v_muzzle_ = declare_parameter("v_muzzle", 25.0);
+  v_muzzle_ = declare_parameter("v_muzzle", 22.0);
   tof_iterations_ = static_cast<int>(declare_parameter("tof_iterations", 3));
   const double publish_rate_hz = declare_parameter("cv_target_publish_rate_hz", 40.0);
   tick_s_ = 1.0 / publish_rate_hz;
