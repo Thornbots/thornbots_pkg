@@ -182,10 +182,10 @@ def generate_launch_description():
         'param flip between before/after.'
     )
     firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.094',
-        description='point_to_cv_target: static delay from fire decision '
-        'to projectile exit, added to the state age before time of flight. '
-        '0.094 matches the hosted sentry indexer; measure it on hardware.'
+        'firmware_latency_s', default_value='0.020',
+        description='point_to_cv_target: MCB indexer request to projectile '
+        'exit, the FIRING_LATENCY_TIME the firmware subtracts (20 ms, timed on '
+        'the robot). Wire fire delays never go under min_fire_delay_s (0.025).'
     )
     chase_settle_s_arg = DeclareLaunchArgument(
         'chase_settle_s', default_value='-1.0',
@@ -195,7 +195,7 @@ def generate_launch_description():
         'chase_margin_s', default_value='0.0',
         description='point_to_cv_target: time margin before a panel stops facing, seconds')
     v_muzzle_arg = DeclareLaunchArgument(
-        'v_muzzle', default_value='25.0',
+        'v_muzzle', default_value='22.0',
         description='point_to_cv_target: projectile speed (m/s) used only '
         "to size the intercept solve's prediction horizon -- "
         'Type-C computes the real ballistic flight time.'
@@ -209,6 +209,13 @@ def generate_launch_description():
         'idle_direction', default_value='zone', choices=['zone', 'hold'],
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
+
+    zone_start_x_arg = DeclareLaunchArgument(
+        'zone_start_x_m', default_value='4.625',
+        description='Idle-look enemy start-zone X magnitude in the aim frame, meters.')
+    zone_start_y_arg = DeclareLaunchArgument(
+        'zone_start_y_m', default_value='0.0',
+        description='Idle-look enemy start-zone Y in the aim frame, meters.')
 
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
@@ -357,6 +364,10 @@ def generate_launch_description():
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
             'idle_direction': LaunchConfiguration('idle_direction'),
+            'zone_start_x_m': ParameterValue(
+                LaunchConfiguration('zone_start_x_m'), value_type=float),
+            'zone_start_y_m': ParameterValue(
+                LaunchConfiguration('zone_start_y_m'), value_type=float),
             'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
@@ -593,6 +604,7 @@ def generate_launch_description():
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
         chase_margin_s_arg, v_muzzle_arg,
         cv_target_publish_rate_hz_arg, idle_direction_arg,
+        zone_start_x_arg, zone_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
