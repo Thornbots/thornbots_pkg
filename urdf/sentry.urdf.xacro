@@ -6,7 +6,7 @@
      root is heading-fixed (odom->root carries no yaw): the chassis turns
      under it on chassis_yaw, and the head hangs off root with headlink at
      the MCB's world head yaw, so lidar and camera never see chassis yaw.
-     The yaw bearing sits 0.2 mm off root's z axis; that offset is ignored. -->
+     The yaw bearing is centred on root; see README.md#robot-geometry. -->
 <robot name="sentry" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="lidar_x" default="-0.105"/>
   <xacro:arg name="lidar_y" default="-0.193326"/>
@@ -38,7 +38,7 @@
   <joint name="headlink" type="continuous">
     <parent link="root"/>
     <child link="head"/>
-    <origin xyz="-0.000171242 9.52126e-05 0.248293" rpy="0 0 0"/>
+    <origin xyz="0 0 0.267503694" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
   </joint>
   <link name="head_pitch">
@@ -52,7 +52,7 @@
   <joint name="headpitch" type="revolute">
     <parent link="head"/>
     <child link="head_pitch"/>
-    <origin xyz="-0.00760542 -0.100122 0.14235" rpy="0 0 0"/>
+    <origin xyz="0 0 0.136" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-0.6" upper="0.6" effort="200" velocity="10"/>
   </joint>
@@ -173,7 +173,7 @@
   <joint name="armor_0link" type="fixed">
     <parent link="body"/>
     <child link="armor_0"/>
-    <origin xyz="0.178162 0.178426 0.230361" rpy="0 -0.261856 0.785329"/>
+    <origin xyz="0.204139959 0.150682952 0.148603392" rpy="0 -0.261799339 0.635864487"/>
   </joint>
   <link name="armor_1">
     <visual>
@@ -184,7 +184,7 @@
   <joint name="armor_1link" type="fixed">
     <parent link="body"/>
     <child link="armor_1"/>
-    <origin xyz="-0.177935 0.177863 0.135661" rpy="0 -0.261856 2.35613"/>
+    <origin xyz="-0.148299431 0.200910863 0.25248797" rpy="0 -0.261797504 2.206660314"/>
   </joint>
   <link name="armor_2">
     <visual>
@@ -195,7 +195,7 @@
   <joint name="armor_2link" type="fixed">
     <parent link="body"/>
     <child link="armor_2"/>
-    <origin xyz="-0.178505 -0.178235 0.230361" rpy="0 -0.261856 -2.35627"/>
+    <origin xyz="-0.204139942 -0.150683009 0.148603318" rpy="0 -0.261796504 -2.505724829"/>
   </joint>
   <link name="armor_3">
     <visual>
@@ -206,7 +206,7 @@
   <joint name="armor_3link" type="fixed">
     <parent link="body"/>
     <child link="armor_3"/>
-    <origin xyz="0.177593 -0.177673 0.135661" rpy="0 -0.261856 -0.785464"/>
+    <origin xyz="0.148299403 -0.200910883 0.252487973" rpy="0 -0.261799535 -0.934934345"/>
   </joint>
   <link name="lidar"/>
   <joint name="lidarlink" type="fixed">
@@ -214,22 +214,21 @@
     <child link="lidar"/>
     <origin xyz="$(arg lidar_x) $(arg lidar_y) $(arg lidar_z)" rpy="0 0 $(arg lidar_yaw)"/>
   </joint>
-  <!-- The D435's RGB lens, which /cv/panel_detections are deprojected from:
-       the CAD camera cover's centre plus 32.5 mm to the camera's left
-       (sim/urdf/sentry_v2.yaml sensor_offsets). -->
+  <!-- The D435's RGB lens (the CAD's RGB FOV apex, 44 mm left of the IR
+       apex), which /cv/panel_detections are deprojected from. -->
   <link name="camera"/>
   <joint name="cameralink" type="fixed">
     <parent link="head_pitch"/>
     <child link="camera"/>
-    <origin xyz="0.0920381 0.127367 0.0566588" rpy="0 0 0"/>
+    <origin xyz="0.095699877 0.0325 0.055000043" rpy="0 0 0"/>
   </joint>
-  <!-- Where the shot leaves: on the pitch axis, between the flywheels
-       (sentry_v2 CAD), pointing along head_pitch +x. Not in the generated
-       model; sim/urdf/sentry_v2.urdf.xacro adds the same frame. -->
+  <!-- Aiming origin on the pitch axis, between the flywheels, pointing
+       along head_pitch +x. Only the lateral offset comes from the CAD;
+       sim/urdf/sentry_v2.urdf.xacro adds the same frame. -->
   <link name="muzzle"/>
   <joint name="muzzlelink" type="fixed">
     <parent link="head_pitch"/>
     <child link="muzzle"/>
-    <origin xyz="0 0.1128 0" rpy="0 0 0"/>
+    <origin xyz="0 0.00190269 0" rpy="0 0 0"/>
   </joint>
 </robot>
