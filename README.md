@@ -825,6 +825,87 @@ from this package. Package suites run through `colcon test
 --packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises
 clock ordering, TF, serialization, seed gating and parked scan updates.
 
+### MCB Mapping Machine
+
+`operator_workflow mmm` drives the existing mapping/boot-pose/save commands
+from the [PING application contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#ping-id5--mcb-mapping-machine-and-link-check).
+Firmware and the sim MCB emulator still need that contract; current echo-everything
+firmware is incompatible. Only the MCB holds its state machine. The coordinator
+holds transaction bookkeeping, child processes and a local pose condition.
+It sends PING directly to the translator; aim/relocalization still use `mcb_relay`.
+This is operator orchestration in the existing Python workflow, not a new
+runtime node or a second robot launch implementation.
+
+Run it in a **separate, persistent, sourced ROS environment**, outside the
+`thornbots` service and its container. The service stops its entire container,
+so running MMM with `docker exec` inside that container cannot survive start.
+On a ROS-equipped host, for example:
+
+```bash
+ros2 run thornbots_pkg operator_workflow mmm /workspaces/isaac_ros-dev/maps \
+  --stop-command 'sudo -n systemctl stop thornbots'
+```
+
+For a separate ROS container, supply an equivalent host-side command, for
+example `--stop-command 'ssh -o BatchMode=yes robot-host sudo -n systemctl stop thornbots'`.
+Provision that command beforehand; it must stop only the auto-start service,
+return success and leave the coordinator environment alive. Commands are split
+as argv, with no shell expansion. A failed stop aborts setup. A manual launch
+needs its own explicit stop command. The persistent environment must already
+have the robot's serial/lidar device access, ROS domain, DDS profile and sourced
+overlay needed by the normal workflow. Never run two coordinators or other
+PING publishers. This change does not install an auto-start service for MMM.
+
+On start receipt, J publishes the ACK before launching the stop command. After
+the stop succeeds it starts `mapping` as a supervised child and `boot-pose` as
+another child; the ROS listener survives both raw-input preflight and bridge
+restart/discovery. Failures terminate the attempt with an error and stop owned
+children. Ctrl-C/SIGTERM also stops all owned children. The host service remains
+stopped; restart it explicitly when finished. One start per coordinator process
+is allowed; another acknowledged start cannot overwrite the current session.
+
+Each attempt creates `<sessions>/mmm-<UTC YYYYmmddTHHMMSSZ>-<8 random hex>/`.
+Keep its printed path and the whole session directory. `--room`, or
+`--no-referee --team red|blue`, and `--sim-time` retain the manual workflow's
+meaning. Additional `name:=value` launch arguments pass through mapping's
+existing protected-argument checks. Pose readiness requires TF within 0.5
+seconds. Workflow children inherit `--max-age` and wall-clock `--timeout`;
+occupancy updates retain the manual workflow's freshness limit.
+
+Boot capture provides the first parked-at-start evidence and triggers ready.
+After that, fresh `map->root` must remain within the validated-save outer
+limits (0.15 m / 0.15 rad). Leaving either limit, losing fresh TF, or moving
+more than 3 cm / 0.03 rad across the parked sample window clears readiness and
+requests mapping. Re-entry requires both errors <=0.12 and two seconds of
+distinct stamped, parked TF samples. This inward hysteresis avoids toggling
+around the save boundary while never calling an outside pose ready. Validated
+manual/MCB saves use the full 0.15 limits and also require two parked seconds;
+keep chassis and head parked throughout the sequential occupancy/graph save.
+
+On save receipt the protocol publishes ACK first, then rechecks the local pose
+condition: at-start selects the existing validated explicit `save`; otherwise
+`snapshot` makes an **unvalidated recovery save**, stored separately as
+`incomplete-<uuid>/`. Both preserve map/graph, boot/session and geometry checks;
+snapshot skips the start-position/parked check and does not require raw odometry
+at the team start. `save.json` records `validated: true|false`. Incomplete output
+is recovery material, not a deployment approval. `snapshot "$SESSION"` is also
+available explicitly. Normal validated output stays in `snapshot/`; an existing
+output is never overwritten. Registration/localization remain explicit manual
+steps after reviewing the map.
+
+This inference does not read or mirror MCB Ready/Mapping/Done states. A save
+during setup or another save is still ACKed, then logged loudly without starting
+concurrent work. Save workers keep the protocol loop responsive. The log repeats
+**SAVE STILL RUNNING: DO NOT POWER OFF** every wall second and reports completion
+or failure. **The MCB may permit immediate power-off after the ACK; asynchronous
+save can therefore be interrupted and lost.** ACK proves receipt only. Keep
+power on until SAVE COMPLETE and inspect artifacts; there is no durable-save
+completion message. Retry, timeout, odd/final-echo disambiguation and the required
+quiet intervals are defined only in the linked wire contract. Test these with
+updated firmware before physical use; no physical acceptance is claimed.
+
+ROS-free checks: `python3 -m pytest test/test_operator_workflow.py test/test_mmm.py`.
+
 ## Parked room health check
 
 In a sourced robot-container terminal, start the normal stack, park the chassis

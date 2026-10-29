@@ -16,6 +16,7 @@ import math
 import os
 import re
 import signal
+import shlex
 import sys
 import uuid
 from pathlib import Path
@@ -444,7 +445,7 @@ def capture_boot(args):
         runtime.close()
 
 
-def observe_inputs(runtime, args, require_session=True):
+def observe_inputs(runtime, args, require_session=True, require_start=True):
     """Capture fresh raw odometry, referee team and live supervisor session."""
     from nav_msgs.msg import Odometry
     from dji_serial_bridge.msg import RefSysStatus
@@ -494,7 +495,7 @@ def observe_inputs(runtime, args, require_session=True):
         def ready():
             if not required <= state.keys():
                 return False
-            if room:
+            if room or not require_start:
                 return True
             expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
             return math.dist(state["raw_odom"], expected) <= 0.3
@@ -504,7 +505,7 @@ def observe_inputs(runtime, args, require_session=True):
         raise RuntimeError(
             f"timeout waiting for raw /odom at team start, referee team, live session; received {state}"
         ) from error
-    if not room:
+    if not room and require_start:
         expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
         if math.dist(state["raw_odom"], expected) > 0.3:
             raise ValueError(f"raw /odom disagrees with team start {expected}: {state['raw_odom']}")
@@ -557,6 +558,260 @@ def current_root(runtime, args):
         del listener
 
 
+class MmmProtocol:
+    """Bounded echo transactions; wire timing assumptions live in UART_PROTOCOL.md."""
+
+    def __init__(self, send, dispatch, warn):
+        self.send, self.dispatch, self.warn = send, dispatch, warn
+        self.pending = None
+        self.odd_seen = {}
+        self.even_used = {}
+        self.last_ping = -math.inf
+        self.failed = None
+
+    def request(self, number, now):
+        if self.pending or now - self.even_used.get(number, -math.inf) < 5.0:
+            return False
+        self.pending = [number, now, 1]
+        self.failed = None
+        self.send(number)
+        return True
+
+    def receive(self, number, now):
+        if number in (1, 3):
+            previous = self.odd_seen.get(number, -math.inf)
+            self.odd_seen[number] = now
+            if now - previous >= 5.0:
+                self.send(number)
+                self.dispatch(number)
+        elif number in (2, 4) and self.pending and self.pending[0] == number:
+            self.pending = None
+            self.even_used[number] = now
+            self.send(number)
+        # Zero and unsolicited/duplicate even echoes terminate here.
+
+    def tick(self, now):
+        if now - self.last_ping >= 1.0:
+            self.send(0)
+            self.last_ping = now
+        if self.pending and now - self.pending[1] >= 0.5:
+            number, _, attempts = self.pending
+            if attempts >= 10:
+                self.pending = None
+                self.even_used[number] = now
+                self.failed = number
+                self.warn(f"MMM {number} ACK TIMEOUT after 10 attempts; retry after quiet interval")
+            else:
+                self.pending = [number, now, attempts + 1]
+                self.send(number)
+
+
+class StartGate:
+    """Pose evidence only, never an MCB state: inward hysteresis and parked dwell."""
+
+    def __init__(self, boot, inward=0.12):
+        self.boot = boot
+        self.inward = inward
+        self.samples = deque()
+        self.at_start = False
+
+    def update(self, pose, stamp, now):
+        if (pose is None or not all(math.isfinite(v) for v in [*pose, stamp, now])
+                or not 0 <= now - stamp <= 0.5
+                or (self.samples and stamp < self.samples[-1][0])):
+            self.samples.clear()
+            self.at_start = False
+            return False
+        distance = math.dist(pose[:2], self.boot["root"][:2])
+        yaw = abs(angle(pose[2] - self.boot["root"][2]))
+        if distance > 0.15 or yaw > 0.15:
+            self.samples.clear()
+            self.at_start = False
+            return False
+        if not self.samples or stamp > self.samples[-1][0]:
+            self.samples.append((stamp, pose))
+        while len(self.samples) > 1 and stamp - self.samples[1][0] >= 2.0:
+            self.samples.popleft()
+        parked = ((self.at_start or stamp - self.samples[0][0] >= 2.0) and all(
+            math.dist(pose[:2], p[:2]) <= 0.03 + 1e-9
+            and abs(angle(pose[2] - p[2])) <= 0.03 + 1e-9 for _, p in self.samples))
+        self.at_start = parked and (self.at_start or (distance <= self.inward and yaw <= self.inward))
+        return self.at_start
+
+
+def parked_return(runtime, args, boot, session_id):
+    """Require a fresh, parked return before an explicit validated save."""
+    from tf2_ros import Buffer, TransformListener, TransformException
+    from rclpy.time import Time
+
+    gate = StartGate(boot, inward=0.15)
+    buffer = Buffer()
+    listener = TransformListener(buffer, runtime.node)
+
+    def collect():
+        try:
+            tf = buffer.lookup_transform("map", "root", Time())
+            pose, stamp = planar_tf(tf)
+            verify_return(boot, pose, session_id)
+            return gate.update(pose, stamp, runtime.node.get_clock().now().nanoseconds / 1e9)
+        except (TransformException, ValueError):
+            gate.update(None, 0, 0)
+            return False
+
+    try:
+        runtime.wait(collect, args.timeout)
+    finally:
+        del listener
+
+
+def planar_tf(tf):
+    p, q = tf.transform.translation, tf.transform.rotation
+    return [p.x, p.y, math.atan2(2 * (q.w * q.z + q.x * q.y),
+                               1 - 2 * (q.y * q.y + q.z * q.z))], (
+        tf.header.stamp.sec + tf.header.stamp.nanosec / 1e9)
+
+
+def mmm_save(at_start, launch, busy, warn):
+    """Called only after the protocol has published the immediate save ACK."""
+    if busy:
+        warn("MMM SAVE STILL RUNNING/SETUP INCOMPLETE: request acknowledged; POWER-OFF MAY LOSE DATA")
+        return
+    warn("MMM SAVE STARTING ASYNCHRONOUSLY: POWER-OFF MAY LOSE DATA")
+    launch(not at_start)
+
+
+def mmm(args):
+    """Stay outside the auto-start service; supervise independent workflow children."""
+    from dji_serial_bridge.msg import Ping
+    from tf2_ros import Buffer, TransformListener, TransformException
+    from rclpy.time import Time
+
+    runtime = Runtime(args.sim_time)
+    buffer = Buffer()
+    listener = TransformListener(buffer, runtime.node)
+    publisher = runtime.node.create_publisher(Ping, "/dji_serial_bridge/ping_to_mcb", 10)
+    children = {}
+    started = {}
+    session = None
+    gate = None
+    desired = None
+    announced = None
+    stopped = False
+    last_warning = 0.0
+    old_handlers = {}
+    workflow = [sys.executable, str(Path(__file__).resolve())]
+    common = ["--sim-time"] if args.sim_time else []
+    common += ["--timeout", str(args.timeout), "--max-age", str(args.max_age)]
+
+    def warn(message):
+        runtime.node.get_logger().error(message)
+
+    def launch(name, command):
+        children[name] = subprocess.Popen(command, start_new_session=True)
+        started[name] = time.monotonic()
+
+    def send(number):
+        message = Ping()
+        message.header.stamp = runtime.node.get_clock().now().to_msg()
+        message.number = number
+        publisher.publish(message)
+
+    def dispatch(number):
+        nonlocal session
+        if number == 1:
+            if session is not None:
+                warn("MMM start already handled; restart coordinator for a new attempt")
+                return
+            session = Path(args.sessions).resolve() / (
+                time.strftime("mmm-%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8])
+            print(f"MMM SESSION: {session}", flush=True)
+            launch("stop", shlex.split(args.stop_command))
+        else:
+            if gate:
+                try:
+                    pose, stamp = planar_tf(buffer.lookup_transform("map", "root", Time()))
+                    gate.update(pose, stamp, runtime.node.get_clock().now().nanoseconds / 1e9)
+                except TransformException:
+                    gate.update(None, 0, 0)
+            mmm_save(bool(gate and gate.at_start),
+                     lambda snapshot: launch("save", workflow + [
+                         "snapshot" if snapshot else "save", str(session), *common]),
+                     gate is None or "save" in children, warn)
+
+    protocol = MmmProtocol(send, dispatch, warn)
+    runtime.subscriptions.append(runtime.node.create_subscription(
+        Ping, "/dji_serial_bridge/ping_from_mcb",
+        lambda message: protocol.receive(message.number, time.monotonic()), 10))
+
+    def stop(_signum, _frame):
+        nonlocal stopped
+        stopped = True
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            old_handlers[signum] = signal.signal(signum, stop)
+        while runtime.ros.ok() and not stopped:
+            runtime.ros.spin_once(runtime.node, timeout_sec=0.05)
+            now = time.monotonic()
+            protocol.tick(now)
+            for name, child in list(children.items()):
+                code = child.poll()
+                if name == "stop" and code is None and now - started[name] > args.timeout:
+                    raise RuntimeError("MMM service stop timed out; no mapping started")
+                if code is None:
+                    continue
+                del children[name]
+                if code and name == "save":
+                    warn(f"MMM SAVE FAILED ({code}): POWER-OFF MAY LOSE DATA; session={session}")
+                    continue
+                if code or name == "mapping":
+                    raise RuntimeError(f"MMM {name} exited {code}; POWER-OFF MAY LOSE DATA; session={session}")
+                if name == "stop":
+                    options = (["--room"] if args.room else [])
+                    if args.no_referee:
+                        options += ["--no-referee", "--team", args.team]
+                    launch("mapping", workflow + ["mapping", str(session), *options,
+                                                   *common, *args.launch_args])
+                elif name == "boot":
+                    gate = StartGate(json.loads((session / "boot.json").read_text()))
+                    gate.at_start = True
+                    desired = 2
+                elif name == "save":
+                    print(f"MMM SAVE COMPLETE: {session}", flush=True)
+            if (session and "mapping" in children and gate is None
+                    and "boot" not in children and (session / "session.json").is_file()):
+                launch("boot", workflow + ["boot-pose", str(session), *common])
+            if "save" in children and now - last_warning >= 1.0:
+                warn("MMM SAVE STILL RUNNING: DO NOT POWER OFF")
+                last_warning = now
+            if gate:
+                try:
+                    pose, stamp = planar_tf(buffer.lookup_transform("map", "root", Time()))
+                    at_start = gate.update(pose, stamp, runtime.node.get_clock().now().nanoseconds / 1e9)
+                except TransformException:
+                    at_start = gate.update(None, 0, 0)
+                desired = 2 if at_start else 4
+                if announced != desired and protocol.request(desired, now):
+                    announced = desired
+                if protocol.failed == announced:
+                    announced = None
+    finally:
+        if "save" in children:
+            warn("MMM STOPPING WITH SAVE IN PROGRESS: POWER-OFF MAY LOSE DATA")
+        for child in children.values():
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGINT)
+                try:
+                    child.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(timeout=5)
+        for signum, handler in old_handlers.items():
+            signal.signal(signum, handler)
+        del listener
+        runtime.close()
+
+
 def save(args):
     """Save one explicit snapshot with validated service result and new files."""
     from nav_msgs.msg import OccupancyGrid
@@ -572,8 +827,12 @@ def save(args):
     try:
         geometry = preflight(runtime, args)
         boot = json.loads(Path(args.boot).read_text())
-        live = observe_inputs(runtime, args)
-        verify_return(boot, current_root(runtime, args), live["session_id"])
+        snapshot = getattr(args, "unvalidated", False)
+        live = observe_inputs(runtime, args, require_start=not snapshot)
+        if boot["session_id"] != live["session_id"]:
+            raise ValueError("wrong-session boot pose")
+        if not snapshot:
+            parked_return(runtime, args, boot, live["session_id"])
         if not geometry_matches(np.array(boot["geometry"]), geometry):
             raise ValueError("scan geometry differs from boot capture")
         shutil.copyfile(args.boot, stage / "boot.json")
@@ -628,6 +887,7 @@ def save(args):
         if future.result() is None or future.result().result != 0:
             raise RuntimeError(f"serialize_map failed: {future.result()}")
         validate_bundle(stage)
+        (stage / "save.json").write_text(json.dumps(dict(validated=not snapshot)))
         stage.rename(target)
         print(f"SAVE OK: {target}/map.{{pgm,yaml,posegraph,data}}")
     finally:
@@ -1055,6 +1315,15 @@ def main():
     mapping.add_argument("launch_args", nargs="*")
     saving = commands.add_parser("save")
     saving.add_argument("output")
+    snapshotting = commands.add_parser("snapshot")
+    snapshotting.add_argument("output")
+    coordinator = commands.add_parser("mmm")
+    coordinator.add_argument("sessions")
+    coordinator.add_argument("--stop-command", required=True)
+    coordinator.add_argument("--room", action="store_true")
+    coordinator.add_argument("--no-referee", action="store_true")
+    coordinator.add_argument("--team", choices=["red", "blue"])
+    coordinator.add_argument("launch_args", nargs="*")
     booting = commands.add_parser("boot-pose")
     booting.add_argument("output")
     preflighting = commands.add_parser("preflight")
@@ -1090,7 +1359,8 @@ def main():
     monitoring.add_argument("--hold", type=float, default=5.0)
     monitoring.add_argument("--samples", type=int, default=5)
     for command in (
-        saving, monitoring, booting, preflighting, mapping, localizing, pausing, resuming
+        saving, snapshotting, coordinator, monitoring, booting, preflighting, mapping,
+        localizing, pausing, resuming
     ):
         command.add_argument("--sim-time", action="store_true")
         command.add_argument("--timeout", type=float, default=60.0)
@@ -1116,14 +1386,16 @@ def main():
     ).resolve()
     if args.command in ("align", "prepare-room"):
         args.source, args.output = session / "snapshot", session / "deployment"
-    elif args.command == "save":
-        args.output, args.boot = session / "snapshot", session / "boot.json"
+    elif args.command in ("save", "snapshot"):
+        args.unvalidated = args.command == "snapshot"
+        args.output = session / ("incomplete-" + uuid.uuid4().hex if args.unvalidated else "snapshot")
+        args.boot = session / "boot.json"
     elif args.command == "boot-pose":
         args.output = session / "boot.json"
     elif args.command in ("check", "localize", "convergence"):
         args.directory = session / "deployment"
     if trailing:
-        if args.command not in ("mapping", "localize") or any(
+        if args.command not in ("mapping", "localize", "mmm") or any(
             "  " in a or ":=" not in a for a in trailing
         ):
             parser.error("unrecognized arguments: " + " ".join(trailing))
@@ -1148,12 +1420,18 @@ def main():
         if hasattr(args, name) and getattr(args, name) <= 0:
             parser.error(f"{name} must be positive")
     try:
-        if args.command in ("boot-pose", "save"):
+        if args.command in ("boot-pose", "save", "snapshot"):
             metadata = json.loads((session / "session.json").read_text())
             args.room = metadata.get("frame_mode", "field") == "room"
             args.no_referee = metadata.get("no_referee", False)
             args.team = metadata.get("team")
-        if args.command == "boot-pose":
+        if args.command == "mmm":
+            if not shlex.split(args.stop_command):
+                raise ValueError("stop command cannot be empty")
+            if args.no_referee and (args.room or args.team is None):
+                raise ValueError("--no-referee requires --team red|blue in field mode")
+            mmm(args)
+        elif args.command == "boot-pose":
             capture_boot(args)
         elif args.command == "preflight":
             runtime = Runtime(args.sim_time)
@@ -1161,7 +1439,7 @@ def main():
                 preflight(runtime, args)
             finally:
                 runtime.close()
-        elif args.command == "save":
+        elif args.command in ("save", "snapshot"):
             save(args)
         elif args.command == "prepare-room":
             prepare_room(args)
