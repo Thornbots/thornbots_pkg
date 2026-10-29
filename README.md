@@ -908,8 +908,10 @@ snapshots never trigger shutdown. Shutdown command failure also logs an error
 and keeps running. **MCB powers off its own side independently; if that removes
 Jetson power before storage finishes, data can still be lost.** ACK proves
 receipt only; there is no durable-save completion message. Retry, timeout,
-odd/final-echo disambiguation and the required
-quiet intervals are defined only in the linked wire contract. Test these with
+and work quiet intervals are defined in the linked wire contract. Odd ACKs
+are unconditional and precede dispatch; the work window suppresses repeated
+execution only. Firmware must stop answering echoes after its pending exchange
+completes so J's ACK of the final leg terminates the exchange. Test these with
 updated firmware before physical use; no physical acceptance is claimed.
 
 ROS-free checks: `python3 -m pytest test/test_operator_workflow.py test/test_mmm.py`.

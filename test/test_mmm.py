@@ -54,15 +54,73 @@ def test_even_retry_timeout_and_other_id():
 
 
 @pytest.mark.parametrize('number', [1, 3])
-def test_odd_echo_then_dispatch_without_final_leg_echo(number):
+def test_odd_always_echoes_but_dispatches_only_after_quiet_window(number):
     core, events = protocol()
     core.receive(number, 0)
     core.receive(number, .1)
     core.receive(number, 1)
     core.receive(number, 4)
-    assert events == [('send', number), ('dispatch', number)]
-    core.receive(number, 9)
-    assert events == [('send', number), ('dispatch', number)] * 2
+    assert events == [('send', number), ('dispatch', number)] + [('send', number)] * 3
+    core.receive(number, 8.9)
+    assert events[-1] == ('send', number)
+    assert events.count(('dispatch', number)) == 1
+    core.receive(number, 13.9)
+    assert events[-2:] == [('send', number), ('dispatch', number)]
+    assert events.count(('dispatch', number)) == 2
+
+
+@pytest.mark.parametrize('number', [2, 4, 5, 200, 255])
+def test_unsolicited_even_echoes_and_unknown_numbers_are_ignored(number):
+    core, events = protocol()
+    core.receive(number, 0)
+    assert events == []
+    assert core.pending is None
+
+
+@pytest.mark.parametrize('number', [1, 2, 3, 4])
+@pytest.mark.parametrize('drop', [None, 0, 1, 2, 3])
+def test_simulated_mcb_single_frame_loss_terminates(number, drop):
+    from collections import deque
+
+    frames, work, transitions = deque(), [], []
+    core = workflow.MmmProtocol(
+        lambda n: frames.append(('C', n)), work.append,
+        lambda text: pytest.fail(text))
+    core.last_ping = 100  # Isolate the exchange from independent link checks.
+    c_pending = number if number % 2 else None
+    sent = 0
+    dropped = False
+    if c_pending:
+        frames.append(('J', number))
+    else:
+        assert core.request(number, 0)
+    for step in range(12):
+        now = step * .5
+        while frames:
+            target, received = frames.popleft()
+            index = sent
+            sent += 1
+            assert sent <= 6, 'echo loop failed to terminate'
+            if index == drop:
+                dropped = True
+                continue
+            if target == 'J':
+                core.receive(received, now)
+            elif received in (2, 4):
+                frames.append(('J', received))
+                if not transitions:
+                    transitions.append(received)
+            elif c_pending == received:
+                c_pending = None
+                frames.append(('J', received))
+        if step < 10:
+            core.tick(now)
+            if c_pending:
+                frames.append(('J', c_pending))
+    assert not frames and c_pending is None and core.pending is None
+    assert work == ([number] if number % 2 else [])
+    assert transitions == ([] if number % 2 else [number])
+    assert dropped == (drop is not None)
 
 
 def test_ping_zero_has_no_third_leg_and_no_echo_loops():
@@ -91,7 +149,7 @@ def test_save_ack_precedes_asynchronous_dispatch(at_start, busy):
     else:
         assert ('launch', not at_start) in events
     core.receive(3, .1)
-    assert sum(e[0] == 'ack' for e in events) == 1
+    assert sum(e[0] == 'ack' for e in events) == 2
     assert sum(e[0] == 'launch' for e in events) == (0 if busy else 1)
 
 
