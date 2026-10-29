@@ -59,8 +59,10 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
-  // Fire decision to projectile exit; times the fire against the spin.
-  firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.094);
+  // MCB indexer request to projectile exit (timed on the robot), and the
+  // shortest exit delay sent; the larger times the fire against the spin.
+  firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.020);
+  min_fire_delay_s_ = declare_parameter("min_fire_delay_s", 0.025);
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
   // ahead the aim point leads. See README.md.
   gimbal_lag_s_ = declare_parameter("gimbal_lag_s", 0.05);
@@ -254,7 +256,7 @@ std::pair<bool, int> PointToCvTarget::fire_decision(
   }
   last_fire_time_ = now;
   // Python round() is half-to-even, as is nearbyint in the default mode.
-  return {true, wire_fire_delay_ms(*delay_s, firmware_latency_s_)};
+  return {true, wire_fire_delay_ms(*delay_s, fire_exit_s(firmware_latency_s_, min_fire_delay_s_))};
 }
 
 void PointToCvTarget::check_timeout()
@@ -381,6 +383,7 @@ std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
   ShotOptions options;
   options.gimbal_lag_s = gimbal_lag_s_;
   options.firmware_latency_s = firmware_latency_s_;
+  options.min_fire_delay_s = min_fire_delay_s_;
   options.lead = lead_enabled_;
   options.iterations = tof_iterations_;
   options.shooter_vel = shooter_vel_odom;

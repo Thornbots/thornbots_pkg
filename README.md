@@ -579,13 +579,15 @@ the aim point, past the half tick each aim is held: the aim leads by
 the hardware default remains 50 ms. After filtering absolute setpoint rate, the hosted E2E fixture uses zero
 yaw lag from
 command/achieved-angle replay in the
-[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.094) is indexing request
-to muzzle exit, and times the fire against the spin. Aiming both from the
+[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.020) is indexing request
+to muzzle exit, the sentry's `FIRING_LATENCY_TIME` timed on the robot
+(2026-10-28). The wire delay never goes below `min_fire_delay_s` (0.025), so
+the MCB always waits before requesting; the larger of the two times the fire
+against the spin. Aiming both from the
 firmware latency overshot moving targets in sim by ~27 ms of their motion,
 in the earlier fixture. The outgoing wire delay includes this indexer estimate
 plus the planner's alignment wait, matching the
 [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
-The sentry default matches the 94 ms hosted chamber-exit calibration; hardware timing remains unmeasured.
 
 `plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
 no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`

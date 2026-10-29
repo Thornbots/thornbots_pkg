@@ -82,7 +82,7 @@ protected:
   std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
   double target_timeout_s_, fire_max_state_age_s_, fire_confidence_threshold_, fire_rate_hz_;
   bool lead_enabled_;
-  double firmware_latency_s_, gimbal_lag_s_, v_muzzle_;
+  double firmware_latency_s_, min_fire_delay_s_, gimbal_lag_s_, v_muzzle_;
   int tof_iterations_;
   double tick_s_, spin_enter_rad_s_, spin_exit_rad_s_;
   std::optional<double> chase_settle_s_;

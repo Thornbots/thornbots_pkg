@@ -56,7 +56,8 @@ using ArmorState = std::array<double, 8>;
 struct ShotOptions
 {
   double gimbal_lag_s = 0.05;
-  double firmware_latency_s = 0.094;
+  double firmware_latency_s = 0.020;  // MCB indexer request to chamber exit
+  double min_fire_delay_s = 0.025;    // shortest wire exit delay we send
   bool lead = true;
   int iterations = 3;
   Vector3d shooter_vel = Vector3d::Zero();
@@ -87,7 +88,7 @@ int choose_panel(
 // Choose an aim point and fire delay against a TargetState armor model, age_s
 // old. radius, z_offset: per pair, as in TargetState. Each aim holds a tick_s,
 // then the gimbal trails it by gimbal_lag_s; the aim targets the middle of
-// that. The fire is timed over firmware_latency_s.
+// that. The fire is timed over fire_exit_s.
 // Not spinning: lead the choose_panel panel, fire now. Spinning (shotgating): aim on
 // the center->shooter line at the arriving pair, fire after the delay that
 // lands it there if under tick_s, else none. With chase_settle_s: chase the
@@ -100,8 +101,12 @@ Shot plan_shot(
   const std::array<double, 2> & z_offset, double age_s, const Vector3d & shooter_pos,
   double v_muzzle, bool spinning, double tick_s, const ShotOptions & options = {});
 
+// Fire decision to chamber exit: the MCB's latency, but never under the
+// wire floor, so the MCB's request always waits min - latency first.
+double fire_exit_s(double firmware_latency_s, double min_fire_delay_s);
+
 // Wire delay names projectile exit; planner delay is the extra alignment wait.
-int wire_fire_delay_ms(double alignment_s, double firmware_latency_s);
+int wire_fire_delay_ms(double alignment_s, double exit_s);
 
 // Running mean/count of now-minus-detection-stamp latency samples (seconds).
 class LatencyStat

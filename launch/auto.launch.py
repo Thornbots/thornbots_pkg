@@ -182,10 +182,10 @@ def generate_launch_description():
         'param flip between before/after.'
     )
     firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.094',
-        description='point_to_cv_target: static delay from fire decision '
-        'to projectile exit, added to the state age before time of flight. '
-        '0.094 matches the hosted sentry indexer; measure it on hardware.'
+        'firmware_latency_s', default_value='0.020',
+        description='point_to_cv_target: MCB indexer request to projectile '
+        'exit, the FIRING_LATENCY_TIME the firmware subtracts (20 ms, timed on '
+        'the robot). Wire fire delays never go under min_fire_delay_s (0.025).'
     )
     chase_settle_s_arg = DeclareLaunchArgument(
         'chase_settle_s', default_value='-1.0',
