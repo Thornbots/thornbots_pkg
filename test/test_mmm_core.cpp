@@ -280,6 +280,84 @@ TEST(MmmStartGate, SaveGateAllowsFullOuterTolerance)
   EXPECT_TRUE(settle(gate, {0.09, 0.12, 0.15}, 3));
 }
 
+TEST(MmmScanGate, TransientFailuresRequireTwentyNewScans)
+{
+  const std::array<double, 4> geometry{10, 0, 0.9, 0.1};
+  mmm::ScanGate gate;
+  double stamp = 1;
+  for (int failure = 0; failure < 4; ++failure) {
+    for (int i = 0; i < 20; ++i) {
+      stamp += 0.1;
+      ASSERT_TRUE(gate.update(geometry, stamp, stamp));
+      EXPECT_EQ(gate.ready(stamp), i == 19);
+    }
+    EXPECT_FALSE(gate.ready(stamp + 0.501));
+    if (failure == 0) {EXPECT_FALSE(gate.update(geometry, stamp, stamp));}
+    if (failure == 1) {EXPECT_FALSE(gate.update(geometry, stamp - 1, stamp));}
+    if (failure == 2) {EXPECT_FALSE(gate.update(geometry, stamp + 1, stamp));}
+    if (failure == 3) {
+      EXPECT_FALSE(gate.update({10, 0, 0.9, 0}, stamp + 0.1, stamp + 0.1));
+    }
+    EXPECT_FALSE(gate.ready(stamp));
+    EXPECT_FALSE(gate.geometry_failed());
+  }
+  for (int i = 0; i < 20; ++i) {
+    stamp += 0.1;
+    EXPECT_TRUE(gate.update(geometry, stamp, stamp));
+  }
+  EXPECT_TRUE(gate.ready(stamp));
+}
+
+TEST(MmmScanGate, RealGeometryChangeRemainsRejectedUntilNewSession)
+{
+  mmm::ScanGate gate;
+  ASSERT_TRUE(gate.update({10, 0, 0.9, 0.1}, 1, 1));
+  EXPECT_FALSE(gate.update({11, 0, 1, 0.1}, 2, 2));
+  EXPECT_TRUE(gate.geometry_failed());
+  for (int i = 3; i < 30; ++i) {
+    EXPECT_FALSE(gate.update({10, 0, 0.9, 0.1}, i, i));
+  }
+  EXPECT_FALSE(gate.ready(29));
+  gate = mmm::ScanGate{};
+  EXPECT_TRUE(gate.update({11, 0, 1, 0.1}, 30, 30));
+  EXPECT_FALSE(gate.geometry_failed());
+}
+
+TEST(MmmWorkflow, FreshStartResetsReadyFailurePendingAndCooldown)
+{
+  for (bool first_success : {false, true}) {
+    std::vector<int> sends;
+    mmm::Workflow * active = nullptr;
+    mmm::Protocol protocol([&](int n) {sends.push_back(n);}, [&](int n) {
+        if (n == 1) {active->start_session();}
+      }, [](std::string) {});
+    mmm::Workflow workflow(protocol);
+    active = &workflow;
+    protocol.receive(1, 0);
+    workflow.setup_result(true, first_success);
+    workflow.tick(true, 4.9);
+    const int first = first_success ? 2 : 6;
+    ASSERT_EQ(protocol.pending(), first);
+    protocol.receive(first, 5.0);
+    protocol.receive(1, 5.1);
+    EXPECT_FALSE(protocol.completed_even());
+    workflow.tick(true, 5.1);
+    EXPECT_FALSE(protocol.pending());
+    workflow.setup_result(true, first_success);
+    workflow.tick(true, 5.2);
+    EXPECT_EQ(protocol.pending(), first);
+    protocol.receive(1, 5.3);  // Final leg cannot start more work.
+    EXPECT_EQ(protocol.pending(), first);
+    protocol.receive(1, 10.4);  // A new start cancels the previous pending even.
+    EXPECT_FALSE(protocol.pending());
+    workflow.setup_result(true, true);
+    workflow.tick(true, 10.5);
+    EXPECT_EQ(protocol.pending(), 2);
+    protocol.receive(2, 10.6);
+    EXPECT_EQ(protocol.completed_even(), 2);
+  }
+}
+
 TEST(MmmSave, SessionBusyPoseAndCompletedReadyAllMatter)
 {
   for (bool session : {false, true}) {

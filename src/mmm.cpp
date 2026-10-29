@@ -115,11 +115,22 @@ private:
   void dispatch(int number)
   {
     if (number == 1) {
-      if (attempted_) {
-        RCLCPP_WARN(get_logger(), "MMM start already handled in this process");
+      workflow_.start_session();
+      if (saving_) {
+        workflow_.setup_result(false, false);
+        workflow_.tick(false, wall_now());
+        RCLCPP_ERROR(get_logger(), "MMM new start rejected while save is in progress; sending 6");
         return;
       }
-      attempted_ = true;
+      ++session_generation_;
+      setup_ = ready_ = reset_sent_ = reset_done_ = finished_ = false;
+      scan_gate_ = core::ScanGate{};
+      gate_.reset();
+      restart_capture();
+      odom_.reset();
+      joints_.reset();
+      ref_.reset();
+      team_.clear();
       if (mode_ != "mapping") {
         setup_failed("running localization mode is not mapping");
         return;
@@ -154,27 +165,19 @@ private:
     if (!reset_done_ || (!setup_ && !ready_)) {return;}
     const std::array<double, 4> geometry = {
       static_cast<double>(m->ranges.size()), m->angle_min, m->angle_max, m->angle_increment};
-    bool valid = m->ranges.size() >= 10 && fresh(m->header.stamp) &&
-      std::isfinite(m->angle_min) && std::isfinite(m->angle_max) &&
-      std::isfinite(m->angle_increment) && m->angle_increment > 0 &&
-      std::abs(m->angle_max - m->angle_min -
-      (m->ranges.size() - 1) * m->angle_increment) <= m->angle_increment * 0.02;
-    const double stamp = rclcpp::Time(m->header.stamp).seconds();
-    valid = valid && stamp > scan_stamp_;
-    if (geometry_) {
-      for (size_t i = 0; i < geometry.size(); ++i) {
-        const double tolerance = i == 0 ? 0.0 : 1e-7 + 1e-6 * std::abs((*geometry_)[i]);
-        valid = valid && std::abs(geometry[i] - (*geometry_)[i]) <= tolerance;
+    if (!scan_gate_.update(geometry, rclcpp::Time(m->header.stamp).seconds(), now().seconds())) {
+      if (setup_) {
+        restart_capture();
+        if (scan_gate_.geometry_failed()) {setup_failed("lidar geometry changed during setup");}
       }
     }
-    if (!valid) {
-      input_failed_ = true;
-      if (setup_) {setup_failed("stale/non-increasing scan or variable lidar geometry");}
-      return;
-    }
-    geometry_ = geometry;
-    scan_stamp_ = stamp;
-    ++scans_;
+  }
+
+  void restart_capture()
+  {
+    boot_gate_.reset();
+    boot_samples_ = 0;
+    boot_last_stamp_ = -1;
   }
 
   std::optional<core::Pose> current_pose(double & stamp)
@@ -204,8 +207,7 @@ private:
 
   bool inputs_ready()
   {
-    if (!odom_ || !fresh(odom_->header.stamp) || !geometry_ || scans_ < 20 ||
-      now().seconds() - scan_stamp_ > 0.5 || input_failed_)
+    if (!odom_ || !fresh(odom_->header.stamp) || !scan_gate_.ready(now().seconds()))
     {return false;}
     const auto & p = odom_->pose.pose.position;
     if (!std::isfinite(p.x) || !std::isfinite(p.y)) {return false;}
@@ -227,7 +229,10 @@ private:
     double stamp = 0;
     const auto pose = current_pose(stamp);
     const auto yaw = chassis();
-    if (!pose || !yaw || !inputs_ready() || stamp < reset_stamp_.seconds()) {return;}
+    if (!pose || !yaw || !inputs_ready() || stamp < reset_stamp_.seconds()) {
+      restart_capture();
+      return;
+    }
     if (!boot_gate_) {
       boot_gate_ = std::make_unique<core::StartGate>(*pose);
       boot_chassis_ = *yaw;
@@ -238,7 +243,7 @@ private:
       std::hypot(odom_->pose.pose.position.x - raw_boot_[0],
       odom_->pose.pose.position.y - raw_boot_[1]) > 0.03)
     {
-      setup_failed("boot capture moved >3 cm/0.03 rad");
+      restart_capture();
       return;
     }
     if (stamp > boot_last_stamp_) {++boot_samples_; boot_last_stamp_ = stamp;}
@@ -261,7 +266,7 @@ private:
     boot << std::setprecision(17) << "{\"stamp_ns\":" << static_cast<int64_t>(stamp * 1e9)
          << ",\"root\":[" << boot_pose_.x << ',' << boot_pose_.y << ',' << boot_pose_.yaw
          << "],\"chassis_yaw\":" << boot_chassis_ << ",\"geometry\":[";
-    for (size_t i = 0; i < 4; ++i) {boot << (i ? "," : "") << (*geometry_)[i];}
+    for (size_t i = 0; i < 4; ++i) {boot << (i ? "," : "") << (*scan_gate_.geometry())[i];}
     boot << "],\"session_id\":\"" << session_.filename().string()
          << "\",\"frame_mode\":\"" << (room_ ? "room" : "field")
          << "\",\"team\":" << (room_ ? "null" : "\"" + team_ + "\"")
@@ -319,7 +324,7 @@ private:
       save_finished(false, "Ready save lost fresh parked input evidence");
       return;
     }
-    if (!save_->service_is_ready() || input_failed_) {
+    if (!save_->service_is_ready() || scan_gate_.geometry_failed()) {
       save_finished(false, "save service unavailable or lidar geometry invalid");
       return;
     }
@@ -430,8 +435,9 @@ private:
         reset_sent_ = true;
         auto req = std::make_shared<Reset::Request>();
         req->pause_new_measurements = false;
-        reset_->async_send_request(req, [this](rclcpp::Client<Reset>::SharedFuture f) {
-          if (!setup_) {return;}
+        const auto generation = session_generation_;
+        reset_->async_send_request(req, [this, generation](rclcpp::Client<Reset>::SharedFuture f) {
+          if (!setup_ || generation != session_generation_) {return;}
           try {
             if (f.get()->result != Reset::Response::RESULT_SUCCESS) {
               setup_failed("slam_toolbox reset rejected");
@@ -471,17 +477,17 @@ private:
   core::Pose boot_pose_{};
   std::string mode_, save_dir_, explicit_team_, team_, request_file_;
   fs::path session_, output_;
-  double timeout_, deadline_ = 0, save_deadline_ = 0, scan_stamp_ = -1, boot_chassis_ = 0;
+  double timeout_, deadline_ = 0, save_deadline_ = 0, boot_chassis_ = 0;
   double boot_last_stamp_ = -1;
   std::array<double, 2> raw_boot_{};
-  std::optional<std::array<double, 4>> geometry_;
-  size_t scans_ = 0, save_index_ = 0, save_generation_ = 0, boot_samples_ = 0;
+  core::ScanGate scan_gate_;
+  size_t session_generation_ = 0, save_index_ = 0, save_generation_ = 0, boot_samples_ = 0;
   int64_t save_request_ = 0;
   rclcpp::Time reset_stamp_{0, 0, RCL_ROS_TIME}, boot_stamp_{0, 0, RCL_ROS_TIME};
-  bool room_, shutdown_, attempted_ = false, setup_ = false, reset_sent_ = false;
+  bool room_, shutdown_, setup_ = false, reset_sent_ = false;
   bool reset_done_ = false, ready_ = false, saving_ = false, validated_ = false;
   core::SaveGuard save_guard_;
-  bool input_failed_ = false, finished_ = false, finalizing_ = false;
+  bool finished_ = false, finalizing_ = false;
   std::future<std::string> finalization_;
   rclcpp::Publisher<dji_serial_bridge::msg::Ping>::SharedPtr ping_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::Ping>::SharedPtr ping_sub_;

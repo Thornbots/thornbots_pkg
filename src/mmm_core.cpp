@@ -76,6 +76,44 @@ bool StartGate::update(std::optional<Pose> pose, double stamp, double now)
   return at_start_;
 }
 
+bool ScanGate::update(const std::array<double, 4> & geometry, double stamp, double now)
+{
+  const bool well_formed = std::all_of(geometry.begin(), geometry.end(),
+    [](double v) {return std::isfinite(v);}) && geometry[0] >= 10 && geometry[3] > 0 &&
+    std::abs(geometry[2] - geometry[1] - (geometry[0] - 1) * geometry[3]) <= geometry[3] * 0.02;
+  if (well_formed && geometry_) {
+    for (size_t i = 0; i < geometry.size(); ++i) {
+      const double tolerance = i == 0 ? 0.0 : 1e-7 + 1e-6 * std::abs((*geometry_)[i]);
+      if (std::abs(geometry[i] - (*geometry_)[i]) > tolerance) {geometry_failed_ = true;}
+    }
+  }
+  if (!well_formed || geometry_failed_ || !std::isfinite(stamp) || !std::isfinite(now) ||
+    now - stamp < 0 || now - stamp > 0.5 || stamp <= stamp_)
+  {
+    fresh_scans_ = 0;
+    return false;
+  }
+  if (!geometry_) {geometry_ = geometry;}
+  stamp_ = stamp;
+  ++fresh_scans_;
+  return true;
+}
+
+bool ScanGate::ready(double now) const
+{
+  return geometry_ && !geometry_failed_ && fresh_scans_ >= 20 &&
+         now >= stamp_ && now - stamp_ <= 0.5;
+}
+
+void Protocol::reset_session()
+{
+  pending_.reset();
+  completed_even_.reset();
+  failed_.reset();
+  even_used_.fill(std::nullopt);
+  // Keep odd receive windows: final legs must not dispatch another session.
+}
+
 Protocol::Protocol(std::function<void(int)> send, std::function<void(int)> dispatch,
   std::function<void(std::string)> warn)
 : send_(std::move(send)), dispatch_(std::move(dispatch)), warn_(std::move(warn)) {}
@@ -143,6 +181,15 @@ SaveDecision decide_save(bool session_ready, bool busy, bool at_start,
 
 Workflow::Workflow(Protocol & protocol)
 : protocol_(protocol) {}
+
+void Workflow::start_session()
+{
+  protocol_.reset_session();
+  announced_.reset();
+  configured_ = false;
+  mapping_ready_ = false;
+  recovering_ready_ = false;
+}
 
 void Workflow::setup_result(bool mapping_mode, bool success)
 {

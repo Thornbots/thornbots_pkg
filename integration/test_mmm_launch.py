@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Exercise the in-stack mapping coordinator against Gazebo and a fake MCB."""
+import copy
 import json
 import math
 import os
@@ -32,6 +33,7 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -64,7 +66,8 @@ class TestMmmFlow(unittest.TestCase):
         node = rclpy.create_node('fake_mcb_mmm_test')
         ping = node.create_publisher(Ping, '/dji_serial_bridge/ping_from_mcb', 10)
         drive = node.create_publisher(Twist, '/cmd_vel', 10)
-        evidence = {'pose': None, 'even': None, 'odd': None, 'events': []}
+        scans = node.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
+        evidence = {'pose': None, 'even': None, 'odd': None, 'events': [], 'scan': None}
         buffer = Buffer()
         listener = TransformListener(buffer, node)
 
@@ -88,6 +91,16 @@ class TestMmmFlow(unittest.TestCase):
         node.create_subscription(Odometry, '/odom',
                                  lambda m: evidence.update(pose=m.pose.pose.position),
                                  qos_profile_sensor_data)
+
+        node.create_subscription(LaserScan, '/scan',
+                                 lambda m: evidence.update(scan=m), qos_profile_sensor_data)
+
+        def bad_scan():
+            message = copy.deepcopy(evidence['scan'])
+            self.assertIsNotNone(message)
+            message.header.stamp.sec = 0
+            message.header.stamp.nanosec = 0
+            scans.publish(message)
 
         def wait(predicate, seconds=45, action=None):
             deadline = time.monotonic() + seconds
@@ -114,13 +127,30 @@ class TestMmmFlow(unittest.TestCase):
             wait(lambda: time.monotonic() >= until)
             evidence['odd'] = 1
             send(1)
+            wait(lambda: any(Path(directory).glob('mmm-*')) and evidence['scan'] is not None)
+            until = time.monotonic() + 1.0
+            wait(lambda: time.monotonic() >= until)
+            bad_scan()  # A transient scan during boot must restart evidence, not send 6.
             wait(lambda: evidence['even'] == 2)
+            first_boot = next(Path(directory).glob('mmm-*/boot.json'))
+            until = time.monotonic() + 5.1
+            wait(lambda: time.monotonic() >= until)
+            evidence['even'] = None
+            evidence['odd'] = 1
+            send(1)
+            wait(lambda: evidence['even'] == 2)
+            boots = list(Path(directory).glob('mmm-*/boot.json'))
+            self.assertEqual(len(boots), 2)
+            boot_path = next(path for path in boots if path != first_boot)
+            bad_scan()  # Ready saves must recover from late scans, too.
+            until = time.monotonic() + 2.0
+            wait(lambda: time.monotonic() >= until)
             start = evidence['pose'].x
             wait(lambda: evidence['pose'].x >= start + 0.4,
                  action=lambda: command(0.15))
             command(0.0)
             wait(lambda: evidence['even'] == 4)
-            boot = json.loads(next(Path(directory).glob('mmm-*/boot.json')).read_text())
+            boot = json.loads(boot_path.read_text())
 
             def return_to_map_start():
                 try:
@@ -152,7 +182,8 @@ class TestMmmFlow(unittest.TestCase):
                 wait(lambda: (bundle / name).exists())
                 self.assertGreater((bundle / name).stat().st_size, 0)
             self.assertTrue(json.loads((bundle / 'boot.json').read_text())['session_id'])
-            print('MMM INTEGRATION PASS: start -> ready -> mapping -> ready -> save; '
+            print('MMM INTEGRATION PASS: transient boot scan -> ready -> restart -> ready -> '
+                  'transient Ready scan -> mapping -> ready -> save; '
                   + str(bundle), flush=True)
         finally:
             command(0.0)

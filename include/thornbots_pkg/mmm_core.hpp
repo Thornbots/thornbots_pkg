@@ -45,12 +45,27 @@ private:
   std::deque<std::pair<double, Pose>> samples_;
 };
 
+class ScanGate
+{
+public:
+  bool update(const std::array<double, 4> & geometry, double stamp, double now);
+  bool ready(double now) const;
+  bool geometry_failed() const {return geometry_failed_;}
+  const std::optional<std::array<double, 4>> & geometry() const {return geometry_;}
+private:
+  std::optional<std::array<double, 4>> geometry_;
+  double stamp_ = -1;
+  size_t fresh_scans_ = 0;
+  bool geometry_failed_ = false;
+};
+
 class Protocol
 {
 public:
   Protocol(std::function<void(int)> send, std::function<void(int)> dispatch,
     std::function<void(std::string)> warn);
   // Only 2/4/6 are transactions; tick owns the independent zero heartbeat.
+  void reset_session();
   bool request(int number, double now);
   void receive(int number, double now);
   void tick(double now);
@@ -86,6 +101,7 @@ class Workflow
 {
 public:
   explicit Workflow(Protocol & protocol);
+  void start_session();
   void setup_result(bool mapping_mode, bool success);
   void save_result(bool ready_save, bool success);
   // Call after Protocol::tick; pose evidence selects 2/4 only after mapping setup.

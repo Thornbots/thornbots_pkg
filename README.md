@@ -68,7 +68,11 @@ also requires the referee team and raw team-start coordinates; practice without
 a referee uses `seed_explicit_team:=red|blue`. Sim defaults `mmm_room:=true`;
 hardware defaults false. `mmm_room:=true` captures room coordinates. Setup
 failure or the `mmm_timeout_s` wall deadline sends 6; it never stops the service.
-One start attempt is accepted per coordinator process.
+A fresh start after the wire work window creates a new session and resets the
+mapping graph and readiness evidence. A start while saving sends 6 without
+interrupting the save. Transient invalid scans restart fresh-scan evidence and
+the boot stationary window; a real lidar geometry change fails setup and blocks
+saves for that session.
 
 The ROS-free `mmm_core` owns protocol bookkeeping, pose evidence and save
 selection. Readiness requires TF no older than 0.5 s, outer errors at most
