@@ -214,11 +214,14 @@
     <child link="lidar"/>
     <origin xyz="$(arg lidar_x) $(arg lidar_y) $(arg lidar_z)" rpy="0 0 $(arg lidar_yaw)"/>
   </joint>
+  <!-- The D435's RGB lens, which /cv/panel_detections are deprojected from:
+       the CAD camera cover's centre plus 32.5 mm to the camera's left
+       (sim/urdf/sentry_v2.yaml sensor_offsets). -->
   <link name="camera"/>
   <joint name="cameralink" type="fixed">
     <parent link="head_pitch"/>
     <child link="camera"/>
-    <origin xyz="0.0920381 0.0948673 0.0566588" rpy="0 0 0"/>
+    <origin xyz="0.0920381 0.127367 0.0566588" rpy="0 0 0"/>
   </joint>
   <!-- Where the shot leaves: on the pitch axis, between the flywheels
        (sentry_v2 CAD), pointing along head_pitch +x. Not in the generated
