@@ -511,6 +511,13 @@ def generate_launch_description():
         additional_env=udp_env,
     )
 
+    match_wifi_guard_node = Node(
+        package='thornbots_pkg', executable='match_wifi_guard', output='screen',
+        condition=IfCondition(LaunchConfiguration('match_wifi_off')),
+        parameters=[{'request_file': LaunchConfiguration('match_wifi_request_file')}],
+        additional_env=udp_env,
+    )
+
     mmm_node = Node(
         package='thornbots_pkg', executable='mmm', output='screen',
         condition=IfCondition(LaunchConfiguration('enable_mmm')),
@@ -551,6 +558,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
+                              description='Request host Wi-Fi disconnect at confirmed battle.'),
+        DeclareLaunchArgument('match_wifi_request_file',
+                              default_value='/run/thornbots-net/wifi-off.request',
+                              description='Request file exposed by the host Wi-Fi service.'),
         DeclareLaunchArgument('enable_mmm', default_value='true', choices=['true', 'false'],
                               description='Start the in-stack MCB Mapping Machine coordinator.'),
         DeclareLaunchArgument('mmm_room', default_value=use_sim_time, choices=['true', 'false'],
@@ -609,7 +621,7 @@ def generate_launch_description():
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
-        dji_serial_bridge_node, pose_translator_node,
+        dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
             mcb_relay_node, mmm_node,
