@@ -45,7 +45,7 @@ ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames mmm_core)
+foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames mmm_core match_wifi_guard_core)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
@@ -61,6 +61,10 @@ ament_target_dependencies(point_to_cv_target_node PUBLIC
 add_executable(target_selector src/target_selector.cpp)
 target_link_libraries(target_selector target_selector_core)
 ament_target_dependencies(target_selector rclcpp dji_serial_bridge geometry_msgs)
+
+add_executable(match_wifi_guard src/match_wifi_guard.cpp)
+target_link_libraries(match_wifi_guard match_wifi_guard_core)
+ament_target_dependencies(match_wifi_guard rclcpp dji_serial_bridge)
 
 add_executable(mmm src/mmm.cpp)
 target_link_libraries(mmm mmm_core)
@@ -91,7 +95,7 @@ add_executable(odom_tf_broadcaster src/odom_tf_broadcaster.cpp)
 target_link_libraries(odom_tf_broadcaster aim_frames)
 ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
 
-install(TARGETS mmm target_tracker target_selector mcb_relay point_to_cv_target pose_translator
+install(TARGETS match_wifi_guard mmm target_tracker target_selector mcb_relay point_to_cv_target pose_translator
   lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
@@ -106,6 +110,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_room_check_core test/test_room_check_core.cpp)
   target_compile_features(test_room_check_core PUBLIC cxx_std_17)
   target_include_directories(test_room_check_core PRIVATE include)
+  ament_add_gtest(test_match_wifi_guard_core test/test_match_wifi_guard_core.cpp)
+  target_link_libraries(test_match_wifi_guard_core match_wifi_guard_core)
   ament_add_gtest(test_mmm_core test/test_mmm_core.cpp)
   target_link_libraries(test_mmm_core mmm_core)
   option(THORNBOTS_MMM_SIM_TEST "Run MMM full-stack sim test (requires built sim overlay)" OFF)
