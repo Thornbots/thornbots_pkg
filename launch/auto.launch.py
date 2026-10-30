@@ -511,6 +511,23 @@ def generate_launch_description():
         additional_env=udp_env,
     )
 
+    mmm_node = Node(
+        package='thornbots_pkg', executable='mmm', output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_mmm')),
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'localization_mode': LaunchConfiguration('localization_mode'),
+            'map_save_dir': LaunchConfiguration('map_save_dir'),
+            'room': ParameterValue(LaunchConfiguration('mmm_room'), value_type=bool),
+            'explicit_team': ParameterValue(
+                LaunchConfiguration('seed_explicit_team'), value_type=str),
+            'shutdown_after_save': ParameterValue(
+                LaunchConfiguration('mmm_shutdown_after_save'), value_type=bool),
+            'shutdown_request_file': LaunchConfiguration('mmm_shutdown_request_file'),
+            'timeout_s': ParameterValue(LaunchConfiguration('mmm_timeout_s'), value_type=float),
+        }], additional_env=udp_env,
+    )
+
     localization_launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(localization_launch),
         launch_arguments={
@@ -534,6 +551,18 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('enable_mmm', default_value='true', choices=['true', 'false'],
+                              description='Start the in-stack MCB Mapping Machine coordinator.'),
+        DeclareLaunchArgument('mmm_room', default_value=use_sim_time, choices=['true', 'false'],
+                              description='Room capture without referee/start checks.'),
+        DeclareLaunchArgument('mmm_timeout_s', default_value='60.0',
+                              description='Wall-clock setup/save timeout in seconds.'),
+        DeclareLaunchArgument('mmm_shutdown_after_save', default_value='false',
+                              choices=['true', 'false'],
+                              description='Request host poweroff after validated Ready save.'),
+        DeclareLaunchArgument('mmm_shutdown_request_file',
+                              default_value='/run/thornbots-mmm/poweroff.request',
+                              description='Request file exposed by the host shutdown service.'),
         DeclareLaunchArgument('operator_inputs_only', default_value='false',
                               choices=['true', 'false'],
                               description='Only UART input and raw pose translation; '
@@ -583,7 +612,7 @@ def generate_launch_description():
         dji_serial_bridge_node, pose_translator_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
-            mcb_relay_node,
+            mcb_relay_node, mmm_node,
             target_selector_node, target_tracker_node, point_to_cv_target_node,
             lidar_node, lidar_self_filter_node,
             odom_tf_broadcaster_node,
