@@ -66,10 +66,9 @@ protected:
   std::optional<std::pair<Vector3d, double>> gun_pose();
   Vector3d idle_point_now(const rclcpp::Time & now);
   // (fire, delay_ms) for this tick's CVTarget. The MCB runs the delay from
-  // receiving the frame, so aim and fire cross the wire as one frame. Rate
-  // limited to fire_rate_hz; delay_ms is clamped to the uint16 field.
-  virtual std::pair<bool, int> fire_decision(
-    std::optional<double> delay_s, const rclcpp::Time & now);
+  // receiving the frame, so aim and fire cross the wire as one frame.
+  // Every eligible tick fires; delay_ms is clamped to the uint16 field.
+  virtual std::pair<bool, int> fire_decision(std::optional<double> delay_s);
   // The odom aim point, or nullopt if the newest target_state is stale or TF
   // fails (logged loudly): the caller may publish a non-firing idle point.
   virtual std::optional<Aim> compute_aim_point();
@@ -80,7 +79,7 @@ protected:
   std::function<void(const std_msgs::msg::Header &)> send_tick_, send_ack_;
 
   std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
-  double target_timeout_s_, fire_max_state_age_s_, fire_confidence_threshold_, fire_rate_hz_;
+  double target_timeout_s_, fire_max_state_age_s_, fire_confidence_threshold_;
   bool lead_enabled_;
   double firmware_latency_s_, min_fire_delay_s_, gimbal_lag_s_, v_muzzle_;
   int tof_iterations_;
@@ -97,7 +96,6 @@ protected:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  std::optional<rclcpp::Time> last_fire_time_;
   bool spinning_ = false;
   bool target_active_ = false;
   std::optional<double> held_panel_yaw_;  // Shot::panel_yaw, for latest_state_'s track

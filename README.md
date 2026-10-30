@@ -713,9 +713,15 @@ the flight: the odom point a gun at our exit position points through. At
 shooter gets the intercept itself.
 `solve_intercept()` is no longer on the node's path; only its tests use it.
 
-Each publish tick with an aim point may fire, at most `fire_rate_hz` (2.0) and
-only above `fire_confidence_threshold`, so a failed TF lookup or stale state
-holds fire. HP, heat and power gating are not built.
+Every publish tick with a shot solution and confidence at least
+`fire_confidence_threshold` (0.5) requests fire: up to 40 Hz at the default
+publish rate, with no Jetson fire-rate throttle. Each request carries the
+planner's alignment wait plus the exit delay, rounded to milliseconds and
+clamped to uint16 (25 ms minimum with the defaults). The MCB holds a pending
+request and ignores newer frames until it completes; see the
+[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
+Failed TF, unconverged tracks and stale detections still hold fire, as do the
+spin alignment and chase windows above. HP, heat and power gating are not built.
 
 `TargetState.detection_stamp` carries the newest contributing detection's corrected
 capture time; `header.stamp` still identifies the prediction time. Firing requires
