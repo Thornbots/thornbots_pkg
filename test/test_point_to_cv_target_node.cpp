@@ -62,6 +62,16 @@ public:
   void set_active(bool active) {target_active_ = active;}
   void non_firing_target() {fire_target_ = false;}
   void fail_aim() {fail_aim_ = true;}
+  void real_plan() {real_plan_ = true;}
+  using tp::PointToCvTarget::fire_decision;
+  void root_transform()
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = odom_frame_;
+    tf.child_frame_id = root_frame_;
+    tf.transform.rotation.w = 1.0;
+    tf_buffer_->setTransform(tf, "test", true);
+  }
   tp::IdleLook::Source idle_source() const
   {return idle_.source(clock_now().seconds(), target_timeout_s_, false);}
   bool active() const {return target_active_;}
@@ -81,18 +91,16 @@ public:
 protected:
   std::optional<Aim> compute_aim_point() override
   {
+    if (real_plan_) {return tp::PointToCvTarget::compute_aim_point();}
     if (fail_aim_) {return std::nullopt;}
     return Aim{tp::Vector3d(3.0, 1.0, 0.3),
       fire_target_ ? std::optional<double>(0.0) : std::nullopt};
-  }
-  std::pair<bool, int> fire_decision(std::optional<double> delay, const rclcpp::Time &) override
-  {
-    return {delay.has_value(), 0};
   }
   rclcpp::Time clock_now() const override {return rclcpp::Time(now_ns_, RCL_ROS_TIME);}
   int64_t now_ns_ = 123000000;
   bool fire_target_ = true;
   bool fail_aim_ = false;
+  bool real_plan_ = false;
 };
 
 class NodeTest : public ::testing::Test
@@ -135,6 +143,7 @@ TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
   model->detection_stamp = model->header.stamp;
   model->header.frame_id = "odom";
+  model->confidence = 0.5;
   node->on_target_state(model);
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
@@ -149,6 +158,73 @@ TEST_F(NodeTest, TargetTickIdentifiesTheOutputFrameAndStamp)
   EXPECT_TRUE(points[0].fire);
   EXPECT_FALSE(points[0].patrol);
   EXPECT_FALSE(points[0].turn_to_hit);
+}
+
+TEST_F(NodeTest, EveryFortyHzTickFiresWithAValidWireDelay)
+{
+  auto node = make();
+  node->real_plan();
+  node->root_transform();
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  for (int64_t tick = 0; tick < 40; ++tick) {
+    const int64_t now = 1000000000 + tick * 25000000;
+    node->time_ns(now);
+    auto model = std::make_shared<TargetState>();
+    model->header.stamp = rclcpp::Time(now, RCL_ROS_TIME);
+    model->detection_stamp = model->header.stamp;
+    model->confidence = 0.5;
+    model->valid = true;
+    model->center.x = 3.0;
+    model->radius = {0.2, 0.2};
+    node->on_target_state(model);
+    node->on_publish_tick();
+    ASSERT_EQ(points.size(), static_cast<size_t>(tick + 1));
+    EXPECT_TRUE(points.back().fire) << tick;
+    EXPECT_EQ(points.back().delay_ms, 25) << tick;
+  }
+}
+
+TEST_F(NodeTest, FireDecisionKeepsConfidenceSolutionAndWireBounds)
+{
+  auto node = make();
+  auto model = std::make_shared<TargetState>();
+  model->confidence = 0.49;
+  node->on_target_state(model);
+  EXPECT_FALSE(node->fire_decision(0.0).first);
+  model = std::make_shared<TargetState>(*model);
+  model->confidence = 0.5;
+  node->on_target_state(model);
+  EXPECT_FALSE(node->fire_decision(std::nullopt).first);
+  EXPECT_EQ(node->fire_decision(0.0), std::make_pair(true, 25));
+  EXPECT_EQ(node->fire_decision(0.012), std::make_pair(true, 37));
+  EXPECT_EQ(node->fire_decision(70.0), std::make_pair(true, 65535));
+}
+
+TEST_F(NodeTest, RealPlannerKeepsUnconvergedAndMissingTfFramesNonFiring)
+{
+  auto node = make();
+  node->real_plan();
+  auto model = std::make_shared<TargetState>();
+  model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
+  model->detection_stamp = model->header.stamp;
+  model->confidence = 1.0;
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_target_state(model);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_FALSE(points.back().fire);
+  EXPECT_FALSE(points.back().patrol);
+  model = std::make_shared<TargetState>(*model);
+  model->valid = true;
+  node->on_target_state(model);
+  node->on_publish_tick();
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_FALSE(points.back().fire);
+  EXPECT_TRUE(points.back().patrol);
 }
 
 TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
@@ -324,6 +400,7 @@ TEST_F(NodeTest, FireAgeBoundaryCoastsUntilTargetTimeout)
   auto model = std::make_shared<TargetState>();
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
   model->detection_stamp = model->header.stamp;
+  model->confidence = 0.5;
   node->on_target_state(model);
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
