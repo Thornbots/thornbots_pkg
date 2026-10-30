@@ -74,6 +74,8 @@ def validate_field(boot, team, x, y, yaw):
         raise ValueError("raw /odom sign disagrees with referee team; reboot correctly")
     if math.dist(raw, (x, y)) > 0.3:
         raise ValueError("surveyed start differs from boot raw /odom by more than 0.3 m")
+    if abs(angle(yaw - math.pi / 2)) > 0.25:
+        raise ValueError("both teams must boot facing +y: chassis heading pi/2")
     if abs(angle(yaw - boot["chassis_yaw"])) > 0.25:
         raise ValueError("field_yaw must be near zero: check team and chassis heading")
 

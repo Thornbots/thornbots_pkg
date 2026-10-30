@@ -89,7 +89,7 @@ def make_bundle(tmp_path):
         json.dumps(
             {
                 'root': [2, 2, 0],
-                'chassis_yaw': 0,
+                'chassis_yaw': math.pi / 2,
                 'team': 'red',
                 'raw_odom': [-4.625, 0],
                 'session_id': 'test-session',
@@ -170,17 +170,35 @@ def test_robot_id_zero(monkeypatch, room, no_referee, team, passes):
             workflow.observe_inputs(runtime, args, require_session=False)
 
 
-def test_alignment_keeps_graph_boot_frame_and_seeds_root(tmp_path):
+@pytest.mark.parametrize('team,sign', [('red', -1), ('blue', 1)])
+def test_alignment_keeps_graph_boot_frame_and_seeds_root(tmp_path, team, sign):
     source = make_bundle(tmp_path)
+    boot = json.loads((source / 'boot.json').read_text())
+    boot.update(team=team, raw_odom=[sign * 4.625, 0])
+    (source / 'boot.json').write_text(json.dumps(boot))
     output = tmp_path / 'field'
-    workflow.align(NS(source=source, output=output, x=-4.5, y=0.1, yaw=0, team='red'))
+    workflow.align(NS(source=source, output=output, x=sign * 4.5, y=0.1, yaw=math.pi / 2, team=team))
     manifest = workflow.check(output)
-    assert manifest['initial_root'] == pytest.approx([-4.5, 0.1, 0])
+    assert manifest['initial_root'] == pytest.approx([sign * 4.5, 0.1, 0])
     assert (source / 'map.posegraph').read_bytes() == b'graph-data'
     assert not (output / 'field.posegraph').exists()
     assert yaml.safe_load((output / 'field.yaml').read_text())['origin'][2] == 0
     with pytest.raises(FileExistsError):
-        workflow.align(NS(source=source, output=output, x=-4.5, y=0.1, yaw=0, team='red'))
+        workflow.align(NS(source=source, output=output, x=sign * 4.5, y=0.1, yaw=math.pi / 2, team=team))
+
+
+def test_alignment_rejects_blue_zero_telemetry_without_rewriting_capture(tmp_path):
+    source = make_bundle(tmp_path)
+    boot_path = source / 'boot.json'
+    boot = json.loads(boot_path.read_text())
+    boot.update(team='blue', raw_odom=[4.625, 0], chassis_yaw=0)
+    boot_path.write_text(json.dumps(boot))
+    original = boot_path.read_bytes()
+    output = tmp_path / 'field'
+    with pytest.raises(ValueError, match='field_yaw must be near zero'):
+        workflow.align(NS(source=source, output=output, x=None, y=None, yaw=math.pi / 2, team=None))
+    assert boot_path.read_bytes() == original
+    assert not output.exists()
 
 
 def test_missing_graph_and_boot_are_not_success(tmp_path):
@@ -204,7 +222,7 @@ def test_session_can_be_moved_as_one_directory(tmp_path):
             output=session / 'deployment',
             x=-4.625,
             y=0,
-            yaw=0,
+            yaw=math.pi / 2,
             team=None,
         )
     )
@@ -390,7 +408,7 @@ def test_field_rejects_team_sign_heading_and_degrees(team, x, yaw, reported):
         workflow.validate_field(boot, team, x, 0, yaw)
 
 
-@pytest.mark.parametrize('team,sign,heading', [('red', -1, 0), ('blue', 1, math.pi)])
+@pytest.mark.parametrize('team,sign,heading', [('red', -1, math.pi / 2), ('blue', 1, math.pi / 2)])
 def test_registration_known_wall_in_field_coordinates(team, sign, heading):
     boot = {'team': team, 'raw_odom': [sign * 4.625, 0], 'chassis_yaw': heading}
     workflow.validate_field(boot, team, sign * 4.5, 0.2, heading)
@@ -419,11 +437,21 @@ def test_seed_mismatch_refused():
         workflow.verify_start(boot, {'team': 'blue', 'raw_odom': [-4.625, 0]})
 
 
-def test_blue_pi_allows_float32_serialization_noise():
-    yaw = float(np.float32(math.pi))
+@pytest.mark.parametrize('team,sign', [('red', -1), ('blue', 1)])
+def test_boot_pi_over_two_allows_float32_serialization_noise(team, sign):
+    yaw = float(np.float32(math.pi / 2))
     workflow.validate_field(
-        {'team': 'blue', 'raw_odom': [4.625, 0], 'chassis_yaw': yaw}, 'blue', 4.625, 0, yaw
+        {'team': team, 'raw_odom': [sign * 4.625, 0], 'chassis_yaw': yaw},
+        team, sign * 4.625, 0, yaw
     )
+
+
+@pytest.mark.parametrize('team,sign', [('red', -1), ('blue', 1)])
+@pytest.mark.parametrize('yaw,reported', [(0, 0), (math.pi, math.pi), (math.pi / 2, 0)])
+def test_field_rejects_old_headings_and_placeholder_telemetry(team, sign, yaw, reported):
+    boot = {'team': team, 'raw_odom': [sign * 4.625, 0], 'chassis_yaw': reported}
+    with pytest.raises(ValueError):
+        workflow.validate_field(boot, team, sign * 4.625, 0, yaw)
 
 
 def test_registration_places_known_wall_pixels():
@@ -675,12 +703,12 @@ def test_insertion_toggle_is_idempotent_and_verified(
 def test_alignment_defaults_and_typo_rejection(tmp_path):
     source = make_bundle(tmp_path)
     workflow.align(
-        NS(source=source, output=tmp_path / 'default', x=None, y=None, yaw=0, team=None)
+        NS(source=source, output=tmp_path / 'default', x=None, y=None, yaw=math.pi / 2, team=None)
     )
     assert workflow.check(tmp_path / 'default')['initial_root'] == [-4.625, 0, 0]
     with pytest.raises(ValueError, match='0.3 m'):
         workflow.align(
-            NS(source=source, output=tmp_path / 'typo', x=-4.265, y=0, yaw=0, team=None)
+            NS(source=source, output=tmp_path / 'typo', x=-4.265, y=0, yaw=math.pi / 2, team=None)
         )
 
 
