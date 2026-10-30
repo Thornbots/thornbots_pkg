@@ -55,7 +55,6 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   target_timeout_s_ = declare_parameter("target_timeout_s", 0.5);
   fire_max_state_age_s_ = declare_parameter("fire_max_state_age_s", 0.15);
   fire_confidence_threshold_ = declare_parameter("fire_confidence_threshold", 0.5);
-  fire_rate_hz_ = declare_parameter("fire_rate_hz", 2.0);
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
@@ -242,19 +241,14 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
     idle_rate_rad_s_, idle_switch_rad_);
 }
 
-std::pair<bool, int> PointToCvTarget::fire_decision(
-  std::optional<double> delay_s, const rclcpp::Time & now)
+std::pair<bool, int> PointToCvTarget::fire_decision(std::optional<double> delay_s)
 {
-  if (!delay_s || fire_rate_hz_ <= 0.0) {
+  if (!delay_s) {
     return {false, 0};
   }
   if (latest_state_->confidence < fire_confidence_threshold_) {
     return {false, 0};
   }
-  if (last_fire_time_ && seconds(now - *last_fire_time_) < 1.0 / fire_rate_hz_) {
-    return {false, 0};
-  }
-  last_fire_time_ = now;
   // Python round() is half-to-even, as is nearbyint in the default mode.
   return {true, wire_fire_delay_ms(*delay_s, fire_exit_s(firmware_latency_s_, min_fire_delay_s_))};
 }
@@ -304,7 +298,7 @@ void PointToCvTarget::on_publish_tick()
     out.x = static_cast<float>(aim->pos.x());
     out.y = static_cast<float>(aim->pos.y());
     out.z = static_cast<float>(aim->pos.z());
-    const auto fire = fire_decision(aim->fire_delay_s, now);
+    const auto fire = fire_decision(aim->fire_delay_s);
     out.fire = fire.first;
     out.delay_ms = static_cast<uint16_t>(fire.second);
     out.type_c_based_patrol = type_c_based_patrol_;
