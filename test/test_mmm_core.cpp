@@ -312,8 +312,8 @@ TEST(MmmSpawnCheck, BootStaysOnMarkWhileSaveAllowsHalfMetre)
   EXPECT_FALSE(mmm::near_raw_start(0, 0.50001, mmm::SpawnCheck::Save));
   EXPECT_TRUE(mmm::near_raw_start(0.3, 0.4, mmm::SpawnCheck::Save));
   EXPECT_FALSE(mmm::near_raw_start(0.3, 0.40001, mmm::SpawnCheck::Save));
-  EXPECT_FALSE(mmm::near_raw_start(4.625, 0, mmm::SpawnCheck::Save));
-  EXPECT_FALSE(mmm::near_raw_start(-4.625, 0, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(3.53, -0.426, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(-3.53, -0.426, mmm::SpawnCheck::Boot));
   const double nan = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(mmm::near_raw_start(nan, 0, mmm::SpawnCheck::Save));
   EXPECT_FALSE(mmm::near_raw_start(0, nan, mmm::SpawnCheck::Boot));
