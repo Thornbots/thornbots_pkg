@@ -17,7 +17,8 @@ Keep runtime nodes C++; Python is for launch, with ROS-free cores unit-tested.
 
 - `auto.launch.py` starts CV consumers but still needs an arg selecting their
   sim or hardware detection producers; this package owns full-stack launch.
-- Lidar mount and scan-frame sector use the Oct 26 robot measurement:
+- Lidar mount (flipped Oct 31) uses one parked-pose measurement; confirm the
+  yaw with a head-turn fit and the sector at full pitch:
   [lidar filter](README.md#lidar_self_filter).
 - Measure relay UART/mailbox delays and gimbal settling on hardware; defaults
   are placeholders: [relay](README.md#mcb_relay), [aiming](README.md#point_to_cv_target).
