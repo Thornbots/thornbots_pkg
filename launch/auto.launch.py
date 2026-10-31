@@ -558,6 +558,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        # First: later defaults (mmm_room, autosave_map) read real_hardware.
+        real_hardware_arg,
         DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
                               description='Request host Wi-Fi disconnect at confirmed battle.'),
         DeclareLaunchArgument('match_wifi_request_file',
@@ -605,7 +607,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'amcl_initial_yaw', default_value='0.0',
             description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
-        real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
         lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
