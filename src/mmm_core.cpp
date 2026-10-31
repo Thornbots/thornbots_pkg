@@ -22,6 +22,15 @@ namespace thornbots_pkg::mmm
 {
 namespace
 {
+// Allow practical re-parking with independent translation/yaw hysteresis.
+constexpr double kStartEntryDistanceM = 0.50;
+constexpr double kStartEntryYawRad = 15.0 * M_PI / 180.0;
+constexpr double kStartExitDistanceM = 0.60;
+constexpr double kStartExitYawRad = 18.0 * M_PI / 180.0;
+// Boot must remain on the mark; only save-time raw odometry gets more room.
+constexpr double kBootSpawnDistanceM = 0.30;
+constexpr double kSaveSpawnDistanceM = 0.50;
+
 double yaw_distance(double a, double b)
 {
   return std::abs(std::atan2(std::sin(a - b), std::cos(a - b)));
@@ -36,8 +45,14 @@ bool transaction(int number)
 }
 }  // namespace
 
-StartGate::StartGate(Pose boot, double inward)
-: boot_(boot), inward_(inward) {}
+bool near_raw_start(double x, double y, SpawnCheck check)
+{
+  const double limit = check == SpawnCheck::Boot ? kBootSpawnDistanceM : kSaveSpawnDistanceM;
+  return std::isfinite(x) && std::isfinite(y) && std::hypot(x, y) <= limit;
+}
+
+StartGate::StartGate(Pose boot)
+: boot_(boot) {}
 
 void StartGate::reset(Pose boot)
 {
@@ -57,7 +72,7 @@ bool StartGate::update(std::optional<Pose> pose, double stamp, double now)
   }
   const double distance = std::hypot(pose->x - boot_.x, pose->y - boot_.y);
   const double yaw = yaw_distance(pose->yaw, boot_.yaw);
-  if (distance > 0.15 || yaw > 0.15) {
+  if (distance > kStartExitDistanceM || yaw > kStartExitYawRad) {
     reset(boot_);
     return false;
   }
@@ -72,7 +87,8 @@ bool StartGate::update(std::optional<Pose> pose, double stamp, double now)
       return std::hypot(pose->x - sample.second.x, pose->y - sample.second.y) <= 0.03 + 1e-9 &&
              yaw_distance(pose->yaw, sample.second.yaw) <= 0.03 + 1e-9;
     });
-  at_start_ = parked && (at_start_ || (distance <= inward_ && yaw <= inward_));
+  at_start_ = parked && (at_start_ ||
+    (distance <= kStartEntryDistanceM && yaw <= kStartEntryYawRad));
   return at_start_;
 }
 

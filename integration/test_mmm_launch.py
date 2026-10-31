@@ -146,7 +146,7 @@ class TestMmmFlow(unittest.TestCase):
             until = time.monotonic() + 2.0
             wait(lambda: time.monotonic() >= until)
             start = evidence['pose'].x
-            wait(lambda: evidence['pose'].x >= start + 0.4,
+            wait(lambda: evidence['pose'].x >= start + 0.7,
                  action=lambda: command(0.15))
             command(0.0)
             wait(lambda: evidence['even'] == 4)
@@ -159,7 +159,8 @@ class TestMmmFlow(unittest.TestCase):
                     command(0.0)
                     return
                 p, q = tf.transform.translation, tf.transform.rotation
-                dx, dy = boot['root'][0] - p.x, boot['root'][1] - p.y
+                # Re-park inside the wider gate without returning to the exact boot mark.
+                dx, dy = boot['root'][0] + 0.4 - p.x, boot['root'][1] - p.y
                 yaw = math.atan2(2 * (q.w * q.z + q.x * q.y),
                                  1 - 2 * (q.y * q.y + q.z * q.z))
                 speed = min(1.0, 0.15 / max(0.001, math.hypot(dx, dy)))
@@ -171,6 +172,10 @@ class TestMmmFlow(unittest.TestCase):
 
             wait(lambda: evidence['even'] == 2, action=return_to_map_start)
             command(0.0)
+            parked = buffer.lookup_transform('map', 'root', Time()).transform.translation
+            offset = math.hypot(parked.x - boot['root'][0], parked.y - boot['root'][1])
+            self.assertGreater(offset, 0.3)
+            self.assertLessEqual(offset, 0.5)
             evidence['odd'] = 3
             send(3)
             wait(lambda: evidence['odd'] is None)

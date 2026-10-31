@@ -205,13 +205,32 @@ bool settle(mmm::StartGate & gate, mmm::Pose pose = {0, 0, 0}, double start = 0)
 TEST(MmmStartGate, InwardHysteresisOuterLimitAndParkedReturn)
 {
   mmm::StartGate gate({0, 0, 0});
-  EXPECT_FALSE(settle(gate, {0.14, 0, 0}));
-  EXPECT_TRUE(settle(gate, {0.11, 0, 0}, 3));
-  EXPECT_TRUE(gate.update(mmm::Pose{0.14, 0, 0}, 5.2, 5.2));
-  EXPECT_FALSE(gate.update(mmm::Pose{0.151, 0, 0}, 5.3, 5.3));
-  EXPECT_FALSE(settle(gate, {0.14, 0, 0}, 6));
-  EXPECT_TRUE(settle(gate, {0.1, 0, 0}, 9));
-  EXPECT_FALSE(gate.update(mmm::Pose{0, 0, 0.151}, 11.2, 11.2));
+  EXPECT_FALSE(settle(gate, {0.50001, 0, 0}));
+  ASSERT_TRUE(settle(gate, {0.5, 0, 0}, 3));
+  // Move slowly enough to preserve the independent 2 s parked window.
+  for (int i = 1; i <= 10; ++i) {
+    const double now = 5.1 + i * 3.0;
+    EXPECT_TRUE(gate.update(mmm::Pose{0.5 + i * 0.01, 0, 0}, now, now));
+  }
+  EXPECT_FALSE(gate.update(mmm::Pose{0.60001, 0, 0}, 36, 36));
+  EXPECT_FALSE(settle(gate, {0.55, 0, 0}, 37));
+  EXPECT_TRUE(settle(gate, {0.5, 0, 0}, 40));
+}
+
+TEST(MmmStartGate, SeparateYawEntryAndExitBoundaries)
+{
+  const double entry = 15.0 * M_PI / 180.0;
+  const double exit = 18.0 * M_PI / 180.0;
+  mmm::StartGate gate({0, 0, 0});
+  EXPECT_FALSE(settle(gate, {0, 0, entry + 1e-5}));
+  ASSERT_TRUE(settle(gate, {0, 0, entry}, 3));
+  for (int i = 1; i <= 3; ++i) {
+    const double now = 5.1 + i * 3.0;
+    EXPECT_TRUE(gate.update(mmm::Pose{0, 0, entry + i * M_PI / 180.0}, now, now));
+  }
+  EXPECT_FALSE(gate.update(mmm::Pose{0, 0, exit + 1e-5}, 15, 15));
+  EXPECT_FALSE(settle(gate, {0, 0, 16.0 * M_PI / 180.0}, 16));
+  EXPECT_TRUE(settle(gate, {0, 0, entry}, 19));
 }
 
 TEST(MmmStartGate, ExactDwellAndRepeatedStampCannotAccumulateEvidence)
@@ -272,12 +291,32 @@ TEST(MmmStartGate, ResetReanchorsAndYawWraps)
   EXPECT_TRUE(settle(gate, {3, 4, 0}, 6));
 }
 
-TEST(MmmStartGate, SaveGateAllowsFullOuterTolerance)
+TEST(MmmStartGate, EntryIncludesRadialAndYawBoundaries)
 {
-  mmm::StartGate gate({0, 0, 0}, 0.15);
-  EXPECT_TRUE(settle(gate, {0.15, 0, 0.15}));
+  mmm::StartGate gate({0, 0, 0});
+  EXPECT_TRUE(settle(gate, {0.5, 0, 15.0 * M_PI / 180.0}));
   gate.reset({0, 0, 0});
-  EXPECT_TRUE(settle(gate, {0.09, 0.12, 0.15}, 3));
+  EXPECT_TRUE(settle(gate, {0.3, 0.4, -15.0 * M_PI / 180.0}, 3));
+  gate.reset({0, 0, 0});
+  EXPECT_FALSE(settle(gate, {0.3, 0.40001, 0}, 6));
+  EXPECT_FALSE(settle(gate, {2.35, 0, 13.0 * M_PI / 180.0}, 9));
+}
+
+TEST(MmmSpawnCheck, BootStaysOnMarkWhileSaveAllowsHalfMetre)
+{
+  // Raw odometry boots at (0, 0) for either team; a field start is not raw.
+  EXPECT_TRUE(mmm::near_raw_start(0, 0.3, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.30001, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.5, mmm::SpawnCheck::Boot));
+  EXPECT_TRUE(mmm::near_raw_start(0, 0.5, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.50001, mmm::SpawnCheck::Save));
+  EXPECT_TRUE(mmm::near_raw_start(0.3, 0.4, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0.3, 0.40001, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(4.625, 0, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(-4.625, 0, mmm::SpawnCheck::Boot));
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(mmm::near_raw_start(nan, 0, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0, nan, mmm::SpawnCheck::Boot));
 }
 
 TEST(MmmScanGate, TransientFailuresRequireTwentyNewScans)

@@ -80,8 +80,9 @@ calls Jazzy's `/slam_toolbox/reset` (`slam_toolbox/srv/Reset`,
 It creates `map_save_dir/mmm-<system-clock count>/`, then captures `boot.json`
 and `session.json` after fixed-geometry fresh lidar, raw `/odom`, fresh
 chassis joints and map TF, and at least two stationary seconds. Field capture
-also requires the referee team and raw coordinates near zero; practice without
-a referee uses `seed_explicit_team:=red|blue`. Sim defaults `mmm_room:=true`;
+also requires the referee team and raw `/odom` within 0.30 m of its (0, 0)
+boot start; practice without a referee uses `seed_explicit_team:=red|blue`.
+Sim defaults `mmm_room:=true`;
 hardware defaults false. `mmm_room:=true` captures room coordinates. Setup
 failure or the `mmm_timeout_s` wall deadline sends 6; it never stops the service.
 A fresh start after the wire work window creates a new session and resets the
@@ -91,9 +92,10 @@ the boot stationary window; a real lidar geometry change fails setup and blocks
 saves for that session.
 
 The ROS-free `mmm_core` owns protocol bookkeeping, pose evidence and save
-selection. Readiness requires TF no older than 0.5 s, outer errors at most
-0.15 m/rad, inward thresholds 0.12 m/rad, and two seconds parked within
-0.03 m/rad. Leaving the outer limits or losing evidence announces mapping;
+selection. Readiness requires TF no older than 0.5 s, `map->root` within
+0.50 m and 15° (0.2618 rad) of captured boot to enter, and two seconds parked
+within 0.03 m/0.03 rad. Hysteresis retains readiness up to 0.60 m and
+18° (0.3142 rad). Leaving the outer limits or losing evidence announces mapping;
 a parked return announces ready. The node never mirrors the MCB state machine.
 
 Save requests are acknowledged before asynchronous work. Only the last completed
@@ -102,7 +104,10 @@ all other saves use distinct `incomplete-<counter>/` directories and are marked
 unvalidated. Setup/busy requests are acknowledged without concurrent saves.
 [Localization's save service](../sentry_localization/README.md#explicit-mapping-snapshots)
 owns graph/image writing and bundle validation. MMM carries boot metadata into
-the bundle and guards the parked condition through completion. Candidates stay
+the bundle and guards the parked condition through completion. In field mode,
+this save guard allows raw `/odom` within 0.50 m of its (0, 0) boot start, while boot
+capture keeps the tighter mark requirement above. Chassis yaw must remain within
+0.03 rad of boot during capture and saving. Candidates stay
 unvalidated until this guard passes; required files and directories are fsynced
 before publishing `snapshot/` or requesting shutdown. Incomplete saves
 are recovery material; registration and deployment remain manual steps. A failed
@@ -838,7 +843,7 @@ off during a session invalidates that attempt; keep it on throughout.
 2. In a second terminal, set the same `SESSION`; check head yaw ≈ 0 with
    `ros2 run tf2_ros tf2_echo root head` (Ctrl-C after checking), then capture **before moving**:
    `ros2 run thornbots_pkg operator_workflow boot-pose "$SESSION"`.
-3. Drive ≤0.2 m/s with the head still, covering the whole field
+3. Drive ≤0.4 m/s with the head still, covering the whole field
    ([broad-field coverage](../sentry_localization/README.md#broad-field-coverage)). Before crossing rough or
    raised ground: `ros2 run thornbots_pkg operator_workflow pause "$SESSION"`.
    Stop on level ground, let the chassis settle, then `... resume "$SESSION"`
@@ -881,8 +886,9 @@ backup path. Backups are recovery material, not a validated deployment bundle.
 The same warning prints if the launch exits on its own.
 An explicit save validates fresh occupancy data and serialize service success,
 then atomically installs PGM/YAML plus nonempty `.posegraph/.data` and boot data.
-Saving requires the live mapping session ID and a fresh `map->root` within
+The manual operator workflow requires the live mapping session ID and a fresh `map->root` within
 0.15 m/0.15 rad of captured boot. This is SLAM's pose, not raw odometry.
+The controller-driven [MMM workflow](#mcb-mapping-machine) uses its own readiness gate.
 Return to the boot mark and heading because boot anchors map registration and
 the AMCL start; saving away from it breaks that provenance. Keep parked
 throughout saving. Occupancy and graph are sequential snapshots, not one
