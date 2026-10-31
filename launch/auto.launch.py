@@ -141,7 +141,7 @@ def generate_launch_description():
     )
 
     localization_mode_arg = DeclareLaunchArgument(
-        'localization_mode', default_value='mapping',
+        'localization_mode', default_value='amcl',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
         "map->navigation frame. See sentry_localization's "
