@@ -205,7 +205,7 @@ private:
     return std::nullopt;
   }
 
-  bool inputs_ready()
+  bool inputs_ready(core::SpawnCheck check)
   {
     if (!odom_ || !fresh(odom_->header.stamp) || !scan_gate_.ready(now().seconds()))
     {return false;}
@@ -219,7 +219,7 @@ private:
       team = observed;
     } else if (team.empty()) {return false;}
     team_ = team;
-    return std::hypot(p.x - (team == "red" ? -4.625 : 4.625), p.y) <= 0.3;
+    return core::at_team_spawn(p.x, p.y, team == "blue", check);
   }
 
   static double angle(double a) {return std::atan2(std::sin(a), std::cos(a));}
@@ -229,7 +229,7 @@ private:
     double stamp = 0;
     const auto pose = current_pose(stamp);
     const auto yaw = chassis();
-    if (!pose || !yaw || !inputs_ready() || stamp < reset_stamp_.seconds()) {
+    if (!pose || !yaw || !inputs_ready(core::SpawnCheck::Boot) || stamp < reset_stamp_.seconds()) {
       restart_capture();
       return;
     }
@@ -292,7 +292,7 @@ private:
   bool parked_guard()
   {
     const auto yaw = chassis();
-    return at_start() && inputs_ready() && yaw &&
+    return at_start() && inputs_ready(core::SpawnCheck::Save) && yaw &&
            std::abs(angle(*yaw - boot_chassis_)) <= 0.03;
   }
 
