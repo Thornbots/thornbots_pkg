@@ -830,7 +830,7 @@ off during a session invalidates that attempt; keep it on throughout.
 2. In a second terminal, set the same `SESSION`; check head yaw ≈ 0 with
    `ros2 run tf2_ros tf2_echo root head` (Ctrl-C after checking), then capture **before moving**:
    `ros2 run thornbots_pkg operator_workflow boot-pose "$SESSION"`.
-3. Drive ≤0.2 m/s with the head still, covering the whole field
+3. Drive slowly (≤0.4 m/s, the MMM drive cap) with the head still, covering the whole field
    ([broad-field coverage](../sentry_localization/README.md#broad-field-coverage)). Before crossing rough or
    raised ground: `ros2 run thornbots_pkg operator_workflow pause "$SESSION"`.
    Stop on level ground, let the chassis settle, then `... resume "$SESSION"`
