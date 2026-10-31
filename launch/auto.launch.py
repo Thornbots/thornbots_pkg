@@ -570,7 +570,7 @@ def generate_launch_description():
         DeclareLaunchArgument('mmm_room', default_value=use_sim_time, choices=['true', 'false'],
                               description='Room capture without referee/start checks.'),
         DeclareLaunchArgument('mmm_timeout_s', default_value='60.0',
-                              description='Wall-clock setup/save timeout in seconds.'),
+                              description='Wall seconds per localization switch, setup or save.'),
         DeclareLaunchArgument('mmm_shutdown_after_save', default_value='false',
                               choices=['true', 'false'],
                               description='Request host poweroff after validated Ready save.'),

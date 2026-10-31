@@ -24,6 +24,8 @@ find_package(rcl_interfaces REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
 find_package(sentry_localization REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(slam_toolbox REQUIRED)
 
 add_executable(room_check src/room_check.cpp)
@@ -69,7 +71,7 @@ ament_target_dependencies(match_wifi_guard rclcpp dji_serial_bridge)
 add_executable(mmm src/mmm.cpp)
 target_link_libraries(mmm mmm_core)
 ament_target_dependencies(mmm rclcpp dji_serial_bridge nav_msgs sensor_msgs
-  sentry_localization slam_toolbox tf2_ros)
+  sentry_localization slam_toolbox std_srvs lifecycle_msgs tf2_ros)
 
 add_executable(mcb_relay src/mcb_relay.cpp)
 target_link_libraries(mcb_relay mcb_relay_core)
@@ -118,6 +120,10 @@ if(BUILD_TESTING)
   if(THORNBOTS_MMM_SIM_TEST)
     find_package(launch_testing_ament_cmake REQUIRED)
     add_launch_test(integration/test_mmm_launch.py TIMEOUT 180)
+    add_launch_test(integration/test_mmm_launch.py TARGET mmm_amcl_switch TIMEOUT 180
+      ENV THORNBOTS_MMM_START_MODE=amcl)
+    set_tests_properties(integration_test_mmm_launch.py mmm_amcl_switch
+      PROPERTIES RUN_SERIAL TRUE)
   endif()
   ament_add_gtest(test_armor_tracker test/test_armor_tracker.cpp)
   target_link_libraries(test_armor_tracker armor_tracker)
