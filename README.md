@@ -64,7 +64,7 @@ calls Jazzy's `/slam_toolbox/reset` (`slam_toolbox/srv/Reset`,
 It creates `map_save_dir/mmm-<system-clock count>/`, then captures `boot.json`
 and `session.json` after fixed-geometry fresh lidar, raw `/odom`, fresh
 chassis joints and map TF, and at least two stationary seconds. Field capture
-also requires the referee team and raw team-start coordinates; practice without
+also requires the referee team and raw coordinates near zero; practice without
 a referee uses `seed_explicit_team:=red|blue`. Sim defaults `mmm_room:=true`;
 hardware defaults false. `mmm_room:=true` captures room coordinates. Setup
 failure or the `mmm_timeout_s` wall deadline sends 6; it never stops the service.
@@ -166,7 +166,7 @@ false (a blank pose graph) and `autosave_map` defaults to
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 `sentry_localization`.
 
-Raw aim coordinates use the current field-centred wire frame; see
+Raw aim coordinates use the start-relative, field-aligned wire frame; see
 [UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 Navigation's corrected `nav_odom` does not change raw `odom` or the CV aim
 frame.
@@ -257,8 +257,8 @@ provides the fused navigation pose and `map->nav_odom`. The broadcaster
 interpolates raw position at the fused pose stamp to publish translation-only
 `nav_odom->odom`; navigation cannot rotate the aim axes. It does not substitute
 latest data or extrapolate. A backwards stamp or a discontinuous raw POSE step
-clears raw history and pending navigation samples. Boot/team selection can
-reanchor raw coordinates, as defined by the [wire owner](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+clears raw history and pending navigation samples. Team selection preserves
+the raw zero origin, as defined by the [wire owner](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 
 `nav_odom` is an extra navigation reference whose axes stay aligned with raw
 `odom`, matching the MCB's translation-only offset. Its pose can change with
@@ -534,10 +534,13 @@ while CV continues in the unchanged raw frame.
   change from the last sent offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
   that std. The EKF's std reads ~1 mm at rest and ~7 mm at 1 m/s in sim.
 - After a send it waits `hold_off_s` (0.3 s) before another correction,
-  limiting correction rate; an unchanged offset is not resent. Raw `/odom`
-  does not echo corrections. Clock resets/raw reanchors forget the sent offset.
-  UART has no correction acknowledgement: the stored offset estimates the MCB
-  state and cannot detect mailbox loss; hardware validation remains open.
+  limiting correction rate. Each correction is repeated three times even if
+  the offset is unchanged, recalculating the absolute position from fresh inputs
+  through the same uncertainty gate. A lost first startup frame therefore gets
+  another opportunity; repeats are idempotent offsets, never additive deltas.
+  Raw `/odom` does not echo corrections. Clock resets/raw discontinuities forget
+  the sent offset. UART has no acknowledgement: losing all four sends is still
+  possible, and hardware mailbox/timing validation remains open.
 
 The bridge packs the navigation position using the existing `RELOCALIZE`
 payload. Raw POSE and the CV aim frame remain unchanged. See the
@@ -600,6 +603,10 @@ and aims at from wherever the chassis is, since 2026-09-27. It was a
 root-frame point before that and a camera-relative vector before that. See
 `CVTarget.msg` and
 [UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md).
+
+Idle enemy-zone points are field coordinates transformed through
+`nav_odom -> odom` before publication. Until that transform exists, idle aim
+holds the muzzle bearing; it does not send field coordinates as raw points.
 
 The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone, so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
 `sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
@@ -805,7 +812,7 @@ off during a session invalidates that attempt; keep it on throughout.
    `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 1.5707963267948966`.
    For blue, use `oct31-blue-01` as the session in step 1.
    x/y default to the team's contract start. Optional surveyed `--x`/`--y`
-   refinements must stay within 0.3 m of captured raw odometry. Never enter degrees.
+   refinements must stay within 0.3 m of the contract team start. Never enter degrees.
 5. Stop mapping with Ctrl-C. Park at the live team's contract start. Run:
    `ros2 run thornbots_pkg operator_workflow localize "$SESSION"`.
    Wait for **LOCALIZE PASS**, check RViz scan/wall overlap, and leave it running.
@@ -864,16 +871,17 @@ leaves much of the field unseen.
 Room sessions record `frame_mode: room` and `team: null`; boot/save and
 `prepare-room` need no referee (including `robot_id: 0`). On a practice field
 without a referee, use `mapping "$SESSION" --no-referee --team red` (or blue)
-and the same flags on `localize`. This explicit choice still requires raw
-`/odom` within 0.3 m of that team's contract start. It cannot repair a wrong-side
-firmware seed. Boot/save inherit the choice from `session.json`.
+for mapping and boot capture. Raw `/odom` must be within 0.3 m of zero.
+Boot/save inherit the choice from `session.json`. AMCL localization always
+waits for an actual MCB referee team, including room and `--no-referee` runs;
+an explicit practice team cannot unlock AMCL or set its initial pose.
 
 Boot capture requires 20 fixed-geometry fresh lidar scans and at least two
 stationary seconds of stamped root/chassis data (3 cm/0.03 rad motion limit).
 It records raw `/odom`, referee team and the live mapping session ID. Field
 alignment derives team from that record; optional `--team` must agree. Raw
-odometry and measured field x must have the team's sign: red negative, blue
-positive. Both teams boot facing +y: measured chassis heading must be within
+odometry must be within 0.3 m of zero; measured field x has the team's sign:
+red negative, blue positive. Both teams boot facing +y: measured chassis heading must be within
 0.25 rad of π/2. The field axes remain +x toward blue base, +y left, with CCW
 positive yaw. `root` yaw remains zero; π/2 belongs only to the `chassis_yaw` joint.
 Current [UART POSE](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-pose-chassis-yaw)
@@ -886,11 +894,12 @@ These checks cannot replace checking the referee configuration and surveyed
 heading against the physical field.
 
 A field-aligned map can be used by either team. AMCL starts from the live team's
-contract root (-4.625, 0, 0) or (4.625, 0, 0), checked against live raw odometry;
+contract root (-4.625, 0, 0) or (4.625, 0, 0), after a valid REF_SYS team
+report and a raw-zero boot check;
 the map's captured team describes registration provenance. AMCL supplies
 `map->nav_odom`, not `/localization/odom`: with rf2o that topic comes from EKF
 fusing raw velocity/fixed heading and rf2o position; room/`--raw-odom` uses
-passthrough raw odometry. The relay consumes this navigation odometry, so an
+raw odometry with the team-start translation (room mode keeps zero). The relay consumes this navigation odometry, so an
 incorrect EKF seed cannot be repaired by a correct AMCL map pose alone.
 Automatic `localize` and standalone `convergence` both require samples no older
 than 3 seconds, alongside the existing covariance, scan, TF and parked-pose gates.

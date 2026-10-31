@@ -75,10 +75,10 @@ def validate_field(boot, team, x, y, yaw):
     raw = boot["raw_odom"]
     if len(raw) != 2 or not all(math.isfinite(v) for v in raw):
         raise ValueError("invalid captured raw /odom")
-    if (raw[0] < 0) != (team == "red") or raw[0] == 0:
-        raise ValueError("raw /odom sign disagrees with referee team; reboot correctly")
-    if math.dist(raw, (x, y)) > 0.3:
-        raise ValueError("surveyed start differs from boot raw /odom by more than 0.3 m")
+    if math.dist(raw, (0, 0)) > 0.3:
+        raise ValueError("boot raw /odom must be within 0.3 m of zero")
+    if math.dist((x, y), (-4.625 if team == "red" else 4.625, 0)) > 0.3:
+        raise ValueError("surveyed start differs from team start by more than 0.3 m")
     if abs(angle(yaw - BOOT_CHASSIS_YAW)) > 0.25:
         raise ValueError("both teams must boot facing +y: chassis heading pi/2")
 
@@ -501,27 +501,27 @@ def observe_inputs(runtime, args, require_session=True):
                 return False
             if room:
                 return True
-            expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+            expected = [0.0, 0.0]
             return math.dist(state["raw_odom"], expected) <= 0.3
 
         runtime.wait(ready, args.timeout)
     except RuntimeError as error:
         raise RuntimeError(
-            f"timeout waiting for raw /odom at team start, referee team, live session; received {state}"
+            f"timeout waiting for raw /odom near zero, referee team, live session; received {state}"
         ) from error
     if not room:
-        expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+        expected = [0.0, 0.0]
         if math.dist(state["raw_odom"], expected) > 0.3:
-            raise ValueError(f"raw /odom disagrees with team start {expected}: {state['raw_odom']}")
+            raise ValueError(f"raw /odom is not near boot zero: {state['raw_odom']}")
     return dict(state, frame_mode="room" if room else "field")
 
 
 def verify_start(boot, live):
     """Field-aligned maps support either team; validate the live contract start."""
     expected = [-4.625 if live["team"] == "red" else 4.625, 0.0]
-    if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], expected) > 0.3:
+    if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], (0, 0)) > 0.3:
         raise ValueError(
-            f"seed/team mismatch: observed={live}, expected raw_odom={expected}; return to team start"
+            f"seed/team mismatch: observed={live}, expected raw_odom=[0, 0]; return to team start"
         )
     return [*expected, 0.0]
 

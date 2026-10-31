@@ -59,6 +59,16 @@ public:
     tf.transform.rotation.w = 1.0;
     tf_buffer_->setTransform(tf, "test", true);
   }
+  void navigation_transform(double team_start)
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = "nav_odom";
+    tf.child_frame_id = odom_frame_;
+    tf.transform.translation.x = team_start;
+    tf.transform.rotation.w = 1.0;
+    tf_buffer_->setTransform(tf, "test", true);
+  }
+  tp::Vector3d idle_point() {return idle_point_now(clock_now());}
   void set_active(bool active) {target_active_ = active;}
   void non_firing_target() {fire_target_ = false;}
   void fail_aim() {fail_aim_ = true;}
@@ -327,6 +337,25 @@ TEST_F(NodeTest, RejectsInvalidPanelSwitchMargins)
   }
 }
 
+TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
+{
+  for (bool blue : {false, true}) {
+    auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
+    node->gun_transform();
+    node->navigation_transform(blue ? 4.625 : -4.625);
+    dji_serial_bridge::msg::RefSysStatus referee;
+    referee.robot_id = blue ? 107 : 7;
+    referee.is_on_blue_team = blue;
+    referee.delta_angle_got_hit_in = 123.0F;
+    node->on_ref_sys(referee);
+    node->idle_point();
+    node->time_ns(20000000000LL);
+    const auto point = node->idle_point();
+    EXPECT_NEAR(point.x(), blue ? -9.25 : 9.25, 1e-6);
+    EXPECT_NEAR(point.y(), 0.0, 1e-6);
+  }
+}
+
 TEST_F(NodeTest, HitPermissionChangesImmediatelyWithAnyTargetEstimate)
 {
   auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
@@ -420,25 +449,25 @@ TEST_F(NodeTest, FireAgeBoundaryCoastsUntilTargetTimeout)
   EXPECT_FALSE(points.back().fire);
 }
 
-TEST_F(NodeTest, BlueArrivingLateChangesFallbackZoneWithoutRobotIdGate)
+TEST_F(NodeTest, MissingGunTransformDoesNotPublishAFieldPointAsRaw)
 {
   auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
   node->capture(&points, &ticks);
   node->on_publish_tick();
-  EXPECT_FLOAT_EQ(points.back().x, 4.625);
+  EXPECT_FLOAT_EQ(points.back().x, 0.0);
   dji_serial_bridge::msg::RefSysStatus ref;
   ref.delta_angle_got_hit_in = 123.0;
   ref.is_on_blue_team = true;
   ref.robot_id = 0;
   node->on_ref_sys(ref);
   node->on_publish_tick();
-  EXPECT_FLOAT_EQ(points.back().x, -4.625);
+  EXPECT_FLOAT_EQ(points.back().x, 0.0);
   ref.is_on_blue_team = false;
   node->on_ref_sys(ref);
   node->on_publish_tick();
-  EXPECT_FLOAT_EQ(points.back().x, 4.625);
+  EXPECT_FLOAT_EQ(points.back().x, 0.0);
 }
 
 TEST_F(NodeTest, PublicationTimeCannotRefreshAnOldDetection)

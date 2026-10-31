@@ -345,6 +345,7 @@ def generate_launch_description():
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('aim_frame'),
+            'navigation_frame': LaunchConfiguration('odom_frame'),
             'lead_enabled': ParameterValue(
                 LaunchConfiguration('lead_enabled'), value_type=bool
             ),
@@ -568,31 +569,31 @@ def generate_launch_description():
                               description='Only UART input and raw pose translation; '
                               'no command producers or relay.'),
         DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
-                              description='Practice-field team for seed position checks '
-                              'without referee.'),
+                              description='Practice navigation team without referee; '
+                              'never bypasses the AMCL referee gate.'),
         DeclareLaunchArgument(
-            'seed_from_raw_odom', default_value='false', choices=['true', 'false'],
+            'seed_from_raw_odom', default_value='true', choices=['true', 'false'],
             description='Forwarded to sentry_localization: seed EKF x/y from fresh '
-            'raw /odom before starting it; ignores initial_x/y for EKF.'),
+            'raw /odom plus team start before starting it; ignores initial_x/y for EKF.'),
         DeclareLaunchArgument(
-            'seed_require_team', default_value='false', choices=['true', 'false'],
+            'seed_require_team', default_value='true', choices=['true', 'false'],
             description='Forwarded to sentry_localization: require referee team and '
-            'subsequent raw /odom at its team start before seeding EKF.'),
+            'subsequent raw /odom near zero before seeding EKF.'),
         DeclareLaunchArgument(
             'initial_x', default_value='0.0',
-            description='Initial navigation X matching raw odometry, meters'),
+            description='Deprecated; navigation uses raw odometry plus team start'),
         DeclareLaunchArgument(
             'initial_y', default_value='0.0',
-            description='Initial navigation Y matching raw odometry, meters'),
+            description='Deprecated; navigation uses raw odometry plus team start'),
         DeclareLaunchArgument(
             'amcl_initial_x', default_value=LaunchConfiguration('initial_x'),
-            description='AMCL field X; see sentry_localization field-day workflow'),
+            description='Deprecated; AMCL uses the actual referee team start'),
         DeclareLaunchArgument(
             'amcl_initial_y', default_value=LaunchConfiguration('initial_y'),
-            description='AMCL field Y; defaults to initial_y, independent of navigation seed'),
+            description='Deprecated; AMCL uses the actual referee team start'),
         DeclareLaunchArgument(
             'amcl_initial_yaw', default_value='0.0',
-            description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
+            description='Deprecated; AMCL root starts heading-fixed at yaw zero'),
         real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,

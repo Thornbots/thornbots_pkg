@@ -219,7 +219,7 @@ private:
       team = observed;
     } else if (team.empty()) {return false;}
     team_ = team;
-    return std::hypot(p.x - (team == "red" ? -4.625 : 4.625), p.y) <= 0.3;
+    return std::hypot(p.x, p.y) <= 0.3;
   }
 
   static double angle(double a) {return std::atan2(std::sin(a), std::cos(a));}
