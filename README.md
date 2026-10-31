@@ -820,7 +820,8 @@ for navigation seeds, independent AMCL field poses and mapping a new field.
 
 ### Field-day card — keep the robot parked at its start for steps 2, 4 and 5
 
-Before power-on, place the robot on its start mark and keep it still while the
+Before power-on, place the robot on its start mark with the chassis facing +y
+(chassis heading π/2 for both teams) and keep it still while the
 IMU settles; moving it during settling caused heading drift. After any SWD
 flash, power-cycle the MCB before trusting odometry: a warm reset leaves the
 Pico I2C dead. MCB power-cycling also reboots the Jetson (shared power); re-sync
@@ -844,10 +845,9 @@ off during a session invalidates that attempt; keep it on throughout.
    Save **before stopping mapping**:
    `ros2 run thornbots_pkg operator_workflow save "$SESSION"`.
 4. Register the boot chassis heading in radians. Team comes from
-   the captured referee message. **Red**, facing +x:
-   `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 0`.
-   **Blue**, facing -x (use `oct31-blue-01` as the session in step 1):
-   `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 3.141592653589793`.
+   the captured referee message. **Both teams face +y**, chassis heading π/2:
+   `ros2 run thornbots_pkg operator_workflow align "$SESSION" --yaw 1.5707963267948966`.
+   For blue, use `oct31-blue-01` as the session in step 1.
    x/y default to the team's contract start. Optional surveyed `--x`/`--y`
    refinements must stay within 0.3 m of captured raw odometry. Never enter degrees.
 5. Stop mapping with Ctrl-C. Park at the live team's contract start. Run:
@@ -918,9 +918,14 @@ stationary seconds of stamped root/chassis data (3 cm/0.03 rad motion limit).
 It records raw `/odom`, referee team and the live mapping session ID. Field
 alignment derives team from that record; optional `--team` must agree. Raw
 odometry and measured field x must have the team's sign: red negative, blue
-positive. Firmware already adds the team heading to IMU yaw, so measured chassis
-heading minus captured chassis yaw must be within 0.25 rad of zero. A 180-degree
-team/heading mistake therefore fails even on the symmetric field. `--yaw`
+positive. Both teams boot facing +y: measured chassis heading must be within
+0.25 rad of π/2. The field axes remain +x toward blue base, +y left, with CCW
+positive yaw. `root` yaw remains zero; π/2 belongs only to the `chassis_yaw` joint.
+Current [UART POSE](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-pose-chassis-yaw)
+does not carry chassis yaw: the bridge publishes zero, so registration trusts
+the π/2 boot contract (`BOOT_CHASSIS_YAW`) instead of captured chassis yaw.
+Nothing checks the physical boot heading until the wire carries it; verify the
+robot faces +y before power-on. Saved `boot.json` is never rewritten. `--yaw`
 accepts radians only in [-pi, pi]; negative scientific notation is accepted.
 These checks cannot replace checking the referee configuration and surveyed
 heading against the physical field.
