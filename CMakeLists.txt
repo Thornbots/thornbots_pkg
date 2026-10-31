@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(thornbots_pkg)
 
-# All nodes are C++; only the launch file is Python.
+# Runtime nodes are C++; launch and operator orchestration use Python.
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -19,6 +19,19 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
+find_package(sentry_localization REQUIRED)
+find_package(slam_toolbox REQUIRED)
+
+add_executable(room_check src/room_check.cpp)
+target_compile_features(room_check PUBLIC cxx_std_17)
+target_include_directories(room_check PRIVATE include)
+ament_target_dependencies(room_check rclcpp dji_serial_bridge geometry_msgs nav_msgs
+  sensor_msgs std_msgs diagnostic_msgs rcl_interfaces tf2_msgs tf2_ros vision_msgs)
+install(TARGETS room_check DESTINATION lib/${PROJECT_NAME})
 
 add_library(armor_tracker STATIC src/armor_tracker.cpp)
 target_compile_features(armor_tracker PUBLIC cxx_std_17)
@@ -32,7 +45,7 @@ ament_target_dependencies(target_tracker
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core mcb_relay_core point_to_cv_target_core)
+foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames mmm_core match_wifi_guard_core)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
@@ -48,6 +61,15 @@ ament_target_dependencies(point_to_cv_target_node PUBLIC
 add_executable(target_selector src/target_selector.cpp)
 target_link_libraries(target_selector target_selector_core)
 ament_target_dependencies(target_selector rclcpp dji_serial_bridge geometry_msgs)
+
+add_executable(match_wifi_guard src/match_wifi_guard.cpp)
+target_link_libraries(match_wifi_guard match_wifi_guard_core)
+ament_target_dependencies(match_wifi_guard rclcpp dji_serial_bridge)
+
+add_executable(mmm src/mmm.cpp)
+target_link_libraries(mmm mmm_core)
+ament_target_dependencies(mmm rclcpp dji_serial_bridge nav_msgs sensor_msgs
+  sentry_localization slam_toolbox tf2_ros)
 
 add_executable(mcb_relay src/mcb_relay.cpp)
 target_link_libraries(mcb_relay mcb_relay_core)
@@ -70,12 +92,14 @@ add_executable(lidar_self_filter src/lidar_self_filter.cpp)
 ament_target_dependencies(lidar_self_filter rclcpp sensor_msgs)
 
 add_executable(odom_tf_broadcaster src/odom_tf_broadcaster.cpp)
+target_link_libraries(odom_tf_broadcaster aim_frames)
 ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
 
-install(TARGETS target_tracker target_selector mcb_relay point_to_cv_target pose_translator
+install(TARGETS match_wifi_guard mmm target_tracker target_selector mcb_relay point_to_cv_target pose_translator
   lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/operator_workflow DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY urdf DESTINATION share/${PROJECT_NAME}
   FILES_MATCHING PATTERN "*.urdf.xacro")
 install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
@@ -83,6 +107,18 @@ install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_room_check_core test/test_room_check_core.cpp)
+  target_compile_features(test_room_check_core PUBLIC cxx_std_17)
+  target_include_directories(test_room_check_core PRIVATE include)
+  ament_add_gtest(test_match_wifi_guard_core test/test_match_wifi_guard_core.cpp)
+  target_link_libraries(test_match_wifi_guard_core match_wifi_guard_core)
+  ament_add_gtest(test_mmm_core test/test_mmm_core.cpp)
+  target_link_libraries(test_mmm_core mmm_core)
+  option(THORNBOTS_MMM_SIM_TEST "Run MMM full-stack sim test (requires built sim overlay)" OFF)
+  if(THORNBOTS_MMM_SIM_TEST)
+    find_package(launch_testing_ament_cmake REQUIRED)
+    add_launch_test(integration/test_mmm_launch.py TIMEOUT 180)
+  endif()
   ament_add_gtest(test_armor_tracker test/test_armor_tracker.cpp)
   target_link_libraries(test_armor_tracker armor_tracker)
   ament_add_gtest(test_target_selector_core test/test_target_selector_core.cpp)
@@ -95,8 +131,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_point_to_cv_target_node point_to_cv_target_node)
   ament_add_gtest(test_pose_translator_node test/test_pose_translator_node.cpp)
   target_link_libraries(test_pose_translator_node pose_translator_node)
+  ament_add_gtest(test_aim_frames test/test_aim_frames.cpp)
+  target_link_libraries(test_aim_frames aim_frames)
 
-  # Python is left for the ament lint checks (launch/, test/).
+  # Includes launch checks and ROS-free operator workflow regressions.
   find_package(ament_cmake_pytest REQUIRED)
   # The image's pip anyio ships a pytest plugin that breaks apt pytest; see setup.cfg.
   ament_add_pytest_test(thornbots_pkg_pytest test TIMEOUT 300

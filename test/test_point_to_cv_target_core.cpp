@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Unit tests for point_to_cv_target_core.hpp's intercept solve, shot planner
-// and patrol. No rclcpp.
+// and idle looks. No rclcpp.
 
 #include <gtest/gtest.h>
 
@@ -31,7 +31,7 @@
 namespace tp = thornbots_pkg;
 using Eigen::Vector3d;
 using tp::ArmorState;
-using tp::Patrol;
+using tp::IdleLook;
 using tp::ShotOptions;
 
 namespace
@@ -300,6 +300,7 @@ tp::Shot plan(
 {
   opt.gimbal_lag_s = horizon - TICK_S / 2.0;
   opt.firmware_latency_s = horizon;
+  opt.min_fire_delay_s = 0.0;
   return tp::plan_shot(state, RADII, z_offset, 0.0, SHOOTER, V_MUZZLE, spinning, TICK_S, opt);
 }
 
@@ -333,6 +334,83 @@ TEST(PlanShot, NonSpinningPicksTheFacingPanelAndItsPair)
   EXPECT_LT(dist(plan(armor(a), 0.1, false, STAGGER).aim_pos, {2.7, 0.0, 0.345}), 1e-9);
   a.yaw = M_PI / 2.0;
   EXPECT_LT(dist(plan(armor(a), 0.1, false, STAGGER).aim_pos, {2.76, 0.0, 0.255}), 1e-9);
+}
+
+TEST(ChoosePanel, PicksTheMostFaceOnPanel)
+{
+  // bearing pi: panel k's normal is at k * pi/2 + yaw.
+  EXPECT_EQ(tp::choose_panel(0.0, M_PI, std::nullopt, 0.0), 2);
+  EXPECT_EQ(tp::choose_panel(M_PI / 2.0 + 0.1, M_PI, std::nullopt, 0.0), 1);
+}
+
+TEST(ChoosePanel, HoldsThePanelUntilAnotherIsClearlyBetter)
+{
+  const double margin = 0.2, bearing = M_PI;
+  // Panel 1 (normal at yaw + pi/2) is held while panel 2 faces us more squarely by
+  // up to the margin, whichever way the tracker's yaw jitters across 45 deg.
+  for (double d : {-0.09, 0.0, 0.09}) {
+    const double yaw = M_PI / 4.0 + d;
+    const double held = tp::wrap_to_pi(yaw + M_PI / 2.0);
+    EXPECT_EQ(tp::choose_panel(yaw, bearing, held, margin), 1) << d;
+  }
+  // Past the margin, the better panel takes over.
+  const double yaw = M_PI / 4.0 - 0.11;
+  EXPECT_EQ(tp::choose_panel(yaw, bearing, tp::wrap_to_pi(yaw + M_PI / 2.0), margin), 2);
+}
+
+TEST(ChoosePanel, FollowsTheHeldPanelByWorldYawNotIndex)
+{
+  // The same physical panel, labelled a quarter turn apart by the state's yaw.
+  const double held = M_PI / 2.0 + 0.6;
+  EXPECT_EQ(tp::choose_panel(0.6, M_PI, held, 0.5), 1);
+  EXPECT_EQ(tp::choose_panel(0.6 - M_PI / 2.0, M_PI, held, 0.5), 2);
+}
+
+TEST(PlanShot, NonSpinningHoldsAPanelNear45DegreesAcrossTicks)
+{
+  ShotOptions opt;
+  opt.panel_switch_margin_rad = 0.2;
+  ArmorArgs a;
+  // Panel 1 faces us first; the yaw then jitters either side of 45 deg.
+  a.yaw = M_PI / 4.0 + 0.15;
+  auto s = plan(armor(a), 0.1, false, STAGGER, opt);
+  ASSERT_TRUE(s.panel_yaw);
+  const Vector3d first = s.aim_pos;
+  for (double d : {-0.05, 0.05, -0.08, 0.08}) {
+    a.yaw = M_PI / 4.0 + d;
+    opt.held_panel_yaw = s.panel_yaw;
+    s = plan(armor(a), 0.1, false, STAGGER, opt);
+    EXPECT_NEAR(s.aim_pos.z(), first.z(), 1e-9) << d;  // the same pair's height
+  }
+  // Without the hold the pick flips with the jitter.
+  a.yaw = M_PI / 4.0 - 0.05;
+  EXPECT_NE(plan(armor(a), 0.1, false, STAGGER).aim_pos.z(), first.z());
+}
+
+TEST(PlanShot, SpinningReportsNoPanelYaw)
+{
+  ArmorArgs a;
+  a.w = 9.0;
+  EXPECT_FALSE(plan(armor(a), 0.1, true).panel_yaw);
+}
+
+TEST(PlanShot, SpinningWithoutLeadIgnoresAPreviousPanelHold)
+{
+  ArmorArgs a;
+  a.yaw = M_PI / 4.0 - 0.1;
+  ShotOptions opt;
+  opt.lead = false;
+  opt.held_panel_yaw = M_PI * 3.0 / 4.0;
+  opt.panel_switch_margin_rad = 0.5;
+  const auto spinning = plan(armor(a), 0.1, true, STAGGER, opt);
+  EXPECT_FALSE(spinning.panel_yaw);
+  opt.held_panel_yaw.reset();
+  EXPECT_LT((spinning.aim_pos - plan(armor(a), 0.1, true, STAGGER, opt).aim_pos).norm(), 1e-9);
+}
+
+TEST(ChoosePanel, HeldNormalSurvivesThePiWrap)
+{
+  EXPECT_EQ(tp::choose_panel(-M_PI + 0.02, M_PI, M_PI - 0.02, 0.2), 0);
 }
 
 TEST(PlanShot, NonSpinningCrossingPanelMeetsTheInterceptCondition)
@@ -603,59 +681,165 @@ TEST(PlanShot, MovingShooterChaseLandsOnAFacingPanel)
   EXPECT_LT(miss, 1e-6);
 }
 
-// ── patrol ────────────────────────────────────────────────────────────────
-
-TEST(Patrol, StartsAtOnceWithNoTargetEver)
+TEST(IdleLook, PriorityUsesNewerEnemyOrHitAndExpiresToZoneOrHold)
 {
-  Patrol p(-2.0, 0.2, 0.5);
-  const auto yaw = p.step(10.0, 1.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, 1.0));
+  IdleLook look;
+  using Source = IdleLook::Source;
+  EXPECT_EQ(look.source(1.0, 0.5, false), Source::Zone);
+  EXPECT_EQ(look.source(1.0, 0.5, true), Source::Hold);
+  look.target_seen(1.0, {2.0, 3.0, 0.15});
+  EXPECT_EQ(look.source(4.4, 0.5, false), Source::LastEnemy);
+  EXPECT_EQ(look.source(4.6, 0.5, false), Source::Zone);
+  look.hit(2.0);
+  EXPECT_EQ(look.source(2.1, 0.5, false), Source::Hit);
+  look.target_seen(2.2, {3.0, 4.0, 0.15});
+  EXPECT_EQ(look.source(2.3, 0.5, false), Source::LastEnemy);
+  EXPECT_EQ(look.last_enemy().x(), 3.0);
+  look.hit(5.5);
+  EXPECT_EQ(look.source(6.0, 0.5, false), Source::Hit);
+  EXPECT_EQ(look.source(7.6, 0.5, false), Source::Zone);
 }
 
-TEST(Patrol, WaitsAfterSThenStartsFromTheGunYaw)
+TEST(IdleLook, RateCapsWrapsAndIgnoresSmallDirectionChanges)
 {
-  Patrol p(-2.0, 0.2, 0.5);
-  p.target_seen(10.0);
-  EXPECT_FALSE(p.step(10.1, 1.0));
-  const auto yaw = p.step(10.25, 1.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, 1.0));
+  IdleLook look;
+  const Vector3d gun(0.0, 0.0, 0.3);
+  look.point(0.0, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  auto p = look.point(0.2, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), 0.1, 1e-9);
+  p = look.point(4.0, gun, 0.0, {0.0, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2, 1e-9);
+  p = look.point(5.0, gun, 0.0, {-0.3, 3.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2, 1e-9);
+  p = look.point(6.0, gun, 0.0, {-3.0, 0.0, 0.15}, 0.5, M_PI / 6);
+  EXPECT_NEAR(std::atan2(p.y(), p.x()), M_PI / 2 + 0.5, 1e-9);
+  EXPECT_DOUBLE_EQ(p.z(), 0.15);
 }
 
-TEST(Patrol, SweepsAtItsRateFromItsOwnYawAndWraps)
+TEST(IdleLook, EnemyZoneMirrorsOnlyXForFirmwareTeam)
 {
-  Patrol p(-2.0, 0.2, 0.5);
-  p.step(0.0, -3.0);
-  // The command integrates on itself, so a lagging gun can't stall it.
-  const auto yaw = p.step(0.1, 0.0);
-  ASSERT_TRUE(yaw);
-  EXPECT_TRUE(approx(*yaw, -3.2 + 2.0 * M_PI));
+  EXPECT_EQ(tp::enemy_zone(false, 4.625, 0.0, 0.15), Vector3d(4.625, 0.0, 0.15));
+  EXPECT_EQ(tp::enemy_zone(true, 4.625, 0.0, 0.15), Vector3d(-4.625, 0.0, 0.15));
+  EXPECT_EQ(tp::enemy_zone(true, 5.0, 0.4, 0.15), Vector3d(-5.0, 0.4, 0.15));
 }
 
-TEST(Patrol, FacesAHitForHitTurnSThenSweepsOnFromIt)
+TEST(FireTiming, ExitNeverSendsUnderTheFloor)
 {
-  Patrol p(-2.0, 0.2, 0.5);
-  p.step(0.0, 0.0);
-  p.hit(2.0, 0.05);
-  EXPECT_TRUE(approx(*p.step(0.1, 0.0), 2.0));
-  EXPECT_TRUE(approx(*p.step(0.5, 1.0), 2.0));
-  EXPECT_TRUE(approx(*p.step(0.6, 2.0), 2.0 - 0.2));
+  EXPECT_DOUBLE_EQ(tp::fire_exit_s(0.020, 0.040), 0.040);
+  EXPECT_DOUBLE_EQ(tp::fire_exit_s(0.094, 0.040), 0.094);
+  ShotOptions defaults;
+  EXPECT_DOUBLE_EQ(defaults.min_fire_delay_s, 0.040);
+  EXPECT_DOUBLE_EQ(tp::fire_exit_s(defaults.firmware_latency_s, defaults.min_fire_delay_s), 0.040);
+  EXPECT_EQ(tp::wire_fire_delay_ms(
+      0.0, tp::fire_exit_s(defaults.firmware_latency_s, defaults.min_fire_delay_s)), 40);
+  EXPECT_EQ(tp::wire_fire_delay_ms(-0.001, 0.040), 40);
 }
 
-TEST(Patrol, RestartsFromTheGunAfterATarget)
+TEST(FireLock, MovingTargetWaitsOneSecondAndIdentityChangesRestart)
 {
-  Patrol p(-2.0, 0.2, 0.5);
-  p.step(0.0, 0.0);
-  p.step(1.0, 0.0);
-  p.target_seen(2.0);
-  EXPECT_TRUE(approx(*p.step(2.3, 0.7), 0.7));
+  tp::FireLock lock;
+  const Vector3d moving(0.2, 0.0, 0.0);
+  EXPECT_FALSE(lock.update(2.0, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.999, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(3.0, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(3.1, 8, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(4.1, 8, true, false, moving, 1.0, 0.1, 0.3));
 }
 
-TEST(PatrolPoint, IsRangeOutAlongYawAndPitchedDown)
+TEST(FireLock, LongIneligibleGapAndClockRewindRestart)
 {
-  const Vector3d p = tp::patrol_point({1.0, 2.0, 0.4}, M_PI / 2, 3.0, 0.05);
-  EXPECT_TRUE(approx(p.x(), 1.0));
-  EXPECT_TRUE(approx(p.y(), 5.0));
-  EXPECT_TRUE(approx(p.z(), 0.4 - 3.0 * std::tan(0.05)));
+  tp::FireLock lock;
+  EXPECT_FALSE(lock.update(1.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(2.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.1, 1, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.5, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(3.5, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(3.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+}
+
+TEST(FireLock, StationaryBypassRequiresLowThreeDimensionalSpeedAndNoSpin)
+{
+  tp::FireLock lock;
+  EXPECT_TRUE(lock.update(1.0, 1, true, false, {0.03, 0.04, 0.0}, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.1, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.2, 1, true, false, {0.0, 0.0, 0.1}, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.3, 1, false, false, ORIGIN, 1.0, 0.1, 0.3));
+}
+
+TEST(FireLock, ZeroDisablesOnlyTheDwell)
+{
+  tp::FireLock lock;
+  EXPECT_TRUE(lock.update(1.0, 1, true, true, ORIGIN, 0.0, 0.0, 0.3));
+  EXPECT_FALSE(lock.update(1.1, 1, false, true, ORIGIN, 0.0, 0.0, 0.3));
+}
+
+TEST(FireLock, BriefGapCountsTowardDwellButNeverAllowsFire)
+{
+  tp::FireLock lock;
+  EXPECT_FALSE(lock.update(1.0, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  for (int frame = 0; frame < 5; ++frame) {
+    EXPECT_FALSE(lock.update(1.5 + frame / 30.0, 7, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  }
+  EXPECT_FALSE(lock.update(1.7, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(2.0, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.1, 7, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.2, 8, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.3, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+}
+
+TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)
+{
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.0, 0.094), 94);
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.02, 0.094) - 94, 20);
+  EXPECT_EQ(tp::wire_fire_delay_ms(0.05, 0.094) - 94, 50);
+  EXPECT_EQ(tp::wire_fire_delay_ms(70.0, 0.08), 65535);
+}
+
+TEST(PlanShot, OneHzAlignmentGatingHoldsYawAndMeetsTheExitHorizon)
+{
+  for (double w : {2 * M_PI, -2 * M_PI}) {
+    int fired = 0;
+    for (int i = 0; i < 160; ++i) {
+      ArmorArgs a;
+      a.center.x() = 1.3;
+      a.yaw = M_PI + i * 2 * M_PI / 160;
+      a.w = w;
+      ShotOptions opt;
+      opt.gimbal_lag_s = 0;
+      const double age = .013, tick = .025;
+      const auto s = tp::plan_shot(
+        armor(a), {.24, .24}, FLAT, age, SHOOTER, V_MUZZLE, true, tick, opt);
+      EXPECT_NEAR(s.aim_pos.y(), 0, 1e-9);
+      if (!s.delay_s) {
+        continue;
+      }
+      ++fired;
+      EXPECT_GE(*s.delay_s, 0);
+      EXPECT_LT(*s.delay_s, tick);
+      const double impact = age + tp::fire_exit_s(opt.firmware_latency_s, opt.min_fire_delay_s) +
+        *s.delay_s + flight(s.aim_pos);
+      const double phase = tp::py_mod(a.yaw + w * impact - M_PI, M_PI / 2);
+      EXPECT_LT(std::min(phase, M_PI / 2 - phase), 1e-8);
+    }
+    EXPECT_GT(fired, 0);
+  }
+}
+
+TEST(PlanShot, SpinFirePolicyDoesNotChangeNonspinningMovingPrediction)
+{
+  for (const Vector3d & velocity : {Vector3d(2, 0, 0), Vector3d(0, 2, 0), Vector3d(1, 1, 0)}) {
+    ArmorArgs a;
+    a.vel = velocity;
+    ShotOptions gated, chase;
+    gated.gimbal_lag_s = chase.gimbal_lag_s = 0;
+    chase.chase_settle_s = .025;
+    chase.chase_margin_s = .025;
+    const auto gate_shot = tp::plan_shot(
+      armor(a), RADII, STAGGER, .02, SHOOTER, V_MUZZLE, false, .025, gated);
+    const auto chase_shot = tp::plan_shot(
+      armor(a), RADII, STAGGER, .02, SHOOTER, V_MUZZLE, false, .025, chase);
+    EXPECT_LT((gate_shot.aim_pos - chase_shot.aim_pos).norm(), 1e-12);
+    EXPECT_EQ(gate_shot.delay_s, chase_shot.delay_s);
+    EXPECT_EQ(gate_shot.panel_yaw, chase_shot.panel_yaw);
+  }
 }

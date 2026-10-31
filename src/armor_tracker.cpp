@@ -101,7 +101,7 @@ void ArmorEKF::reacquire(
   if (!keep_spin) {
     w = p.spin_prior;
     w_var = p.spin_prior_std * p.spin_prior_std;
-    r_var = 0.05 * 0.05;
+    r_var = p.radius_prior_std * p.radius_prior_std;
     dz = 0.0;
     dz_var = p.dz_prior_std * p.dz_prior_std;
   }
@@ -234,7 +234,8 @@ StepResult ArmorEKF::step(
   double gate_nis, int max_outliers, double facing_std)
 {
   predict(t);
-  associate(panel_pos, camera_pos);
+  last_association = associate(panel_pos, camera_pos).first;
+  last_residual = panel_pos - panel_positions(state, other_r)[0].pos;
   std::tie(last_nis, last_logdet) = innovation(panel_pos, pos_var);
   if (last_nis > gate_nis) {
     if (++n_outliers < max_outliers) {
@@ -404,7 +405,7 @@ StepResult ArmorTracker::step(
       zero_rows_cols(f.P, W, 1);
       f.P(W, W) = f.p.spin_prior_std * f.p.spin_prior_std;
       zero_rows_cols(f.P, R, 1);
-      f.P(R, R) = 0.05 * 0.05;
+      f.P(R, R) = f.p.radius_prior_std * f.p.radius_prior_std;
       f.pin_still();
       f.t_sec = leader.t_sec;
       scores[i] = best_score + p.reseed_margin / 2.0;
