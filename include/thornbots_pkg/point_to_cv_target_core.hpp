@@ -20,6 +20,7 @@
 #define THORNBOTS_PKG__POINT_TO_CV_TARGET_CORE_HPP_
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -31,6 +32,23 @@ namespace thornbots_pkg
 using Eigen::Vector3d;
 
 constexpr double QUARTER_TURN = 1.5707963267948966;  // pi / 2
+
+// Same-track dwell on the node clock, including brief ineligible gaps.
+// The caller supplies convergence/confidence/freshness; shot windows are separate.
+class FireLock
+{
+public:
+  bool update(double now_s, uint32_t track_id, bool eligible, bool spinning,
+    const Vector3d & velocity, double lock_s, double stationary_speed_mps,
+    double grace_s);
+  void reset() {since_s_.reset(); ineligible_since_s_.reset();}
+
+private:
+  std::optional<double> since_s_;
+  std::optional<double> ineligible_since_s_;
+  double last_s_ = 0.0;
+  uint32_t track_id_ = 0;
+};
 
 // Python-style floor modulo: the result takes the divisor's sign.
 double py_mod(double a, double b);
@@ -57,7 +75,7 @@ struct ShotOptions
 {
   double gimbal_lag_s = 0.05;
   double firmware_latency_s = 0.020;  // MCB indexer request to chamber exit
-  double min_fire_delay_s = 0.025;    // shortest wire exit delay we send
+  double min_fire_delay_s = 0.040;    // allow the gimbal to acquire each aim point
   bool lead = true;
   int iterations = 3;
   Vector3d shooter_vel = Vector3d::Zero();
