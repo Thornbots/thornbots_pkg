@@ -97,6 +97,7 @@ TEST(Relocalizer, HoldOffAfterASend)
 {
   Relocalizer::Params p;
   p.hold_off_s = 0.3;
+  p.resend_count = 0;
   Relocalizer rel(p);
   drive(rel, 0.0, 1.0);
   EXPECT_TRUE(rel.decide(0.4, 0.1, 0.0, 1e-6, 0.5));
@@ -107,7 +108,9 @@ TEST(Relocalizer, HoldOffAfterASend)
 
 TEST(Relocalizer, UnchangedOffsetDoesNotRepeatWhileRawKeepsMoving)
 {
-  Relocalizer rel;
+  Relocalizer::Params p;
+  p.resend_count = 0;
+  Relocalizer rel(p);
   rel.add_odom(0.0, 0.0, 0.0, 1.0, 0.0);
   rel.add_odom(0.1, 0.1, 0.0, 1.0, 0.0);
   ASSERT_TRUE(rel.decide(0.1, 0.3, -0.1, 1e-6, 0.1));
@@ -133,10 +136,10 @@ TEST(Relocalizer, ReturnToRawCoordinatesIsANewNavigationCorrection)
   ASSERT_TRUE(reset);
   EXPECT_DOUBLE_EQ(reset->x, 0.0);
   rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
-  EXPECT_FALSE(rel.decide(2.0, 0.0, 0.0, 1e-6, 2.0));
+  EXPECT_TRUE(rel.decide(2.0, 0.0, 0.0, 1e-6, 2.0));  // absolute retry, not a new offset
 }
 
-TEST(Relocalizer, ClockResetAndTeamReanchorForgetTheSentOffset)
+TEST(Relocalizer, ClockResetAndRawDiscontinuityForgetTheSentOffset)
 {
   Relocalizer rel;
   rel.add_odom(10.0, -4.625, 0.0, 0.0, 0.0);
@@ -146,6 +149,43 @@ TEST(Relocalizer, ClockResetAndTeamReanchorForgetTheSentOffset)
   ASSERT_TRUE(rel.decide(10.01, 4.825, 0.0, 1e-6, 10.01));
   rel.add_odom(0.0, 4.625, 0.0, 0.0, 0.0);
   EXPECT_TRUE(rel.decide(0.0, 4.825, 0.0, 1e-6, 0.0));
+}
+
+TEST(Relocalizer, BothTeamStartsRecoverAfterFirstFrameIsLost)
+{
+  for (double start : {-4.625, 4.625}) {
+    Relocalizer rel;
+    rel.add_odom(1.0, 0.0, 0.0, 0.2, 0.0);
+    const auto lost = rel.decide(1.0, start, 0.0, 1e-6, 1.0);
+    ASSERT_TRUE(lost);
+    EXPECT_NEAR(lost->x, start + 0.0014, 1e-12);
+    double mcb_nav = 0.0;
+    unsigned received = 0;
+    for (int i = 1; i <= 5; ++i) {
+      const double t = 1.0 + i * 0.4;
+      const double raw = (t - 1.0) * 0.2;
+      rel.add_odom(t, raw, 0.0, 0.2, 0.0);
+      const auto retry = rel.decide(t, raw + start, 0.0, 1e-6, t);
+      if (retry) {
+        ++received;
+        mcb_nav = retry->x;
+        EXPECT_NEAR(mcb_nav - raw, start + 0.0014, 1e-12);
+      }
+    }
+    EXPECT_EQ(received, 3u);
+    EXPECT_GT(std::abs(mcb_nav), 4.0);
+  }
+}
+
+TEST(Relocalizer, RetryStillRequiresConfidentFreshLocalization)
+{
+  Relocalizer rel;
+  rel.add_odom(1.0, 0.0, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(1.0, -4.625, 0.0, 1e-6, 1.0));
+  rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
+  EXPECT_FALSE(rel.decide(2.0, -4.625, 0.0, 0.01, 2.0));
+  EXPECT_FALSE(rel.decide(0.0, -4.625, 0.0, 1e-6, 2.0));
+  EXPECT_TRUE(rel.decide(2.0, -4.625, 0.0, 1e-6, 2.0));
 }
 
 TEST(Relocalizer, LocalizationStampOutsideOdomHistory)

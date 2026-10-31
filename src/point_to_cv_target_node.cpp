@@ -105,10 +105,11 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Firmware patrol permission is independent of the per-frame hit-turn decision.
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
   idle_direction_ = declare_parameter("idle_direction", std::string("zone"));
+  navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
   if (idle_direction_ != "zone" && idle_direction_ != "hold") {
     throw std::invalid_argument("idle_direction must be zone or hold");
   }
-  // Match OdometrySubsystemConstants.hpp; blue arrival changes raw odom's origin.
+  // Field coordinates; transform into the continuous raw aim frame before use.
   zone_start_x_m_ = declare_parameter("zone_start_x_m", 4.625);
   zone_start_y_m_ = declare_parameter("zone_start_y_m", 0.0);
   idle_height_m_ = declare_parameter("idle_height_m", 0.15);
@@ -242,9 +243,21 @@ void PointToCvTarget::on_ref_sys(const dji_serial_bridge::msg::RefSysStatus & ms
 
 Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
 {
-  const auto zone = enemy_zone(blue_, zone_start_x_m_, zone_start_y_m_, idle_height_m_);
   const auto gun = gun_pose();
-  if (!gun) {return last_sent_point_.value_or(zone);}
+  if (!gun) {return last_sent_point_.value_or(Vector3d::Zero());}
+  Vector3d zone = gun->first + Vector3d(3.0 * std::cos(gun->second),
+    3.0 * std::sin(gun->second), 0.0);
+  try {
+    const auto tf = tf_buffer_->lookupTransform(odom_frame_, navigation_frame_, tf2::TimePointZero);
+    const auto & t = tf.transform.translation;
+    const auto & q = tf.transform.rotation;
+    zone = quat_to_rot(q.x, q.y, q.z, q.w) *
+      enemy_zone(blue_, zone_start_x_m_, zone_start_y_m_, idle_height_m_) +
+      Vector3d(t.x, t.y, t.z);
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+      "Idle zone waits for nav_odom->odom: %s", ex.what());
+  }
   const auto source = idle_.source(seconds(now), target_timeout_s_, idle_direction_ == "hold");
   if (source == IdleLook::Source::Hit || source == IdleLook::Source::Hold) {
     idle_.reset();

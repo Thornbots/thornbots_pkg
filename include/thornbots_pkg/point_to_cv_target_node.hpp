@@ -79,7 +79,7 @@ protected:
   std::function<void(const dji_serial_bridge::msg::CVTarget &)> send_target_;
   std::function<void(const std_msgs::msg::Header &)> send_tick_, send_ack_;
 
-  std::string target_state_topic_, odom_frame_, root_frame_, muzzle_frame_;
+  std::string target_state_topic_, odom_frame_, navigation_frame_, root_frame_, muzzle_frame_;
   double target_timeout_s_, fire_max_state_age_s_, fire_confidence_threshold_;
   double fire_lock_s_, fire_lock_grace_s_, fire_stationary_speed_mps_;
   FireLock fire_lock_;

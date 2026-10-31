@@ -219,7 +219,7 @@ private:
       team = observed;
     } else if (team.empty()) {return false;}
     team_ = team;
-    return core::at_team_spawn(p.x, p.y, team == "blue", check);
+    return core::near_raw_start(p.x, p.y, check);
   }
 
   static double angle(double a) {return std::atan2(std::sin(a), std::cos(a));}

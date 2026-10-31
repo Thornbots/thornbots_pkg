@@ -58,6 +58,7 @@ public:
     double latency_std_s = 0.003;
     double hold_off_s = 0.3;
     double history_s = 1.0;
+    unsigned resend_count = 3;
   };
 
   Relocalizer() = default;
@@ -83,6 +84,7 @@ private:
   std::deque<OdomSample> odom_;
   std::optional<double> last_sent_t_;
   double sent_offset_x_ = 0.0, sent_offset_y_ = 0.0;
+  unsigned resends_left_ = 0;
 };
 
 }  // namespace thornbots_pkg

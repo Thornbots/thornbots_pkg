@@ -59,15 +59,15 @@ TEST(AimFrames, UsesInterpolatedRawPoseAtNavigationStamp)
   EXPECT_TRUE(correction->matrix().isApprox(pose(5.9, 5.8).matrix()));
 }
 
-TEST(AimFrames, TeamInitializationNeverInterpolatesAcrossTheRawReanchor)
+TEST(AimFrames, NeverInterpolatesAcrossARawDiscontinuity)
 {
   thornbots_pkg::AimFrames frames;
-  frames.add_raw(1.0, pose(-4.625, 0.0));
+  frames.add_raw(1.0, pose(0.0, 0.0));
   frames.add_navigation(1010000000, pose(0.0, 0.0));
-  frames.add_raw(1.02, pose(4.625, 0.0));
+  frames.add_raw(1.02, pose(2.0, 0.0));
   EXPECT_FALSE(frames.navigation_to_aim(1.01, pose(0.0, 0.0)));
   EXPECT_TRUE(frames.take_navigation().empty());
-  EXPECT_TRUE(frames.navigation_to_aim(1.02, pose(4.625, 0.0)));
+  EXPECT_TRUE(frames.navigation_to_aim(1.02, pose(2.0, 0.0)));
 }
 
 TEST(AimFrames, ClockResetDropsPendingNavigationFromThePreviousEpoch)

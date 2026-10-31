@@ -25,9 +25,10 @@ void Relocalizer::add_odom(double t, double x, double y, double vx, double vy)
   if (!odom_.empty() && (t < odom_.back().t ||
     std::hypot(x - odom_.back().x, y - odom_.back().y) > 1.0))
   {
-    odom_.clear();  // clock reset or startup/team reanchor
+    odom_.clear();  // clock reset or raw odometry discontinuity
     last_sent_t_.reset();
     sent_offset_x_ = sent_offset_y_ = 0.0;
+    resends_left_ = 0;
   }
   odom_.push_back({t, x, y, vx, vy});
   while (!odom_.empty() && odom_.front().t < t - p_.history_s) {
@@ -72,8 +73,16 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   const double speed = std::hypot(last.vx, last.vy);
   const double std_m =
     std::hypot(std::sqrt(std::max(loc_var_xy, 0.0)), speed * p_.latency_std_s);
-  if (std_m > p_.max_std_m || error <= std::max(p_.error_threshold_m, p_.n_sigma * std_m)) {
+  const bool changed = error > std::max(p_.error_threshold_m, p_.n_sigma * std_m);
+  if (std_m > p_.max_std_m || (!changed && resends_left_ == 0)) {
     return std::nullopt;
+  }
+  // No UART acknowledgement exists. Repeat absolute fixes on fresh inputs;
+  // never replay an old position while the chassis may have moved.
+  if (changed) {
+    resends_left_ = p_.resend_count;
+  } else {
+    --resends_left_;
   }
   // /odom is stamped when the MCB began sending (wire time removed), not on
   // arrival. Its age already includes the inbound leg; only the outbound
