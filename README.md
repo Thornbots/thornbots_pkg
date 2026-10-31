@@ -874,13 +874,13 @@ It records raw `/odom`, referee team and the live mapping session ID. Field
 alignment derives team from that record; optional `--team` must agree. Raw
 odometry and measured field x must have the team's sign: red negative, blue
 positive. Both teams boot facing +y: measured chassis heading must be within
-0.25 rad of π/2, and must agree with captured chassis yaw within 0.25 rad.
-The field axes remain +x toward blue base, +y left, with CCW positive yaw.
-`root` yaw remains zero; π/2 belongs only to the `chassis_yaw` joint.
+0.25 rad of π/2. The field axes remain +x toward blue base, +y left, with CCW
+positive yaw. `root` yaw remains zero; π/2 belongs only to the `chassis_yaw` joint.
 Current [UART POSE](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-pose-chassis-yaw)
-does not carry chassis yaw: the bridge publishes zero, so field alignment
-rejects those captures. Do not relabel saved `boot.json` telemetry; capture
-again once the wire supplies valid chassis yaw. `--yaw`
+does not carry chassis yaw: the bridge publishes zero, so registration trusts
+the π/2 boot contract (`BOOT_CHASSIS_YAW`) instead of captured chassis yaw.
+Nothing checks the physical boot heading until the wire carries it; verify the
+robot faces +y before power-on. Saved `boot.json` is never rewritten. `--yaw`
 accepts radians only in [-pi, pi]; negative scientific notation is accepted.
 These checks cannot replace checking the referee configuration and surveyed
 heading against the physical field.

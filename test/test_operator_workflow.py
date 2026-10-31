@@ -187,7 +187,7 @@ def test_alignment_keeps_graph_boot_frame_and_seeds_root(tmp_path, team, sign):
         workflow.align(NS(source=source, output=output, x=sign * 4.5, y=0.1, yaw=math.pi / 2, team=team))
 
 
-def test_alignment_rejects_blue_zero_telemetry_without_rewriting_capture(tmp_path):
+def test_alignment_trusts_boot_contract_for_blue_zero_telemetry(tmp_path):
     source = make_bundle(tmp_path)
     boot_path = source / 'boot.json'
     boot = json.loads(boot_path.read_text())
@@ -195,10 +195,10 @@ def test_alignment_rejects_blue_zero_telemetry_without_rewriting_capture(tmp_pat
     boot_path.write_text(json.dumps(boot))
     original = boot_path.read_bytes()
     output = tmp_path / 'field'
-    with pytest.raises(ValueError, match='field_yaw must be near zero'):
-        workflow.align(NS(source=source, output=output, x=None, y=None, yaw=math.pi / 2, team=None))
+    workflow.align(NS(source=source, output=output, x=None, y=None, yaw=math.pi / 2, team=None))
     assert boot_path.read_bytes() == original
-    assert not output.exists()
+    manifest = json.loads((output / 'registration.json').read_text())
+    assert manifest['boot_chassis_yaw'] == pytest.approx(math.pi / 2)
 
 
 def test_missing_graph_and_boot_are_not_success(tmp_path):
@@ -447,11 +447,23 @@ def test_boot_pi_over_two_allows_float32_serialization_noise(team, sign):
 
 
 @pytest.mark.parametrize('team,sign', [('red', -1), ('blue', 1)])
-@pytest.mark.parametrize('yaw,reported', [(0, 0), (math.pi, math.pi), (math.pi / 2, 0)])
-def test_field_rejects_old_headings_and_placeholder_telemetry(team, sign, yaw, reported):
+@pytest.mark.parametrize('yaw,reported', [(0, 0), (math.pi, math.pi), (-math.pi / 2, 0)])
+def test_field_rejects_old_headings(team, sign, yaw, reported):
     boot = {'team': team, 'raw_odom': [sign * 4.625, 0], 'chassis_yaw': reported}
     with pytest.raises(ValueError):
         workflow.validate_field(boot, team, sign * 4.625, 0, yaw)
+
+
+@pytest.mark.parametrize('team,sign', [('red', -1), ('blue', 1)])
+def test_field_trusts_boot_contract_over_placeholder_chassis_yaw(team, sign):
+    # POSE has no chassis yaw, so captures record 0; registration uses the pi/2 contract.
+    boot = {'team': team, 'raw_odom': [sign * 4.625, 0], 'chassis_yaw': 0}
+    workflow.validate_field(boot, team, sign * 4.625, 0, math.pi / 2)
+    correction, root = workflow.registration(
+        [sign * 4.625, 0, 0], sign * 4.625, 0, math.pi / 2, workflow.BOOT_CHASSIS_YAW
+    )
+    assert correction == pytest.approx((0, 0, 0))
+    assert root == pytest.approx((sign * 4.625, 0, 0))
 
 
 def test_registration_places_known_wall_pixels():
