@@ -20,6 +20,23 @@
 namespace thornbots_pkg
 {
 
+bool FireLock::update(
+  double now_s, uint32_t track_id, bool eligible, bool spinning,
+  const Vector3d & velocity, double lock_s, double stationary_speed_mps)
+{
+  if (!eligible || !std::isfinite(now_s)) {
+    reset();
+    return false;
+  }
+  if (!since_s_ || track_id != track_id_ || now_s < last_s_) {
+    since_s_ = now_s;
+    track_id_ = track_id;
+  }
+  last_s_ = now_s;
+  return lock_s == 0.0 || (!spinning && velocity.norm() < stationary_speed_mps) ||
+         now_s >= *since_s_ + lock_s;
+}
+
 double py_mod(double a, double b)
 {
   double r = std::fmod(a, b);

@@ -55,13 +55,22 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   target_timeout_s_ = declare_parameter("target_timeout_s", 0.5);
   fire_max_state_age_s_ = declare_parameter("fire_max_state_age_s", 0.15);
   fire_confidence_threshold_ = declare_parameter("fire_confidence_threshold", 0.5);
+  fire_lock_s_ = declare_parameter("fire_lock_s", 1.0);
+  // 0.1 m/s tolerates small centre-velocity noise on a parked target;
+  // the existing spin hysteresis must also classify it as nonspinning.
+  fire_stationary_speed_mps_ = declare_parameter("fire_stationary_speed_mps", 0.1);
+  if (!std::isfinite(fire_lock_s_) || fire_lock_s_ < 0.0 ||
+    !std::isfinite(fire_stationary_speed_mps_) || fire_stationary_speed_mps_ < 0.0)
+  {
+    throw std::invalid_argument("fire lock/speed must be finite and nonnegative");
+  }
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   lead_enabled_ = declare_parameter("lead_enabled", true);
   // MCB indexer request to projectile exit (timed on the robot), and the
   // shortest exit delay sent; the larger times the fire against the spin.
   firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.020);
-  min_fire_delay_s_ = declare_parameter("min_fire_delay_s", 0.025);
+  min_fire_delay_s_ = declare_parameter("min_fire_delay_s", 0.040);
   // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
   // ahead the aim point leads. See README.md.
   gimbal_lag_s_ = declare_parameter("gimbal_lag_s", 0.05);
@@ -155,6 +164,18 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
   const rclcpp::Time now = clock_now();
+  // Preserve interruptions even if a new state arrives before the next tick.
+  const double previous_age = latest_state_ ? seconds(
+    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type())) : 0.0;
+  const double incoming_age = seconds(
+    now - rclcpp::Time(msg->detection_stamp, now.get_clock_type()));
+  if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id ||
+    !msg->valid || !(msg->confidence >= fire_confidence_threshold_) ||
+    previous_age < 0.0 || previous_age > fire_max_state_age_s_ ||
+    incoming_age < 0.0 || incoming_age > fire_max_state_age_s_)
+  {
+    fire_lock_.reset();
+  }
   const bool stale = latest_state_ && seconds(
     now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
@@ -243,10 +264,20 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
 
 std::pair<bool, int> PointToCvTarget::fire_decision(std::optional<double> delay_s)
 {
-  if (!delay_s) {
-    return {false, 0};
+  bool locked = false;
+  if (target_active_ && latest_state_) {
+    const auto now = clock_now();
+    const double age = seconds(
+      now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type()));
+    const auto & v = latest_state_->velocity;
+    locked = fire_lock_.update(seconds(now), latest_state_->robot_track_id,
+      latest_state_->valid && latest_state_->confidence >= fire_confidence_threshold_ &&
+      age >= 0.0 && age <= fire_max_state_age_s_, spinning_, Vector3d(v.x, v.y, v.z),
+      fire_lock_s_, fire_stationary_speed_mps_);
+  } else {
+    fire_lock_.reset();
   }
-  if (latest_state_->confidence < fire_confidence_threshold_) {
+  if (!delay_s || !locked) {
     return {false, 0};
   }
   // Python round() is half-to-even, as is nearbyint in the default mode.
@@ -266,6 +297,7 @@ void PointToCvTarget::check_timeout()
   }
 
   target_active_ = false;
+  fire_lock_.reset();
   spinning_ = false;
   held_panel_yaw_.reset();
   RCLCPP_INFO(
