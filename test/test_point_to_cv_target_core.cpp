@@ -739,38 +739,52 @@ TEST(FireLock, MovingTargetWaitsOneSecondAndIdentityChangesRestart)
 {
   tp::FireLock lock;
   const Vector3d moving(0.2, 0.0, 0.0);
-  EXPECT_FALSE(lock.update(2.0, 7, true, false, moving, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(2.999, 7, true, false, moving, 1.0, 0.1));
-  EXPECT_TRUE(lock.update(3.0, 7, true, false, moving, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(3.1, 8, true, false, moving, 1.0, 0.1));
-  EXPECT_TRUE(lock.update(4.1, 8, true, false, moving, 1.0, 0.1));
+  EXPECT_FALSE(lock.update(2.0, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.999, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(3.0, 7, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(3.1, 8, true, false, moving, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(4.1, 8, true, false, moving, 1.0, 0.1, 0.3));
 }
 
-TEST(FireLock, IneligibleTrackAndClockRewindRestart)
+TEST(FireLock, LongIneligibleGapAndClockRewindRestart)
 {
   tp::FireLock lock;
-  EXPECT_FALSE(lock.update(1.0, 1, true, true, ORIGIN, 1.0, 0.1));
-  EXPECT_TRUE(lock.update(2.0, 1, true, true, ORIGIN, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(2.1, 1, false, true, ORIGIN, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(2.2, 1, true, true, ORIGIN, 1.0, 0.1));
-  EXPECT_TRUE(lock.update(3.2, 1, true, true, ORIGIN, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(3.0, 1, true, true, ORIGIN, 1.0, 0.1));
+  EXPECT_FALSE(lock.update(1.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(2.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.1, 1, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.5, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(3.5, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(3.0, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
 }
 
 TEST(FireLock, StationaryBypassRequiresLowThreeDimensionalSpeedAndNoSpin)
 {
   tp::FireLock lock;
-  EXPECT_TRUE(lock.update(1.0, 1, true, false, {0.03, 0.04, 0.0}, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(1.1, 1, true, true, ORIGIN, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(1.2, 1, true, false, {0.0, 0.0, 0.1}, 1.0, 0.1));
-  EXPECT_FALSE(lock.update(1.3, 1, false, false, ORIGIN, 1.0, 0.1));
+  EXPECT_TRUE(lock.update(1.0, 1, true, false, {0.03, 0.04, 0.0}, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.1, 1, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.2, 1, true, false, {0.0, 0.0, 0.1}, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(1.3, 1, false, false, ORIGIN, 1.0, 0.1, 0.3));
 }
 
 TEST(FireLock, ZeroDisablesOnlyTheDwell)
 {
   tp::FireLock lock;
-  EXPECT_TRUE(lock.update(1.0, 1, true, true, ORIGIN, 0.0, 0.0));
-  EXPECT_FALSE(lock.update(1.1, 1, false, true, ORIGIN, 0.0, 0.0));
+  EXPECT_TRUE(lock.update(1.0, 1, true, true, ORIGIN, 0.0, 0.0, 0.3));
+  EXPECT_FALSE(lock.update(1.1, 1, false, true, ORIGIN, 0.0, 0.0, 0.3));
+}
+
+TEST(FireLock, BriefGapCountsTowardDwellButNeverAllowsFire)
+{
+  tp::FireLock lock;
+  EXPECT_FALSE(lock.update(1.0, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  for (int frame = 0; frame < 5; ++frame) {
+    EXPECT_FALSE(lock.update(1.5 + frame / 30.0, 7, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  }
+  EXPECT_FALSE(lock.update(1.7, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_TRUE(lock.update(2.0, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.1, 7, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.2, 8, false, true, ORIGIN, 1.0, 0.1, 0.3));
+  EXPECT_FALSE(lock.update(2.3, 7, true, true, ORIGIN, 1.0, 0.1, 0.3));
 }
 
 TEST(FireTiming, WireDelayPreservesAlignmentAfterFirmwareLatencySubtraction)

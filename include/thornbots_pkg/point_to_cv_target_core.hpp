@@ -33,17 +33,19 @@ using Eigen::Vector3d;
 
 constexpr double QUARTER_TURN = 1.5707963267948966;  // pi / 2
 
-// Continuous eligible-track time on the node clock; planner shot windows do
-// not interrupt the lock. The caller supplies convergence/confidence/freshness.
+// Same-track dwell on the node clock, including brief ineligible gaps.
+// The caller supplies convergence/confidence/freshness; shot windows are separate.
 class FireLock
 {
 public:
   bool update(double now_s, uint32_t track_id, bool eligible, bool spinning,
-    const Vector3d & velocity, double lock_s, double stationary_speed_mps);
-  void reset() {since_s_.reset();}
+    const Vector3d & velocity, double lock_s, double stationary_speed_mps,
+    double grace_s);
+  void reset() {since_s_.reset(); ineligible_since_s_.reset();}
 
 private:
   std::optional<double> since_s_;
+  std::optional<double> ineligible_since_s_;
   double last_s_ = 0.0;
   uint32_t track_id_ = 0;
 };

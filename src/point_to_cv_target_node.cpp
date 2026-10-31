@@ -56,13 +56,16 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   fire_max_state_age_s_ = declare_parameter("fire_max_state_age_s", 0.15);
   fire_confidence_threshold_ = declare_parameter("fire_confidence_threshold", 0.5);
   fire_lock_s_ = declare_parameter("fire_lock_s", 1.0);
+  // Nine frames at 30 fps bridges short detection/confidence dropouts.
+  fire_lock_grace_s_ = declare_parameter("fire_lock_grace_s", 0.3);
   // 0.1 m/s tolerates small centre-velocity noise on a parked target;
   // the existing spin hysteresis must also classify it as nonspinning.
   fire_stationary_speed_mps_ = declare_parameter("fire_stationary_speed_mps", 0.1);
   if (!std::isfinite(fire_lock_s_) || fire_lock_s_ < 0.0 ||
+    !std::isfinite(fire_lock_grace_s_) || fire_lock_grace_s_ < 0.0 ||
     !std::isfinite(fire_stationary_speed_mps_) || fire_stationary_speed_mps_ < 0.0)
   {
-    throw std::invalid_argument("fire lock/speed must be finite and nonnegative");
+    throw std::invalid_argument("fire lock/grace/speed must be finite and nonnegative");
   }
   root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
@@ -164,18 +167,9 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
   const rclcpp::Time now = clock_now();
-  // Preserve interruptions even if a new state arrives before the next tick.
-  const double previous_age = latest_state_ ? seconds(
-    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type())) : 0.0;
-  const double incoming_age = seconds(
-    now - rclcpp::Time(msg->detection_stamp, now.get_clock_type()));
-  if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id ||
-    !msg->valid || !(msg->confidence >= fire_confidence_threshold_) ||
-    previous_age < 0.0 || previous_age > fire_max_state_age_s_ ||
-    incoming_age < 0.0 || incoming_age > fire_max_state_age_s_)
-  {
-    fire_lock_.reset();
-  }
+  // Account for the held state's age before replacing it, even between ticks.
+  check_timeout();
+  update_fire_lock();
   const bool stale = latest_state_ && seconds(
     now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type())) > target_timeout_s_;
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
@@ -192,6 +186,7 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
   }
   latest_state_ = msg;
   target_active_ = true;
+  update_fire_lock();
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
     latency_stat_.add(latency_s);
@@ -262,7 +257,7 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
     idle_rate_rad_s_, idle_switch_rad_);
 }
 
-std::pair<bool, int> PointToCvTarget::fire_decision(std::optional<double> delay_s)
+bool PointToCvTarget::update_fire_lock()
 {
   bool locked = false;
   if (target_active_ && latest_state_) {
@@ -273,10 +268,16 @@ std::pair<bool, int> PointToCvTarget::fire_decision(std::optional<double> delay_
     locked = fire_lock_.update(seconds(now), latest_state_->robot_track_id,
       latest_state_->valid && latest_state_->confidence >= fire_confidence_threshold_ &&
       age >= 0.0 && age <= fire_max_state_age_s_, spinning_, Vector3d(v.x, v.y, v.z),
-      fire_lock_s_, fire_stationary_speed_mps_);
+      fire_lock_s_, fire_stationary_speed_mps_, fire_lock_grace_s_);
   } else {
     fire_lock_.reset();
   }
+  return locked;
+}
+
+std::pair<bool, int> PointToCvTarget::fire_decision(std::optional<double> delay_s)
+{
+  const bool locked = update_fire_lock();
   if (!delay_s || !locked) {
     return {false, 0};
   }

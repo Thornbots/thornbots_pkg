@@ -353,6 +353,9 @@ delay correct handoffs. `RobotHysteresis` keeps the incumbent's last centroid;
 the nearest cluster continues it, and a challenger must win by `switch_margin`
 (0.3) for `switch_hold_frames` (5) frames. Acquisition is immediate when there
 is no incumbent or the nearest match is beyond `gate_radius_m`.
+Empty detection frames leave the incumbent and its `robot_track_id` unchanged;
+reappearance within the default 1 m gate retains the ID, including after a
+short detection dropout. Camera/target motion beyond that gate can create a new ID.
 
 The selector doesn't use `target_tracker`'s predicted centre. That would help
 single-panel handoffs, but `/cv/target_state` is in `odom` and clustering is
@@ -746,11 +749,14 @@ that capture stamp to be at most
 firing, until `target_timeout_s` (0.5 s). The fire-age limit is a node parameter,
 not a launch argument.
 
-`fire_lock_s` (1.0 s) requires continuous tracking of the same
-`TargetState.robot_track_id`, starting at the first publish tick with a converged,
+`fire_lock_s` (1.0 s) requires tracking of the same
+`TargetState.robot_track_id`, starting at the first observation with a converged,
 fresh track above the confidence threshold. Panel handoffs keep that identity.
-Invalid tracks, low confidence, lost targets, stale/future detections and identity
-changes reset the lock, including interruptions received between publish ticks.
+`fire_lock_grace_s` (0.3 s, nine frames at 30 fps) preserves the dwell start
+through brief invalid, low-confidence or stale/future states. Gap time counts
+toward the dwell, but firing stays blocked until all gates pass again. Longer
+ineligible gaps, identity changes (even between publish ticks), and target timeout
+reset the lock. State callbacks and publish ticks both observe eligibility.
 Elapsed time uses the node clock, as does fire age; a backwards clock jump restarts
 the dwell. Planner shot windows do not reset it. Setting `fire_lock_s` to 0
 disables only this wait; the other firing gates still apply.
@@ -759,7 +765,7 @@ Stationary targets bypass the dwell: the existing spin hysteresis must be outsid
 spin mode, and the norm of `TargetState.velocity` (centre velocity in odom,
 including z) must be below `fire_stationary_speed_mps` (0.1 m/s). This tolerance
 allows small parked-target velocity noise; it is not a measured hardware threshold.
-Both new parameters accept finite nonnegative values and are node parameters,
+All three lock parameters accept finite nonnegative values and are node parameters,
 not launch arguments. The 40 ms minimum exit delay gives the gimbal more time to
 acquire each aim point before firing.
 
