@@ -73,19 +73,23 @@ def generate_launch_description():
         description='Baud rate for the RPLIDAR A2M8, only used when '
         'real_hardware:=true.'
     )
+    lidar_inverted_arg = DeclareLaunchArgument(
+        'lidar_inverted', default_value='true',
+        description='Lidar mounted upside down: sllidar negates scan angles so '
+        'the scan frame stays z-up. Only used when real_hardware:=true.')
     lidar_x_arg = DeclareLaunchArgument(
-        'lidar_x', default_value='-0.105', description='Lidar X in head frame, meters.')
+        'lidar_x', default_value='-0.0056', description='Lidar X in head frame, meters.')
     lidar_y_arg = DeclareLaunchArgument(
         'lidar_y', default_value='-0.193326', description='Lidar Y in head frame, meters.')
     lidar_z_arg = DeclareLaunchArgument(
-        'lidar_z', default_value='0.101293', description='Lidar Z in head frame, meters.')
+        'lidar_z', default_value='0.063707', description='Lidar Z in head frame, meters.')
     lidar_yaw_arg = DeclareLaunchArgument(
-        'lidar_yaw', default_value='0.5907', description='Lidar yaw CCW from head +X, radians.')
+        'lidar_yaw', default_value='2.579', description='Lidar yaw CCW from head +X, radians.')
     lidar_blind_angle_start_arg = DeclareLaunchArgument(
-        'lidar_blind_angle_start', default_value='-0.5585',
+        'lidar_blind_angle_start', default_value='-1.927',
         description='Self-filter sector start in scan frame, radians CCW from scan zero.')
     lidar_blind_angle_end_arg = DeclareLaunchArgument(
-        'lidar_blind_angle_end', default_value='1.0123',
+        'lidar_blind_angle_end', default_value='-0.171',
         description='Self-filter sector end in scan frame, radians CCW from scan zero.')
 
     odom_frame_arg = DeclareLaunchArgument(
@@ -442,6 +446,7 @@ def generate_launch_description():
                 LaunchConfiguration('lidar_baudrate'), value_type=int
             ),
             'frame_id': 'lidar',
+            'inverted': ParameterValue(LaunchConfiguration('lidar_inverted'), value_type=bool),
             'angle_compensate': True,
             'use_sim_time': use_sim_time,
         }],
@@ -608,7 +613,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'amcl_initial_yaw', default_value='0.0',
             description='Deprecated; AMCL root starts heading-fixed at yaw zero'),
-        lidar_serial_port_arg, lidar_baudrate_arg,
+        lidar_serial_port_arg, lidar_baudrate_arg, lidar_inverted_arg,
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
         lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,

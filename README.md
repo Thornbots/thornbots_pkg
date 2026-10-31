@@ -213,13 +213,15 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 ```
 
 `lidar_serial_port` and `lidar_baudrate` (`/dev/ttyUSB0`, `115200`) configure
-the RPLIDAR A2M8 on hardware. The driver uses `angle_compensate: true` to
+the RPLIDAR A2M8 on hardware. `lidar_inverted` (default `true`, the lidar is
+mounted upside down) sets the driver's `inverted`, which negates scan angles so
+the `lidar` frame stays z-up for rf2o, AMCL and slam_toolbox. The driver uses `angle_compensate: true` to
 keep a fixed angular grid (720 bins on the measured A2M8), required by
 rf2o and slam_toolbox. Uncompensated scans vary in beam count.
 `lidar_x`, `lidar_y`, `lidar_z` (meters in `head`) and `lidar_yaw` (radians CCW
-from head +X) override the lidar TF at launch; defaults use the Oct 26 CAD
+from head +X) override the lidar TF at launch; defaults use the Oct 31 CAD
 translation and robot-measured scan-zero yaw (see [self-filter](#lidar_self_filter)).
-`lidar_blind_angle_start` / `lidar_blind_angle_end` (-0.5585 / 1.0123 rad in the scan
+`lidar_blind_angle_start` / `lidar_blind_angle_end` (-1.927 / -0.171 rad in the scan
 frame) set the [self-filter sector](#lidar_self_filter), including across scan zero.
 The docstring at the top of
 `launch/auto.launch.py` documents only `real_hardware`; the other args are
@@ -604,17 +606,16 @@ states. It runs in sim and on hardware. Sim's lidar doesn't see the robot at
 all (see `sim/README.md`), so this filter is the only thing modelling the
 blind sector.
 
-The Oct 26 robot measurement sets the sector to -0.5585..1.0123 rad
-(-32..58 degrees) in the scan frame. Both Oct 25 bags and the live level
-probe showed zero leaking head returns. The former 0.09..1.41 rad sector
-leaked about 8.5 head hits per scan and blanked real returns at 53..81 degrees.
-
-The mount translation in `head` is the team's CAD (-0.105, -0.193326,
-0.101293) m. Scan zero is 0.5907 rad (33.84 degrees) CCW of the gun,
-from a joint head-turn fit over five poses; the fitted radius is 0.2225 m,
-consistent with the CAD's 0.220 m. The CAD FOV-marker yaw is superseded.
-The [dated measurement note](../docs/investigations/lidar-mount-2026-10-26.md)
-records the evidence, uncertainty and head-turn SLAM comparison.
+The lidar was flipped upside down on 2026-10-31 to lower the scan plane.
+The mount translation in `head` is the team's Oct 31 CAD (-0.0056,
+-0.193326, 0.063707) m. With `lidar_inverted`, scan zero is 2.579 rad
+(147.75 degrees) CCW of the gun, and the sector is -1.927..-0.171 rad
+(-110.4..-9.8 degrees) in the scan frame: the level-pitch head block plus
+5 degrees each side. Both come from one parked robot pose; nose-up/down
+sectors and a head-turn fit are still to be measured. The
+[dated measurement note](../docs/investigations/lidar-flip-2026-10-31.md)
+records the evidence; the [Oct 26 note](../docs/investigations/lidar-mount-2026-10-26.md)
+covers the previous upright mount.
 
 The filter compares scan-frame angles without TF. Negative bounds and sectors
 crossing scan zero are supported. Keep the simulated sensor mount and robot
