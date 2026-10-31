@@ -45,9 +45,10 @@ def generate_test_description():
         launch_arguments={'gui': 'false', 'rviz': 'false', 'foxglove': 'false',
                           'model': 'sentry_v2', 'yaw': '0.0', 'real_time_factor': '1.0',
                           'odom_noise_enabled': 'false'}.items())
+    mode = os.environ.get('THORNBOTS_MMM_START_MODE', 'mapping')
     robot = IncludeLaunchDescription(PythonLaunchDescriptionSource(os.path.join(
         get_package_share_directory('thornbots_pkg'), 'launch', 'auto.launch.py')),
-        launch_arguments={'real_hardware': 'false', 'localization_mode': 'mapping',
+        launch_arguments={'real_hardware': 'false', 'localization_mode': mode,
                           'load_map': 'false', 'autosave_map': 'false', 'use_rf2o': 'false',
                           'mmm_room': 'true', 'map_save_dir': directory,
                           'mmm_shutdown_after_save': 'false', 'mmm_timeout_s': '45.0',
@@ -55,13 +56,13 @@ def generate_test_description():
                           'enable_cv_target_bridge': 'false', 'dds_transport': 'udp_only'}.items())
     return LaunchDescription([
         sim, TimerAction(period=5.0, actions=[robot]), launch_testing.actions.ReadyToTest()
-    ]), {'directory': directory}
+    ]), {'directory': directory, 'mode': mode}
 
 
 class TestMmmFlow(unittest.TestCase):
     """MCB echoes all Jetson transactions and controls the fake operator inputs."""
 
-    def test_start_drive_return_save(self, directory):
+    def test_start_drive_return_save(self, directory, mode):
         rclpy.init()
         node = rclpy.create_node('fake_mcb_mmm_test')
         ping = node.create_publisher(Ping, '/dji_serial_bridge/ping_from_mcb', 10)
@@ -70,6 +71,19 @@ class TestMmmFlow(unittest.TestCase):
         evidence = {'pose': None, 'even': None, 'odd': None, 'events': [], 'scan': None}
         buffer = Buffer()
         listener = TransformListener(buffer, node)
+
+        def persistent_processes():
+            names = {'mmm', 'dji_serial_bridge_node', 'pose_translator',
+                     'odom_tf_broadcaster', 'mcb_relay', 'robot_state_publisher'}
+            found = {}
+            for path in Path('/proc').glob('[0-9]*/cmdline'):
+                try:
+                    name = Path(path.read_bytes().split(b'\0')[0].decode()).name
+                    if name in names:
+                        found[name] = int(path.parent.name)
+                except (OSError, UnicodeError):
+                    pass
+            return found
 
         def send(number):
             message = Ping()
@@ -125,13 +139,31 @@ class TestMmmFlow(unittest.TestCase):
             # Let the mapping lifecycle and first map settle before requesting reset.
             until = time.monotonic() + 3
             wait(lambda: time.monotonic() >= until)
+            names_before = node.get_node_names()
+            processes_before = persistent_processes()
+            self.assertIn('mmm', processes_before)
+            self.assertIn('pose_translator', processes_before)
+            self.assertIn('mmm', names_before)
+            if mode == 'amcl':
+                self.assertNotIn('map_autosaver', names_before)
+                self.assertIn('amcl', names_before)
+                self.assertIn('map_server', names_before)
+                self.assertNotIn('slam_toolbox', names_before)
             evidence['odd'] = 1
+            started = time.monotonic()
             send(1)
             wait(lambda: any(Path(directory).glob('mmm-*')) and evidence['scan'] is not None)
             until = time.monotonic() + 1.0
             wait(lambda: time.monotonic() >= until)
             bad_scan()  # A transient scan during boot must restart evidence, not send 6.
             wait(lambda: evidence['even'] == 2)
+            print(f'MMM START TO READY ({mode}): {time.monotonic() - started:.3f} s', flush=True)
+            names_after = node.get_node_names()
+            self.assertEqual(persistent_processes(), processes_before)
+            self.assertIn('slam_toolbox', names_after)
+            self.assertIn('map_autosaver', names_after)
+            wait(lambda: 'amcl' not in node.get_node_names()
+                 and 'map_server' not in node.get_node_names())
             first_boot = next(Path(directory).glob('mmm-*/boot.json'))
             until = time.monotonic() + 5.1
             wait(lambda: time.monotonic() >= until)

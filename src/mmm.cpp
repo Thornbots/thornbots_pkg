@@ -30,12 +30,15 @@
 
 #include "dji_serial_bridge/msg/ping.hpp"
 #include "dji_serial_bridge/msg/ref_sys_status.hpp"
+#include "lifecycle_msgs/msg/state.hpp"
+#include "lifecycle_msgs/srv/get_state.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sentry_localization/srv/save_map.hpp"
 #include "slam_toolbox/srv/reset.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "thornbots_pkg/mmm_core.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -44,6 +47,8 @@ namespace fs = std::filesystem;
 namespace core = thornbots_pkg::mmm;
 using Reset = slam_toolbox::srv::Reset;
 using SaveMap = sentry_localization::srv::SaveMap;
+using Trigger = std_srvs::srv::Trigger;
+using GetState = lifecycle_msgs::srv::GetState;
 using Steady = std::chrono::steady_clock;
 
 class Mmm : public rclcpp::Node
@@ -89,6 +94,8 @@ public:
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr m) {scan(m);});
     reset_ = create_client<Reset>("/slam_toolbox/reset");
     save_ = create_client<SaveMap>("/map_autosaver/save_now");
+    switch_ = create_client<Trigger>("/localization/start_mapping");
+    mapping_state_ = create_client<GetState>("/slam_toolbox/get_state");
     timer_ = create_wall_timer(std::chrono::milliseconds(50), [this]() {tick();});
   }
 
@@ -124,6 +131,11 @@ private:
       }
       ++session_generation_;
       setup_ = ready_ = reset_sent_ = reset_done_ = finished_ = false;
+      switch_sent_ = false;
+      mapping_active_ = false;
+      switch_->prune_pending_requests();
+      mapping_state_->prune_pending_requests();
+      state_pending_ = false;
       scan_gate_ = core::ScanGate{};
       gate_.reset();
       restart_capture();
@@ -131,10 +143,6 @@ private:
       joints_.reset();
       ref_.reset();
       team_.clear();
-      if (mode_ != "mapping") {
-        setup_failed("running localization mode is not mapping");
-        return;
-      }
       try {
         const auto id = std::chrono::system_clock::now().time_since_epoch().count();
         session_ = fs::path(save_dir_) / ("mmm-" + std::to_string(id));
@@ -142,7 +150,7 @@ private:
           throw std::runtime_error("session directory already exists");
         }
         setup_ = true;
-        deadline_ = wall_now() + timeout_;
+        budget_.begin(wall_now(), timeout_, mode_ != "mapping");
         RCLCPP_INFO(get_logger(), "MMM SESSION: %s", session_.c_str());
       } catch (const std::exception & e) {
         setup_failed(e.what());
@@ -155,6 +163,8 @@ private:
   void setup_failed(const std::string & why)
   {
     setup_ = false;
+    switch_->prune_pending_requests();
+    mapping_state_->prune_pending_requests();
     ready_ = false;
     workflow_.setup_result(mode_ == "mapping", false);
     RCLCPP_ERROR(get_logger(), "MMM SETUP FAILED: %s; sending 6", why.c_str());
@@ -430,8 +440,11 @@ private:
     const double wall = wall_now();
     protocol_.tick(wall);
     if (setup_) {
-      if (wall >= deadline_) {setup_failed("reset/boot capture timeout");}
-      else if (!reset_done_ && !reset_sent_ && reset_->service_is_ready()) {
+      if (budget_.expired(wall)) {
+        setup_failed(budget_.switching() ? "localization switch timeout" : "reset/boot capture timeout");
+      } else if (budget_.switching()) {
+        switch_mapping(wall);
+      } else if (!reset_done_ && !reset_sent_ && reset_->service_is_ready()) {
         reset_sent_ = true;
         auto req = std::make_shared<Reset::Request>();
         req->pause_new_measurements = false;
@@ -469,6 +482,41 @@ private:
     workflow_.tick(ready_ && at_start(), wall);
   }
 
+  void switch_mapping(double wall)
+  {
+    if (mapping_active_ && reset_->service_is_ready() && save_->service_is_ready()) {
+      mode_ = "mapping";
+      budget_.mapping_ready(wall);
+      RCLCPP_INFO(get_logger(), "MMM mapping backend available; starting reset/capture budget");
+      switch_->prune_pending_requests();
+    } else if (!switch_sent_ && switch_->service_is_ready()) {
+      switch_sent_ = true;
+      const auto generation = session_generation_;
+      switch_->async_send_request(std::make_shared<Trigger::Request>(),
+        [this, generation](rclcpp::Client<Trigger>::SharedFuture future) {
+          if (!setup_ || generation != session_generation_ || !budget_.switching()) {return;}
+          try {
+            if (!future.get()->success) {setup_failed("localization switch rejected");}
+          } catch (const std::exception & e) {setup_failed(e.what());}
+        });
+    }
+    if (!mapping_active_ && !state_pending_ && save_->service_is_ready() &&
+      mapping_state_->service_is_ready())
+    {
+      state_pending_ = true;
+      const auto generation = session_generation_;
+      mapping_state_->async_send_request(std::make_shared<GetState::Request>(),
+        [this, generation](rclcpp::Client<GetState>::SharedFuture future) {
+          if (!setup_ || generation != session_generation_) {return;}
+          state_pending_ = false;
+          try {
+            mapping_active_ = future.get()->current_state.id ==
+              lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+          } catch (const std::exception & e) {setup_failed(e.what());}
+        });
+    }
+  }
+
   tf2_ros::Buffer buffer_;
   tf2_ros::TransformListener listener_;
   core::Protocol protocol_;
@@ -477,7 +525,8 @@ private:
   core::Pose boot_pose_{};
   std::string mode_, save_dir_, explicit_team_, team_, request_file_;
   fs::path session_, output_;
-  double timeout_, deadline_ = 0, save_deadline_ = 0, boot_chassis_ = 0;
+  double timeout_, save_deadline_ = 0, boot_chassis_ = 0;
+  core::SetupBudget budget_;
   double boot_last_stamp_ = -1;
   std::array<double, 2> raw_boot_{};
   core::ScanGate scan_gate_;
@@ -485,6 +534,8 @@ private:
   int64_t save_request_ = 0;
   rclcpp::Time reset_stamp_{0, 0, RCL_ROS_TIME}, boot_stamp_{0, 0, RCL_ROS_TIME};
   bool room_, shutdown_, setup_ = false, reset_sent_ = false;
+  bool switch_sent_ = false;
+  bool mapping_active_ = false, state_pending_ = false;
   bool reset_done_ = false, ready_ = false, saving_ = false, validated_ = false;
   core::SaveGuard save_guard_;
   bool finished_ = false, finalizing_ = false;
@@ -500,6 +551,8 @@ private:
   dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr ref_;
   rclcpp::Client<Reset>::SharedPtr reset_;
   rclcpp::Client<SaveMap>::SharedPtr save_;
+  rclcpp::Client<Trigger>::SharedPtr switch_;
+  rclcpp::Client<GetState>::SharedPtr mapping_state_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

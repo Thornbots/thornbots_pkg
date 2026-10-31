@@ -74,7 +74,21 @@ with `enable_mmm:=false`, including as a launch argument to the manual
 may run. The [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#ping-id5--mcb-mapping-machine-and-link-check)
 owns all MCB states, acknowledgments and retry timing.
 
-On start, MMM requires the running `localization_mode` to be `mapping` and
+On start, MMM asks `/localization/start_mapping` (`std_srvs/srv/Trigger`)
+to switch any non-mapping boot mode to mapping. Localization's launch waits
+for the old backend process to exit before starting blank SLAM and
+`map_autosaver`; AMCL/map_server and SLAM never own `map->nav_odom` together.
+Only localization's backend and map-pose adapter restart. The serial bridge,
+MMM coordinator, CV, pose translation, EKF/rf2o and host service stay running,
+so the MCB's Setup exchange survives. Mapping remains selected for the rest
+of this boot; the next boot uses `launch.env` again. Without a start, the
+normal AMCL boot is unchanged.
+
+Once mapping's lifecycle state is Active and its reset/save services exist,
+MMM starts a fresh `mmm_timeout_s` wall budget for setup. Switching has its
+own `mmm_timeout_s` budget (at most twice that setting from start to setup
+failure). A missing, rejected or stalled switch sends 6. Starting in mapping
+keeps the existing single setup budget. MMM then
 calls Jazzy's `/slam_toolbox/reset` (`slam_toolbox/srv/Reset`,
 `pause_new_measurements=false`) to clear the graph inside the live stack.
 It creates `map_save_dir/mmm-<system-clock count>/`, then captures `boot.json`
@@ -126,7 +140,9 @@ The full-stack fake-MCB launch test is opt-in because `sim` depends on this
 package. Build `sim`, then rebuild `thornbots_pkg` with
 `--cmake-args -DTHORNBOTS_MMM_SIM_TEST=ON` and run `colcon test
 --packages-select thornbots_pkg`. It exercises start, ready, driving away,
-parked return and validated save using the normal sim/robot entrypoints.
+parked return and validated save using the normal sim/robot entrypoints, from
+both mapping and AMCL boot modes. The AMCL case checks the initial backend,
+its removal, mapping/save availability, and prints start-to-ready wall time.
 `test_mmm_core` covers protocol loss/retry termination, StartGate hysteresis,
 save guards and failure recovery without ROS.
 

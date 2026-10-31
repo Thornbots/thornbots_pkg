@@ -27,6 +27,33 @@
 namespace mmm = thornbots_pkg::mmm;
 namespace
 {
+TEST(SetupBudget, SwitchingGetsSeparateBudgetAndCannotExtendCaptureRepeatedly)
+{
+  mmm::SetupBudget budget;
+  budget.begin(10, 60, true);
+  EXPECT_TRUE(budget.switching());
+  EXPECT_FALSE(budget.expired(69.9));
+  EXPECT_TRUE(budget.expired(70));
+  budget.mapping_ready(69);
+  EXPECT_FALSE(budget.switching());
+  EXPECT_FALSE(budget.expired(128.9));
+  budget.mapping_ready(100);
+  EXPECT_TRUE(budget.expired(129));
+}
+
+TEST(SetupBudget, MappingStartAndNewSessionHaveOnlyTheirOwnBudget)
+{
+  mmm::SetupBudget budget;
+  budget.begin(10, 60, false);
+  budget.mapping_ready(50);
+  EXPECT_FALSE(budget.switching());
+  EXPECT_TRUE(budget.expired(70));
+  budget.begin(100, 60, true);
+  EXPECT_TRUE(budget.switching());
+  EXPECT_FALSE(budget.expired(159.9));
+  EXPECT_TRUE(budget.expired(160));
+}
+
 class ProtocolTest : public ::testing::Test
 {
 protected:

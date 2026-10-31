@@ -85,6 +85,21 @@ private:
   int attempts_ = 0;
 };
 
+// Switching and reset/capture each receive one full wall-time budget.
+class SetupBudget
+{
+public:
+  void begin(double now, double timeout, bool switching)
+  {timeout_ = timeout; deadline_ = now + timeout; switching_ = switching;}
+  void mapping_ready(double now)
+  {if (switching_) {switching_ = false; deadline_ = now + timeout_;}}
+  bool switching() const {return switching_;}
+  bool expired(double now) const {return now >= deadline_;}
+private:
+  double timeout_ = 0, deadline_ = 0;
+  bool switching_ = false;
+};
+
 enum class SaveDecision {Ignore, Incomplete, Ready};
 SaveDecision decide_save(bool session_ready, bool busy, bool at_start,
   std::optional<int> completed_even);
