@@ -142,18 +142,18 @@ TEST(Relocalizer, ReturnToRawCoordinatesIsANewNavigationCorrection)
 TEST(Relocalizer, ClockResetAndRawDiscontinuityForgetTheSentOffset)
 {
   Relocalizer rel;
-  rel.add_odom(10.0, -4.625, 0.0, 0.0, 0.0);
-  ASSERT_TRUE(rel.decide(10.0, -4.425, 0.0, 1e-6, 10.0));
-  rel.add_odom(10.01, 4.625, 0.0, 0.0, 0.0);
+  rel.add_odom(10.0, -3.53, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(10.0, -3.33, 0.0, 1e-6, 10.0));
+  rel.add_odom(10.01, 3.53, 0.0, 0.0, 0.0);
   EXPECT_FALSE(rel.odom_at(10.005));
-  ASSERT_TRUE(rel.decide(10.01, 4.825, 0.0, 1e-6, 10.01));
-  rel.add_odom(0.0, 4.625, 0.0, 0.0, 0.0);
-  EXPECT_TRUE(rel.decide(0.0, 4.825, 0.0, 1e-6, 0.0));
+  ASSERT_TRUE(rel.decide(10.01, 3.73, 0.0, 1e-6, 10.01));
+  rel.add_odom(0.0, 3.53, 0.0, 0.0, 0.0);
+  EXPECT_TRUE(rel.decide(0.0, 3.73, 0.0, 1e-6, 0.0));
 }
 
 TEST(Relocalizer, BothTeamStartsRecoverAfterFirstFrameIsLost)
 {
-  for (double start : {-4.625, 4.625}) {
+  for (double start : {-3.53, 3.53}) {
     Relocalizer rel;
     rel.add_odom(1.0, 0.0, 0.0, 0.2, 0.0);
     const auto lost = rel.decide(1.0, start, 0.0, 1e-6, 1.0);
@@ -173,7 +173,7 @@ TEST(Relocalizer, BothTeamStartsRecoverAfterFirstFrameIsLost)
       }
     }
     EXPECT_EQ(received, 3u);
-    EXPECT_GT(std::abs(mcb_nav), 4.0);
+    EXPECT_GT(std::abs(mcb_nav), 3.0);
   }
 }
 
@@ -181,11 +181,11 @@ TEST(Relocalizer, RetryStillRequiresConfidentFreshLocalization)
 {
   Relocalizer rel;
   rel.add_odom(1.0, 0.0, 0.0, 0.0, 0.0);
-  ASSERT_TRUE(rel.decide(1.0, -4.625, 0.0, 1e-6, 1.0));
+  ASSERT_TRUE(rel.decide(1.0, -3.53, 0.0, 1e-6, 1.0));
   rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
-  EXPECT_FALSE(rel.decide(2.0, -4.625, 0.0, 0.01, 2.0));
-  EXPECT_FALSE(rel.decide(0.0, -4.625, 0.0, 1e-6, 2.0));
-  EXPECT_TRUE(rel.decide(2.0, -4.625, 0.0, 1e-6, 2.0));
+  EXPECT_FALSE(rel.decide(2.0, -3.53, 0.0, 0.01, 2.0));
+  EXPECT_FALSE(rel.decide(0.0, -3.53, 0.0, 1e-6, 2.0));
+  EXPECT_TRUE(rel.decide(2.0, -3.53, 0.0, 1e-6, 2.0));
 }
 
 TEST(Relocalizer, LocalizationStampOutsideOdomHistory)

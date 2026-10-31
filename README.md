@@ -797,8 +797,9 @@ neither recent event, `idle_direction:=zone` (default) looks at the enemy's
 starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
-The enemy zone mirrors only our firmware start x: red boots at (-4.625, 0),
-blue at (+4.625, 0). `zone_start_x_m` and `zone_start_y_m` are also `auto.launch.py` arguments,
+The enemy zone mirrors only our firmware start x: red boots at (-3.53, -0.426),
+blue at (+3.53, -0.426). These are temporary, unmeasured spooky scrim values (ARCC was
+(±4.625, 0)). `zone_start_x_m` and `zone_start_y_m` are also `auto.launch.py` arguments,
 so simulation fixtures can express the zone in their scene frame. They default
 to `OdometrySubsystemConstants.hpp`; the REF_SYS blue flag alone chooses the
 side, including late blue arrival and missing/zero robot ID. Idle points use
@@ -940,8 +941,8 @@ These checks cannot replace checking the referee configuration and surveyed
 heading against the physical field.
 
 A field-aligned map can be used by either team. AMCL starts from the live team's
-contract root (-4.625, 0, 0) or (4.625, 0, 0), after a valid REF_SYS team
-report and a raw-zero boot check;
+contract root (-3.53, -0.426, 0) or (3.53, -0.426, 0) (temporary scrim values),
+after a valid REF_SYS team report and a raw-zero boot check;
 the map's captured team describes registration provenance. AMCL supplies
 `map->nav_odom`, not `/localization/odom`: with rf2o that topic comes from EKF
 fusing raw velocity/fixed heading and rf2o position; room/`--raw-odom` uses
