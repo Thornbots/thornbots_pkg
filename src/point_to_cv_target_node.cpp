@@ -110,8 +110,10 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     throw std::invalid_argument("idle_direction must be zone or hold");
   }
   // Field coordinates; transform into the continuous raw aim frame before use.
-  zone_start_x_m_ = declare_parameter("zone_start_x_m", 4.625);
-  zone_start_y_m_ = declare_parameter("zone_start_y_m", 0.0);
+  // TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
+  // event, see docs/ROADMAP.md. Matches firmware START_X/START_Y; only x mirrors by team.
+  zone_start_x_m_ = declare_parameter("zone_start_x_m", 3.53);
+  zone_start_y_m_ = declare_parameter("zone_start_y_m", -0.426);
   idle_height_m_ = declare_parameter("idle_height_m", 0.15);
   idle_rate_rad_s_ = declare_parameter("idle_rate_rad_s", 0.5);
   idle_switch_rad_ = declare_parameter("idle_switch_rad", M_PI / 6.0);

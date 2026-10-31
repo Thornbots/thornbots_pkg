@@ -40,6 +40,15 @@ FOXGLOVE_COMMAND = [
 # captured boot chassis_yaw is a 0 placeholder; registration trusts this instead.
 BOOT_CHASSIS_YAW = math.pi / 2
 
+# TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
+# event, see docs/ROADMAP.md. Matches firmware START_X/START_Y; red is -START_X, y not mirrored.
+START_X = 3.53
+START_Y = -0.426
+
+
+def team_start(team):
+    return (-START_X if team == "red" else START_X, START_Y)
+
 
 def angle(value):
     """Wrap radians to [-pi, pi]."""
@@ -77,7 +86,7 @@ def validate_field(boot, team, x, y, yaw):
         raise ValueError("invalid captured raw /odom")
     if math.dist(raw, (0, 0)) > 0.3:
         raise ValueError("boot raw /odom must be within 0.3 m of zero")
-    if math.dist((x, y), (-4.625 if team == "red" else 4.625, 0)) > 0.3:
+    if math.dist((x, y), team_start(team)) > 0.3:
         raise ValueError("surveyed start differs from team start by more than 0.3 m")
     if abs(angle(yaw - BOOT_CHASSIS_YAW)) > 0.25:
         raise ValueError("both teams must boot facing +y: chassis heading pi/2")
@@ -183,8 +192,9 @@ def align(args):
     validate_bundle(source)
     boot = json.loads((source / "boot.json").read_text())
     args.team = args.team or boot["team"]
-    args.x = (-4.625 if args.team == "red" else 4.625) if args.x is None else args.x
-    args.y = 0.0 if args.y is None else args.y
+    start_x, start_y = team_start(args.team)
+    args.x = start_x if args.x is None else args.x
+    args.y = start_y if args.y is None else args.y
     validate_field(boot, args.team, args.x, args.y, args.yaw)
     correction, root = registration(
         boot["root"], args.x, args.y, args.yaw, BOOT_CHASSIS_YAW
@@ -518,7 +528,7 @@ def observe_inputs(runtime, args, require_session=True):
 
 def verify_start(boot, live):
     """Field-aligned maps support either team; validate the live contract start."""
-    expected = [-4.625 if live["team"] == "red" else 4.625, 0.0]
+    expected = list(team_start(live["team"]))
     if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], (0, 0)) > 0.3:
         raise ValueError(
             f"seed/team mismatch: observed={live}, expected raw_odom=[0, 0]; return to team start"

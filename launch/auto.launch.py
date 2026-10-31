@@ -218,11 +218,13 @@ def generate_launch_description():
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
+    # TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
+    # event, see docs/ROADMAP.md. Matches firmware START_X/START_Y.
     zone_start_x_arg = DeclareLaunchArgument(
-        'zone_start_x_m', default_value='4.625',
+        'zone_start_x_m', default_value='3.53',
         description='Idle-look enemy start-zone X magnitude in the aim frame, meters.')
     zone_start_y_arg = DeclareLaunchArgument(
-        'zone_start_y_m', default_value='0.0',
+        'zone_start_y_m', default_value='-0.426',
         description='Idle-look enemy start-zone Y in the aim frame, meters.')
 
     enable_target_selector_arg = DeclareLaunchArgument(

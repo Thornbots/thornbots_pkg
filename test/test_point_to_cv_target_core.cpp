@@ -718,8 +718,8 @@ TEST(IdleLook, RateCapsWrapsAndIgnoresSmallDirectionChanges)
 
 TEST(IdleLook, EnemyZoneMirrorsOnlyXForFirmwareTeam)
 {
-  EXPECT_EQ(tp::enemy_zone(false, 4.625, 0.0, 0.15), Vector3d(4.625, 0.0, 0.15));
-  EXPECT_EQ(tp::enemy_zone(true, 4.625, 0.0, 0.15), Vector3d(-4.625, 0.0, 0.15));
+  EXPECT_EQ(tp::enemy_zone(false, 3.53, -0.426, 0.15), Vector3d(3.53, -0.426, 0.15));
+  EXPECT_EQ(tp::enemy_zone(true, 3.53, -0.426, 0.15), Vector3d(-3.53, -0.426, 0.15));
   EXPECT_EQ(tp::enemy_zone(true, 5.0, 0.4, 0.15), Vector3d(-5.0, 0.4, 0.15));
 }
 

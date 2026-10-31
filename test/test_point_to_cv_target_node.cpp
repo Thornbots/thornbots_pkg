@@ -60,12 +60,13 @@ public:
     tf.transform.rotation.w = 1.0;
     tf_buffer_->setTransform(tf, "test", true);
   }
-  void navigation_transform(double team_start)
+  void navigation_transform(double team_start_x, double team_start_y)
   {
     geometry_msgs::msg::TransformStamped tf;
     tf.header.frame_id = "nav_odom";
     tf.child_frame_id = odom_frame_;
-    tf.transform.translation.x = team_start;
+    tf.transform.translation.x = team_start_x;
+    tf.transform.translation.y = team_start_y;
     tf.transform.rotation.w = 1.0;
     tf_buffer_->setTransform(tf, "test", true);
   }
@@ -514,7 +515,7 @@ TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
   for (bool blue : {false, true}) {
     auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
     node->gun_transform();
-    node->navigation_transform(blue ? 4.625 : -4.625);
+    node->navigation_transform(blue ? 3.53 : -3.53, -0.426);
     dji_serial_bridge::msg::RefSysStatus referee;
     referee.robot_id = blue ? 107 : 7;
     referee.is_on_blue_team = blue;
@@ -523,7 +524,7 @@ TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
     node->idle_point();
     node->time_ns(20000000000LL);
     const auto point = node->idle_point();
-    EXPECT_NEAR(point.x(), blue ? -9.25 : 9.25, 1e-6);
+    EXPECT_NEAR(point.x(), blue ? -7.06 : 7.06, 1e-6);
     EXPECT_NEAR(point.y(), 0.0, 1e-6);
   }
 }
