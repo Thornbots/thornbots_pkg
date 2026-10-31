@@ -185,7 +185,7 @@ def generate_launch_description():
         'firmware_latency_s', default_value='0.020',
         description='point_to_cv_target: MCB indexer request to projectile '
         'exit, the FIRING_LATENCY_TIME the firmware subtracts (20 ms, timed on '
-        'the robot). Wire fire delays never go under min_fire_delay_s (0.025).'
+        'the robot). Wire fire delays never go under min_fire_delay_s (0.040).'
     )
     chase_settle_s_arg = DeclareLaunchArgument(
         'chase_settle_s', default_value='-1.0',
