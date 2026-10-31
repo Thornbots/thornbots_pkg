@@ -171,7 +171,7 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 `real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`),
 and setting it false keeps the launch off the real serial devices.
 
-`localization_mode` (`mapping` default since 2026-10-02, `slam`, `amcl`,
+`localization_mode` (`amcl` default since 2026-10-30, `mapping`, `slam`,
 `none`) picks the `map->nav_odom` owner. Under `mapping`, `load_map` defaults
 false (a blank pose graph) and `autosave_map` defaults to
 `real_hardware`. `/localization/odom` is published in every mode.
