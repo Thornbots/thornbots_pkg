@@ -198,6 +198,10 @@ def generate_launch_description():
     chase_margin_s_arg = DeclareLaunchArgument(
         'chase_margin_s', default_value='0.0',
         description='point_to_cv_target: time margin before a panel stops facing, seconds')
+    fire_lock_s_arg = DeclareLaunchArgument(
+        'fire_lock_s', default_value='1.0',
+        description='point_to_cv_target: same-track confident tracking required '
+        'before firing, seconds; 0 disables the wait')
     v_muzzle_arg = DeclareLaunchArgument(
         'v_muzzle', default_value='22.0',
         description='point_to_cv_target: projectile speed (m/s) used only '
@@ -364,6 +368,9 @@ def generate_launch_description():
             ),
             'v_muzzle': ParameterValue(
                 LaunchConfiguration('v_muzzle'), value_type=float
+            ),
+            'fire_lock_s': ParameterValue(
+                LaunchConfiguration('fire_lock_s'), value_type=float
             ),
             'cv_target_publish_rate_hz': ParameterValue(
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
@@ -621,7 +628,7 @@ def generate_launch_description():
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
-        chase_margin_s_arg, v_muzzle_arg,
+        chase_margin_s_arg, v_muzzle_arg, fire_lock_s_arg,
         cv_target_publish_rate_hz_arg, idle_direction_arg,
         zone_start_x_arg, zone_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,

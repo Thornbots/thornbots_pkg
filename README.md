@@ -762,7 +762,7 @@ that capture stamp to be at most
 firing, until `target_timeout_s` (0.5 s). The fire-age limit is a node parameter,
 not a launch argument.
 
-`fire_lock_s` (1.0 s) requires tracking of the same
+`fire_lock_s` (1.0 s, also a launch argument) requires tracking of the same
 `TargetState.robot_track_id`, starting at the first observation with a converged,
 fresh track above the confidence threshold. Panel handoffs keep that identity.
 `fire_lock_grace_s` (0.3 s, nine frames at 30 fps) preserves the dwell start
