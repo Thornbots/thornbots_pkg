@@ -17,6 +17,7 @@ localization backends are in
 | `pose_translator` | `/dji_serial_bridge/pose` | `/odom` (raw wheel odom), `/joint_states`. No TF. |
 | `odom_tf_broadcaster` | `/odom`, `/localization/odom` | raw `odom->root` and fused `nav_odom->odom` TF |
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
+| `match_wifi_guard` | `/dji_serial_bridge/ref_sys` | opt-in host Wi-Fi disconnect request |
 | `mmm` | PING, `/scan`, `/odom`, `/joint_states`, referee team, `map->root` TF | PING, SLAM reset and localization save service; opt-in host shutdown request |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
@@ -40,6 +41,7 @@ launch and the operator workflow use Python.
                           \-> /joint_states --[robot_state_publisher]--> rest of TF tree
 /scan_raw (sllidar_node or sim) --[lidar_self_filter]--> /scan --> sentry_localization (map->nav_odom TF owned by slam_toolbox/amcl there)
 TF: map -> nav_odom -> odom -> root
+/dji_serial_bridge/ref_sys --[match_wifi_guard, opt-in]--> host Wi-Fi disconnect request
 PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, map_autosaver/save_now
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
@@ -49,6 +51,20 @@ PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, 
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
            \-[sim's cv_head_aim]--> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
+
+### match_wifi_guard
+
+`auto.launch.py match_wifi_off:=true` starts this C++ node; it is off by default,
+including in simulation where the MCB emulator starts in battle. It subscribes
+to `/dji_serial_bridge/ref_sys` (`RefSysStatus`, SensorDataQoS) and requires
+three consecutive messages with `game_stage == 4`. Any other stage resets the
+count. Once confirmed it attempts exactly one atomic request per node/container
+run, including when writing fails, and never reconnects on match end.
+`match_wifi_request_file` forwards to the node's `request_file` parameter.
+The ROS-free core tests cover debounce, one-shot behavior, exact contents,
+permissions, temporary-file cleanup and a missing parent directory.
+See the [host opt-in and request contract](../isaac-ros-startup/README.md#match-wi-fi-disconnect-opt-in)
+for installation, Wi-Fi restoration and operational effects.
 
 ### MCB Mapping Machine
 
@@ -155,7 +171,7 @@ ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 `real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`),
 and setting it false keeps the launch off the real serial devices.
 
-`localization_mode` (`mapping` default since 2026-10-02, `slam`, `amcl`,
+`localization_mode` (`amcl` default since 2026-10-30, `mapping`, `slam`,
 `none`) picks the `map->nav_odom` owner. Under `mapping`, `load_map` defaults
 false (a blank pose graph) and `autosave_map` defaults to
 `real_hardware`. `/localization/odom` is published in every mode.

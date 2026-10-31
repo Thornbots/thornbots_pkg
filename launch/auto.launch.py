@@ -141,7 +141,7 @@ def generate_launch_description():
     )
 
     localization_mode_arg = DeclareLaunchArgument(
-        'localization_mode', default_value='mapping',
+        'localization_mode', default_value='amcl',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
         "map->navigation frame. See sentry_localization's "
@@ -511,6 +511,13 @@ def generate_launch_description():
         additional_env=udp_env,
     )
 
+    match_wifi_guard_node = Node(
+        package='thornbots_pkg', executable='match_wifi_guard', output='screen',
+        condition=IfCondition(LaunchConfiguration('match_wifi_off')),
+        parameters=[{'request_file': LaunchConfiguration('match_wifi_request_file')}],
+        additional_env=udp_env,
+    )
+
     mmm_node = Node(
         package='thornbots_pkg', executable='mmm', output='screen',
         condition=IfCondition(LaunchConfiguration('enable_mmm')),
@@ -551,6 +558,13 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        # First: later defaults (mmm_room, autosave_map) read real_hardware.
+        real_hardware_arg,
+        DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
+                              description='Request host Wi-Fi disconnect at confirmed battle.'),
+        DeclareLaunchArgument('match_wifi_request_file',
+                              default_value='/run/thornbots-net/wifi-off.request',
+                              description='Request file exposed by the host Wi-Fi service.'),
         DeclareLaunchArgument('enable_mmm', default_value='true', choices=['true', 'false'],
                               description='Start the in-stack MCB Mapping Machine coordinator.'),
         DeclareLaunchArgument('mmm_room', default_value=use_sim_time, choices=['true', 'false'],
@@ -593,7 +607,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'amcl_initial_yaw', default_value='0.0',
             description='AMCL field root yaw, radians; chassis yaw is a separate joint'),
-        real_hardware_arg,
         lidar_serial_port_arg, lidar_baudrate_arg,
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
         lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
@@ -609,7 +622,7 @@ def generate_launch_description():
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
-        dji_serial_bridge_node, pose_translator_node,
+        dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
             mcb_relay_node, mmm_node,
