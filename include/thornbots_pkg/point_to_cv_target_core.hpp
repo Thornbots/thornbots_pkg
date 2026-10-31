@@ -143,7 +143,7 @@ private:
 double wrap_to_pi(double a);
 
 // Idle look priority and bounded yaw changes. Times are capture/event seconds;
-// gun yaw and points are in raw field-centred odom. Firmware owns hit turns.
+// gun yaw and points are in raw start-relative odom. Firmware owns hit turns.
 class IdleLook
 {
 public:

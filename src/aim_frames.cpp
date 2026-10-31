@@ -18,7 +18,7 @@ namespace thornbots_pkg
 
 void AimFrames::add_raw(double stamp, const Eigen::Isometry3d & pose)
 {
-  // A >1 m single POSE step is a reanchor, not motion to interpolate through.
+  // A >1 m single POSE step is a discontinuity; never interpolate across it.
   if (!raw_.empty() && (stamp < raw_.back().first ||
     (pose.translation() - raw_.back().second.translation()).norm() > 1.0))
   {

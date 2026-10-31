@@ -45,11 +45,10 @@ bool transaction(int number)
 }
 }  // namespace
 
-bool at_team_spawn(double x, double y, bool blue, SpawnCheck check)
+bool near_raw_start(double x, double y, SpawnCheck check)
 {
   const double limit = check == SpawnCheck::Boot ? kBootSpawnDistanceM : kSaveSpawnDistanceM;
-  return std::isfinite(x) && std::isfinite(y) &&
-         std::hypot(x - (blue ? 4.625 : -4.625), y) <= limit;
+  return std::isfinite(x) && std::isfinite(y) && std::hypot(x, y) <= limit;
 }
 
 StartGate::StartGate(Pose boot)

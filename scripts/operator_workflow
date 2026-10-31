@@ -36,6 +36,11 @@ FOXGLOVE_COMMAND = [
 ]
 
 
+# Contract boot chassis heading for both teams. POSE carries no chassis yaw yet, so
+# captured boot chassis_yaw is a 0 placeholder; registration trusts this instead.
+BOOT_CHASSIS_YAW = math.pi / 2
+
+
 def angle(value):
     """Wrap radians to [-pi, pi]."""
     return math.atan2(math.sin(value), math.cos(value))
@@ -70,12 +75,12 @@ def validate_field(boot, team, x, y, yaw):
     raw = boot["raw_odom"]
     if len(raw) != 2 or not all(math.isfinite(v) for v in raw):
         raise ValueError("invalid captured raw /odom")
-    if (raw[0] < 0) != (team == "red") or raw[0] == 0:
-        raise ValueError("raw /odom sign disagrees with referee team; reboot correctly")
-    if math.dist(raw, (x, y)) > 0.3:
-        raise ValueError("surveyed start differs from boot raw /odom by more than 0.3 m")
-    if abs(angle(yaw - boot["chassis_yaw"])) > 0.25:
-        raise ValueError("field_yaw must be near zero: check team and chassis heading")
+    if math.dist(raw, (0, 0)) > 0.3:
+        raise ValueError("boot raw /odom must be within 0.3 m of zero")
+    if math.dist((x, y), (-4.625 if team == "red" else 4.625, 0)) > 0.3:
+        raise ValueError("surveyed start differs from team start by more than 0.3 m")
+    if abs(angle(yaw - BOOT_CHASSIS_YAW)) > 0.25:
+        raise ValueError("both teams must boot facing +y: chassis heading pi/2")
 
 
 def verify_return(boot, current, session_id):
@@ -182,7 +187,7 @@ def align(args):
     args.y = 0.0 if args.y is None else args.y
     validate_field(boot, args.team, args.x, args.y, args.yaw)
     correction, root = registration(
-        boot["root"], args.x, args.y, args.yaw, boot["chassis_yaw"]
+        boot["root"], args.x, args.y, args.yaw, BOOT_CHASSIS_YAW
     )
     meta, pixels = read_map(source / "map")
     meta, pixels = rotate_grid(meta, pixels, correction)
@@ -197,7 +202,7 @@ def align(args):
         source=os.path.relpath(source, target),
         boot_root=boot["root"],
         measured_chassis_yaw=args.yaw,
-        boot_chassis_yaw=boot["chassis_yaw"],
+        boot_chassis_yaw=BOOT_CHASSIS_YAW,
         field_from_boot=correction,
         initial_root=root,
     )
@@ -246,7 +251,7 @@ def check(directory):
             boot["root"],
             *manifest["initial_root"][:2],
             manifest["measured_chassis_yaw"],
-            boot["chassis_yaw"],
+            BOOT_CHASSIS_YAW,
         )
         if not np.allclose(root, manifest["initial_root"]) or not np.allclose(
             correction, manifest["field_from_boot"]
@@ -496,27 +501,27 @@ def observe_inputs(runtime, args, require_session=True):
                 return False
             if room:
                 return True
-            expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+            expected = [0.0, 0.0]
             return math.dist(state["raw_odom"], expected) <= 0.3
 
         runtime.wait(ready, args.timeout)
     except RuntimeError as error:
         raise RuntimeError(
-            f"timeout waiting for raw /odom at team start, referee team, live session; received {state}"
+            f"timeout waiting for raw /odom near zero, referee team, live session; received {state}"
         ) from error
     if not room:
-        expected = [-4.625 if state["team"] == "red" else 4.625, 0.0]
+        expected = [0.0, 0.0]
         if math.dist(state["raw_odom"], expected) > 0.3:
-            raise ValueError(f"raw /odom disagrees with team start {expected}: {state['raw_odom']}")
+            raise ValueError(f"raw /odom is not near boot zero: {state['raw_odom']}")
     return dict(state, frame_mode="room" if room else "field")
 
 
 def verify_start(boot, live):
     """Field-aligned maps support either team; validate the live contract start."""
     expected = [-4.625 if live["team"] == "red" else 4.625, 0.0]
-    if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], expected) > 0.3:
+    if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], (0, 0)) > 0.3:
         raise ValueError(
-            f"seed/team mismatch: observed={live}, expected raw_odom={expected}; return to team start"
+            f"seed/team mismatch: observed={live}, expected raw_odom=[0, 0]; return to team start"
         )
     return [*expected, 0.0]
 

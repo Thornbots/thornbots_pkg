@@ -31,7 +31,8 @@ struct Pose
 };
 
 enum class SpawnCheck {Boot, Save};
-bool at_team_spawn(double x, double y, bool blue, SpawnCheck check);
+// Raw MCB odometry boots at (0, 0) for either team.
+bool near_raw_start(double x, double y, SpawnCheck check);
 
 class StartGate
 {

@@ -304,20 +304,19 @@ TEST(MmmStartGate, EntryIncludesRadialAndYawBoundaries)
 
 TEST(MmmSpawnCheck, BootStaysOnMarkWhileSaveAllowsHalfMetre)
 {
-  for (bool blue : {false, true}) {
-    const double spawn = blue ? 4.625 : -4.625;
-    EXPECT_TRUE(mmm::at_team_spawn(spawn, 0.3, blue, mmm::SpawnCheck::Boot));
-    EXPECT_FALSE(mmm::at_team_spawn(spawn, 0.30001, blue, mmm::SpawnCheck::Boot));
-    EXPECT_FALSE(mmm::at_team_spawn(spawn, 0.5, blue, mmm::SpawnCheck::Boot));
-    EXPECT_TRUE(mmm::at_team_spawn(spawn, 0.5, blue, mmm::SpawnCheck::Save));
-    EXPECT_FALSE(mmm::at_team_spawn(spawn, 0.50001, blue, mmm::SpawnCheck::Save));
-    EXPECT_TRUE(mmm::at_team_spawn(spawn + 0.3, 0.4, blue, mmm::SpawnCheck::Save));
-    EXPECT_FALSE(mmm::at_team_spawn(spawn + 0.3, 0.40001, blue, mmm::SpawnCheck::Save));
-    EXPECT_FALSE(mmm::at_team_spawn(-spawn, 0, blue, mmm::SpawnCheck::Save));
-  }
+  // Raw odometry boots at (0, 0) for either team; a field start is not raw.
+  EXPECT_TRUE(mmm::near_raw_start(0, 0.3, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.30001, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.5, mmm::SpawnCheck::Boot));
+  EXPECT_TRUE(mmm::near_raw_start(0, 0.5, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0, 0.50001, mmm::SpawnCheck::Save));
+  EXPECT_TRUE(mmm::near_raw_start(0.3, 0.4, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0.3, 0.40001, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(4.625, 0, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(-4.625, 0, mmm::SpawnCheck::Boot));
   const double nan = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_FALSE(mmm::at_team_spawn(nan, 0, true, mmm::SpawnCheck::Save));
-  EXPECT_FALSE(mmm::at_team_spawn(4.625, nan, true, mmm::SpawnCheck::Boot));
+  EXPECT_FALSE(mmm::near_raw_start(nan, 0, mmm::SpawnCheck::Save));
+  EXPECT_FALSE(mmm::near_raw_start(0, nan, mmm::SpawnCheck::Boot));
 }
 
 TEST(MmmScanGate, TransientFailuresRequireTwentyNewScans)
