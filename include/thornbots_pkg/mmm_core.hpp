@@ -30,17 +30,19 @@ struct Pose
   double x, y, yaw;
 };
 
+enum class SpawnCheck {Boot, Save};
+bool at_team_spawn(double x, double y, bool blue, SpawnCheck check);
+
 class StartGate
 {
 public:
-  explicit StartGate(Pose boot, double inward = 0.12);
+  explicit StartGate(Pose boot);
   bool update(std::optional<Pose> pose, double stamp, double now);
   bool at_start() const {return at_start_;}
   void reset(Pose boot);
 
 private:
   Pose boot_;
-  double inward_;
   bool at_start_ = false;
   std::deque<std::pair<double, Pose>> samples_;
 };
