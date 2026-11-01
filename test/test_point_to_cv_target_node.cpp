@@ -46,7 +46,16 @@ class Probe : public tp::PointToCvTarget
 {
 public:
   explicit Probe(const rclcpp::NodeOptions & options)
-  : tp::PointToCvTarget(options) {}
+  : tp::PointToCvTarget(with_starts(options)) {}
+
+  static rclcpp::NodeOptions with_starts(rclcpp::NodeOptions options)
+  {
+    options.append_parameter_override("red_start_x", -2.7);
+    options.append_parameter_override("red_start_y", 0.6);
+    options.append_parameter_override("blue_start_x", 4.1);
+    options.append_parameter_override("blue_start_y", -1.2);
+    return options;
+  }
 
   using tp::PointToCvTarget::on_publish_tick;
   using tp::PointToCvTarget::on_target_state;
@@ -515,7 +524,7 @@ TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
   for (bool blue : {false, true}) {
     auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
     node->gun_transform();
-    node->navigation_transform(blue ? 3.53 : -3.53, -0.426);
+    node->navigation_transform(blue ? 4.1 : -2.7, blue ? -1.2 : 0.6);
     dji_serial_bridge::msg::RefSysStatus referee;
     referee.robot_id = blue ? 107 : 7;
     referee.is_on_blue_team = blue;
@@ -524,8 +533,8 @@ TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
     node->idle_point();
     node->time_ns(20000000000LL);
     const auto point = node->idle_point();
-    EXPECT_NEAR(point.x(), blue ? -7.06 : 7.06, 1e-6);
-    EXPECT_NEAR(point.y(), 0.0, 1e-6);
+    EXPECT_NEAR(point.x(), blue ? -6.8 : 6.8, 1e-6);
+    EXPECT_NEAR(point.y(), blue ? 1.8 : -1.8, 1e-6);
   }
 }
 

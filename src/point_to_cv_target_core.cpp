@@ -277,9 +277,10 @@ Vector3d IdleLook::point(double now_s, const Vector3d & gun, double gun_yaw,
   return {gun.x() + range * std::cos(*yaw_), gun.y() + range * std::sin(*yaw_), desired.z()};
 }
 
-Vector3d enemy_zone(bool blue, double start_x, double start_y, double height)
+Vector3d enemy_zone(
+  bool blue, double red_x, double red_y, double blue_x, double blue_y, double height)
 {
-  return {blue ? -start_x : start_x, start_y, height};
+  return {blue ? red_x : blue_x, blue ? red_y : blue_y, height};
 }
 
 }  // namespace thornbots_pkg
