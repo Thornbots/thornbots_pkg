@@ -29,6 +29,17 @@ workflow = importlib.util.module_from_spec(spec)
 loader.exec_module(workflow)
 
 
+@pytest.fixture(autouse=True)
+def start_defaults(monkeypatch, tmp_path):
+    # Host tests inject launch-owned defaults without importing ROS launch.
+    defaults = {'red_start_x': -3.53, 'red_start_y': -0.426,
+                'blue_start_x': 3.53, 'blue_start_y': -0.426}
+    monkeypatch.setattr(workflow, 'launch_start_defaults', lambda: dict(defaults))
+    monkeypatch.setattr(workflow, 'LAUNCH_ENV', tmp_path / 'launch.env')
+    monkeypatch.delenv('AUTO_LAUNCH_ARGS', raising=False)
+    return defaults
+
+
 def metadata():
     return {
         'image': 'map.pgm',
@@ -830,3 +841,117 @@ def test_unsaved_warning_on_launch_exit(monkeypatch, tmp_path, capsys, code):
     assert str(tmp_path / 'backup') in output
     metadata = json.loads((tmp_path / 'session.json').read_text())
     assert metadata['frame_mode'] == 'room' and metadata['team'] is None
+
+
+@pytest.fixture
+def asymmetric_starts():
+    return {'red_start_x': -4.2, 'red_start_y': 0.7, 'blue_start_x': 2.8, 'blue_start_y': -1.3}
+
+
+@pytest.mark.parametrize('team', ['red', 'blue'])
+def test_asymmetric_registration_survives_config_change(
+    monkeypatch, tmp_path, asymmetric_starts, team
+):
+    source = make_bundle(tmp_path)
+    boot_path = source / 'boot.json'
+    boot = json.loads(boot_path.read_text())
+    boot.update(team=team, team_starts=asymmetric_starts)
+    boot_path.write_text(json.dumps(boot))
+    output = tmp_path / 'registered'
+    workflow.align(NS(source=source, output=output, team=None, x=None, y=None,
+                      yaw=math.pi / 2))
+    expected = [asymmetric_starts[f'{team}_start_x'], asymmetric_starts[f'{team}_start_y'], 0]
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', 'red_start_x:=-8 blue_start_y:=6')
+    manifest = workflow.check(output)
+    assert manifest['initial_root'] == expected
+    assert manifest['team_starts'] == asymmetric_starts
+    mapped = workflow.transform(boot['root'][:2], manifest['field_from_boot'])
+    assert mapped == pytest.approx(expected[:2])
+    with pytest.raises(ValueError, match='0.3 m'):
+        workflow.validate_field(boot, team, expected[0], expected[1] + 0.31,
+                                math.pi / 2, asymmetric_starts)
+
+
+def test_start_configuration_precedence(monkeypatch, tmp_path, start_defaults):
+    workflow.LAUNCH_ENV.write_text(
+        '# config is parsed, never executed\n'
+        'AUTO_LAUNCH_ARGS="red_start_x:=-4.2 blue_start_y:=0.9" # surveyed\n'
+    )
+    assert workflow.configured_starts()['red_start_x'] == -4.2
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', 'red_start_x:=-5.1 blue_start_y:=-1.3')
+    values = workflow.configured_starts(['red_start_x:=-6.2', 'blue_start_x:=2.8'])
+    assert values == dict(start_defaults, red_start_x=-6.2, blue_start_x=2.8,
+                          blue_start_y=-1.3)
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', '')
+    assert workflow.configured_starts() == start_defaults
+
+
+@pytest.mark.parametrize('value', ['nan', 'inf', 'oops'])
+def test_invalid_start_configuration_rejected(monkeypatch, value):
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', f'blue_start_y:={value}')
+    with pytest.raises(ValueError):
+        workflow.configured_starts()
+
+
+@pytest.mark.parametrize('team', ['red', 'blue'])
+def test_field_start_uses_same_asymmetric_coordinates_as_launch(
+    monkeypatch, asymmetric_starts, team
+):
+    commands = []
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', 'red_start_x:=-4.2 red_start_y:=0.7 '
+                       'blue_start_x:=2.8 blue_start_y:=-1.3')
+    monkeypatch.setattr(workflow.subprocess, 'Popen',
+                        lambda command, **kw: commands.append(command) or NS(poll=lambda: 0))
+    monkeypatch.setattr(workflow, 'Runtime', lambda sim: NS(close=lambda: None))
+    monkeypatch.setattr(workflow, 'observe_inputs',
+                        lambda *a, **kw: {'team': team, 'raw_odom': [0, 0]})
+    extra = ['blue_start_y:=-2.1']
+    expected = dict(asymmetric_starts, blue_start_y=-2.1)
+    root = workflow.field_start(NS(sim_time=False), extra)
+    assert root == [expected[f'{team}_start_x'], expected[f'{team}_start_y'], 0]
+    for name, value in expected.items():
+        assert f'{name}:={value}' in commands[0]
+    assert workflow.verify_start({'team': 'red'}, {'team': team, 'raw_odom': [0, 0]},
+                                 expected) == root
+
+
+@pytest.mark.parametrize('command', ['mapping', 'localize'])
+def test_default_workflows_forward_and_retain_configured_starts(
+    monkeypatch, tmp_path, asymmetric_starts, command
+):
+    import sys
+
+    captured = []
+    monkeypatch.setenv('AUTO_LAUNCH_ARGS', ' '.join(
+        f'{name}:={value}' for name, value in asymmetric_starts.items()))
+    monkeypatch.setattr(sys, 'argv', ['operator_workflow', command, str(tmp_path / 'session'),
+                                      'red_start_y:=1.1'])
+    monkeypatch.setattr(workflow, 'ensure_stack_stopped', lambda: None)
+    monkeypatch.setattr(workflow, 'check',
+                        lambda _: {'frame_mode': 'field', 'initial_root': [0, 0, 0]})
+    monkeypatch.setattr(workflow, 'field_start', lambda args, extra: [-4.2, 1.1, 0])
+    monkeypatch.setattr(workflow, 'run_stack',
+                        lambda args, session, launch: captured.append((args, launch)))
+    workflow.main()
+    args, launch = captured[0]
+    expected = dict(asymmetric_starts, red_start_y=1.1)
+    assert args.team_starts == expected
+    for name, value in expected.items():
+        assert f'{name}:={value}' in launch
+    if command == 'localize':
+        assert 'amcl_initial_x:=-4.2' in launch
+        assert 'amcl_initial_y:=1.1' in launch
+
+
+def test_alignment_explicit_launch_args_override_captured_starts(tmp_path, asymmetric_starts):
+    source = make_bundle(tmp_path)
+    boot_path = source / 'boot.json'
+    boot = json.loads(boot_path.read_text())
+    boot['team_starts'] = asymmetric_starts
+    boot_path.write_text(json.dumps(boot))
+    output = tmp_path / 'registered'
+    workflow.align(NS(source=source, output=output, team=None, x=None, y=None,
+                      yaw=math.pi / 2, launch_args=['red_start_y:=1.5']))
+    manifest = workflow.check(output)
+    assert manifest['initial_root'] == [-4.2, 1.5, 0]
+    assert manifest['team_starts'] == dict(asymmetric_starts, red_start_y=1.5)

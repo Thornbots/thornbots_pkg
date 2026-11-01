@@ -16,6 +16,7 @@ import math
 import os
 import re
 import signal
+import shlex
 import sys
 import uuid
 from pathlib import Path
@@ -40,14 +41,54 @@ FOXGLOVE_COMMAND = [
 # captured boot chassis_yaw is a 0 placeholder; registration trusts this instead.
 BOOT_CHASSIS_YAW = math.pi / 2
 
-# TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
-# event, see docs/ROADMAP.md. Matches firmware START_X/START_Y; red is -START_X, y not mirrored.
-START_X = 3.53
-START_Y = -0.426
+START_ARGUMENTS = tuple(
+    f"{team}_start_{axis}" for team in ("red", "blue") for axis in ("x", "y")
+)
+LAUNCH_ENV = Path("/etc/thornbots/launch.env")
 
 
-def team_start(team):
-    return (-START_X if team == "red" else START_X, START_Y)
+def launch_start_defaults():
+    """Resolve the owning launch declarations, using the installed ROS package."""
+    from ament_index_python.packages import get_package_share_directory
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument
+    from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+    path = Path(get_package_share_directory("thornbots_pkg")) / "launch/auto.launch.py"
+    context = LaunchContext()
+    description = PythonLaunchDescriptionSource(str(path)).get_launch_description(context)
+    for declaration in description.entities:
+        if isinstance(declaration, DeclareLaunchArgument):
+            declaration.visit(context)
+    return {name: context.launch_configurations[name] for name in START_ARGUMENTS}
+
+
+def configured_starts(extra=(), captured=None):
+    """Explicit args override AUTO_LAUNCH_ARGS, captured starts and launch defaults."""
+    configured = os.environ.get("AUTO_LAUNCH_ARGS")
+    if configured is None and LAUNCH_ENV.is_file():
+        for line in LAUNCH_ENV.read_text().splitlines():
+            key, separator, value = line.strip().removeprefix("export ").partition("=")
+            if separator and key == "AUTO_LAUNCH_ARGS":
+                words = shlex.split(value, comments=True)
+                configured = " ".join(words)
+    values = dict(captured) if captured is not None else launch_start_defaults()
+    for argument in [*shlex.split(configured or ""), *extra]:
+        name, separator, value = argument.partition(":=")
+        if separator and name in START_ARGUMENTS:
+            values[name] = value
+    values = {name: float(value) for name, value in values.items()}
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ValueError("team start coordinates must be finite")
+    return values
+
+
+def team_start(team, starts=None):
+    """Select independently configured team coordinates."""
+    if team not in ("red", "blue"):
+        raise ValueError("team must be red or blue")
+    starts = configured_starts() if starts is None else starts
+    return tuple(float(starts[f"{team}_start_{axis}"]) for axis in ("x", "y"))
 
 
 def angle(value):
@@ -72,21 +113,19 @@ def registration(boot_root, x, y, yaw, boot_chassis_yaw):
     return (x - offset[0], y - offset[1], rotation), (x, y, field_yaw)
 
 
-def validate_field(boot, team, x, y, yaw):
-    """Reject symmetric but physically inconsistent field registrations."""
+def validate_field(boot, team, x, y, yaw, starts=None):
+    """Reject physically inconsistent field registrations."""
     if team not in ("red", "blue") or team != boot["team"]:
         raise ValueError("team disagrees with captured referee team")
     # Float32 telemetry can place a valid +/-pi heading just beyond double pi.
     if not all(math.isfinite(v) for v in (x, y, yaw)) or abs(yaw) > math.pi + 1e-6:
         raise ValueError("yaw must be radians in [-pi, pi], never degrees")
-    if (x < 0) != (team == "red") or x == 0:
-        raise ValueError("field x must be negative for red, positive for blue")
     raw = boot["raw_odom"]
     if len(raw) != 2 or not all(math.isfinite(v) for v in raw):
         raise ValueError("invalid captured raw /odom")
     if math.dist(raw, (0, 0)) > 0.3:
         raise ValueError("boot raw /odom must be within 0.3 m of zero")
-    if math.dist((x, y), team_start(team)) > 0.3:
+    if math.dist((x, y), team_start(team, starts)) > 0.3:
         raise ValueError("surveyed start differs from team start by more than 0.3 m")
     if abs(angle(yaw - BOOT_CHASSIS_YAW)) > 0.25:
         raise ValueError("both teams must boot facing +y: chassis heading pi/2")
@@ -192,10 +231,11 @@ def align(args):
     validate_bundle(source)
     boot = json.loads((source / "boot.json").read_text())
     args.team = args.team or boot["team"]
-    start_x, start_y = team_start(args.team)
+    starts = configured_starts(getattr(args, "launch_args", ()), boot.get("team_starts"))
+    start_x, start_y = team_start(args.team, starts)
     args.x = start_x if args.x is None else args.x
     args.y = start_y if args.y is None else args.y
-    validate_field(boot, args.team, args.x, args.y, args.yaw)
+    validate_field(boot, args.team, args.x, args.y, args.yaw, starts)
     correction, root = registration(
         boot["root"], args.x, args.y, args.yaw, BOOT_CHASSIS_YAW
     )
@@ -209,6 +249,7 @@ def align(args):
         session_id=boot["session_id"],
         frame_mode="field",
         team=args.team,
+        team_starts=starts,
         source=os.path.relpath(source, target),
         boot_root=boot["root"],
         measured_chassis_yaw=args.yaw,
@@ -254,6 +295,7 @@ def check(directory):
             manifest["team"],
             *manifest["initial_root"][:2],
             manifest["measured_chassis_yaw"],
+            manifest.get("team_starts"),
         )
         if manifest.get("session_id") != boot.get("session_id"):
             raise ValueError("registration session differs from boot capture")
@@ -448,6 +490,8 @@ def capture_boot(args):
                 "boot capture moved >3 cm/0.03 rad; park and retry before mapping"
             )
         result = dict(samples[-1], geometry=geometry.tolist(), **live)
+        if not getattr(args, "room", False):
+            result["team_starts"] = getattr(args, "team_starts", None) or configured_starts()
         if not all(math.isfinite(v) for v in [*result["root"], result["chassis_yaw"]]):
             raise ValueError("nonfinite boot pose")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -526,9 +570,9 @@ def observe_inputs(runtime, args, require_session=True):
     return dict(state, frame_mode="room" if room else "field")
 
 
-def verify_start(boot, live):
+def verify_start(boot, live, starts=None):
     """Field-aligned maps support either team; validate the live contract start."""
-    expected = list(team_start(live["team"]))
+    expected = list(team_start(live["team"], starts))
     if live["team"] not in ("red", "blue") or math.dist(live["raw_odom"], (0, 0)) > 0.3:
         raise ValueError(
             f"seed/team mismatch: observed={live}, expected raw_odom=[0, 0]; return to team start"
@@ -819,7 +863,10 @@ def convergence(args):
                 (Path(args.directory) / manifest["source"] / "boot.json").read_text()
             )
             manifest["initial_root"] = verify_start(
-                boot, observe_inputs(runtime, args, require_session=False))
+                boot, observe_inputs(runtime, args, require_session=False),
+                getattr(args, "team_starts", None)
+                or configured_starts(getattr(args, "launch_args", ())),
+            )
         state["geometry"] = reference
         try:
             runtime.wait(ready, args.timeout)
@@ -930,8 +977,10 @@ def ensure_stack_stopped():
 
 def field_start(args, extra):
     """Bring up raw inputs first, then stop them before starting the backend."""
+    starts = configured_starts(extra)
+    start_args = [f"{name}:={value}" for name, value in starts.items()]
     launch = ["ros2", "launch", "thornbots_pkg", "auto.launch.py",
-              "operator_inputs_only:=true", *extra]
+              "operator_inputs_only:=true", *extra, *start_args]
     old_handlers = {}
 
     def interrupted(signum, _frame):
@@ -946,7 +995,7 @@ def field_start(args, extra):
         runtime = Runtime(args.sim_time)
         for signum in old_handlers:
             signal.signal(signum, interrupted)
-        return verify_start({}, observe_inputs(runtime, args, require_session=False))
+        return verify_start({}, observe_inputs(runtime, args, require_session=False), starts)
     finally:
         if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGINT)
@@ -994,7 +1043,8 @@ def run_stack(args, session, launch):
             (session / "session.json").write_text(
                 json.dumps(dict(session_id=session_id, frame_mode="room" if args.room else "field",
                                 team=None if args.room else args.team,
-                                no_referee=args.no_referee))
+                                no_referee=args.no_referee,
+                                team_starts=getattr(args, "team_starts", None)))
             )
             publisher = runtime.node.create_publisher(
                 String,
@@ -1075,6 +1125,7 @@ def main():
     preflighting = commands.add_parser("preflight")
     alignment = commands.add_parser("align")
     alignment.add_argument("source")
+    alignment.add_argument("launch_args", nargs="*")
     alignment.add_argument("--team", choices=["red", "blue"])
     for name in ("x", "y", "yaw"):
         alignment.add_argument("--" + name, type=float, required=name == "yaw")
@@ -1098,6 +1149,7 @@ def main():
     localizing.add_argument("launch_args", nargs="*")
     monitoring = commands.add_parser("convergence")
     monitoring.add_argument("directory")
+    monitoring.add_argument("launch_args", nargs="*")
     monitoring.add_argument("--max-std", type=float, default=0.25)
     monitoring.add_argument("--max-yaw-std", type=float, default=0.15)
     monitoring.add_argument("--max-distance", type=float, default=0.4)
@@ -1138,7 +1190,7 @@ def main():
     elif args.command in ("check", "localize", "convergence"):
         args.directory = session / "deployment"
     if trailing:
-        if args.command not in ("mapping", "localize") or any(
+        if args.command not in ("mapping", "localize", "align", "convergence") or any(
             "  " in a or ":=" not in a for a in trailing
         ):
             parser.error("unrecognized arguments: " + " ".join(trailing))
@@ -1168,6 +1220,7 @@ def main():
             args.room = metadata.get("frame_mode", "field") == "room"
             args.no_referee = metadata.get("no_referee", False)
             args.team = metadata.get("team")
+            args.team_starts = metadata.get("team_starts")
         if args.command == "boot-pose":
             capture_boot(args)
         elif args.command == "preflight":
@@ -1189,7 +1242,11 @@ def main():
         elif args.command in ("pause", "resume"):
             set_insertion(args, args.command == "pause")
         else:
-            extra = args.launch_args
+            args.team_starts = configured_starts(args.launch_args)
+            extra = [
+                *args.launch_args,
+                *(f"{name}:={value}" for name, value in args.team_starts.items()),
+            ]
             if args.rf2o and getattr(args, "room", False):
                 raise ValueError("room mode always uses raw wheel passthrough; drop --rf2o")
             if args.no_referee and (getattr(args, "room", False) or args.team is None):

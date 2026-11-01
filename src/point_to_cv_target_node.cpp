@@ -110,10 +110,15 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     throw std::invalid_argument("idle_direction must be zone or hold");
   }
   // Field coordinates; transform into the continuous raw aim frame before use.
-  // TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
-  // event, see docs/ROADMAP.md. Matches firmware START_X/START_Y; only x mirrors by team.
-  zone_start_x_m_ = declare_parameter("zone_start_x_m", 3.53);
-  zone_start_y_m_ = declare_parameter("zone_start_y_m", -0.426);
+  red_start_x_ = declare_parameter<double>("red_start_x");
+  red_start_y_ = declare_parameter<double>("red_start_y");
+  blue_start_x_ = declare_parameter<double>("blue_start_x");
+  blue_start_y_ = declare_parameter<double>("blue_start_y");
+  if (!std::isfinite(red_start_x_) || !std::isfinite(red_start_y_) ||
+    !std::isfinite(blue_start_x_) || !std::isfinite(blue_start_y_))
+  {
+    throw std::invalid_argument("Team starts must be finite field coordinates");
+  }
   idle_height_m_ = declare_parameter("idle_height_m", 0.15);
   idle_rate_rad_s_ = declare_parameter("idle_rate_rad_s", 0.5);
   idle_switch_rad_ = declare_parameter("idle_switch_rad", M_PI / 6.0);
@@ -254,7 +259,7 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
     const auto & t = tf.transform.translation;
     const auto & q = tf.transform.rotation;
     zone = quat_to_rot(q.x, q.y, q.z, q.w) *
-      enemy_zone(blue_, zone_start_x_m_, zone_start_y_m_, idle_height_m_) +
+      enemy_zone(blue_, red_start_x_, red_start_y_, blue_start_x_, blue_start_y_, idle_height_m_) +
       Vector3d(t.x, t.y, t.z);
   } catch (const tf2::TransformException & ex) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,

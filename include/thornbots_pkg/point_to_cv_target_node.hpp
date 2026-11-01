@@ -93,7 +93,8 @@ protected:
   IdleLook idle_;
   std::string idle_direction_;
   bool blue_ = false;
-  double zone_start_x_m_, zone_start_y_m_, idle_height_m_, idle_rate_rad_s_, idle_switch_rad_;
+  double red_start_x_, red_start_y_, blue_start_x_, blue_start_y_;
+  double idle_height_m_, idle_rate_rad_s_, idle_switch_rad_;
   std::optional<Vector3d> last_sent_point_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

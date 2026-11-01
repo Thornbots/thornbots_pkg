@@ -797,12 +797,16 @@ neither recent event, `idle_direction:=zone` (default) looks at the enemy's
 starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
-The enemy zone mirrors only our firmware start x: red boots at (-3.53, -0.426),
-blue at (+3.53, -0.426). These are temporary, unmeasured spooky scrim values (ARCC was
-(±4.625, 0)). `zone_start_x_m` and `zone_start_y_m` are also `auto.launch.py` arguments,
-so simulation fixtures can express the zone in their scene frame. They default
-to `OdometrySubsystemConstants.hpp`; the REF_SYS blue flag alone chooses the
-side, including late blue arrival and missing/zero robot ID. Idle points use
+The enemy zone is the other team's configured start, without a mirroring assumption.
+`auto.launch.py` owns the four defaults: `red_start_x`, `red_start_y`,
+`blue_start_x`, `blue_start_y` (metres from field centre, x toward blue's base,
+y left). The temporary unmeasured scrim defaults remain red (-3.53, -0.426)
+and blue (3.53, -0.426); configure surveyed values per robot through
+`AUTO_LAUNCH_ARGS` in `/etc/thornbots/launch.env`
+([startup options](../isaac-ros-startup/README.md#use)). The same arguments feed
+navigation, EKF/AMCL/saved-map SLAM priors, and operator field registration.
+The REF_SYS blue flag chooses the opposing team's pair for idle looks,
+including late blue arrival and missing/zero robot ID. Idle points use
 `idle_height_m` (0.15), near armor height. Idle yaw commands change at most
 `idle_rate_rad_s` (0.5 rad/s); a new bearing must differ by `idle_switch_rad`
 (pi/6, 30 degrees) before adoption. Hit/hold looks follow the actual gun so
@@ -941,7 +945,7 @@ These checks cannot replace checking the referee configuration and surveyed
 heading against the physical field.
 
 A field-aligned map can be used by either team. AMCL starts from the live team's
-contract root (-3.53, -0.426, 0) or (3.53, -0.426, 0) (temporary scrim values),
+configured start with root yaw zero,
 after a valid REF_SYS team report and a raw-zero boot check;
 the map's captured team describes registration provenance. AMCL supplies
 `map->nav_odom`, not `/localization/odom`: with rf2o that topic comes from EKF

@@ -162,7 +162,8 @@ private:
   double last_step_s_ = 0.0;
 };
 
-Vector3d enemy_zone(bool blue, double start_x, double start_y, double height);
+Vector3d enemy_zone(
+  bool blue, double red_x, double red_y, double blue_x, double blue_y, double height);
 
 }  // namespace thornbots_pkg
 

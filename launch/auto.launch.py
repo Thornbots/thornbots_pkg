@@ -218,14 +218,15 @@ def generate_launch_description():
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
-    # TEMPORARY spooky scrim start (unmeasured, not good); restore or measure before the next
-    # event, see docs/ROADMAP.md. Matches firmware START_X/START_Y.
-    zone_start_x_arg = DeclareLaunchArgument(
-        'zone_start_x_m', default_value='3.53',
-        description='Idle-look enemy start-zone X magnitude in the aim frame, meters.')
-    zone_start_y_arg = DeclareLaunchArgument(
-        'zone_start_y_m', default_value='-0.426',
-        description='Idle-look enemy start-zone Y in the aim frame, meters.')
+    # Temporary unmeasured scrim defaults; per-robot overrides belong in launch.env.
+    red_start_x_arg = DeclareLaunchArgument(
+        'red_start_x', default_value='-3.53', description='Red start field X, metres.')
+    red_start_y_arg = DeclareLaunchArgument(
+        'red_start_y', default_value='-0.426', description='Red start field Y, metres.')
+    blue_start_x_arg = DeclareLaunchArgument(
+        'blue_start_x', default_value='3.53', description='Blue start field X, metres.')
+    blue_start_y_arg = DeclareLaunchArgument(
+        'blue_start_y', default_value='-0.426', description='Blue start field Y, metres.')
 
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
@@ -378,10 +379,14 @@ def generate_launch_description():
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
             'idle_direction': LaunchConfiguration('idle_direction'),
-            'zone_start_x_m': ParameterValue(
-                LaunchConfiguration('zone_start_x_m'), value_type=float),
-            'zone_start_y_m': ParameterValue(
-                LaunchConfiguration('zone_start_y_m'), value_type=float),
+            'red_start_x': ParameterValue(
+                LaunchConfiguration('red_start_x'), value_type=float),
+            'red_start_y': ParameterValue(
+                LaunchConfiguration('red_start_y'), value_type=float),
+            'blue_start_x': ParameterValue(
+                LaunchConfiguration('blue_start_x'), value_type=float),
+            'blue_start_y': ParameterValue(
+                LaunchConfiguration('blue_start_y'), value_type=float),
             'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
         }],
         additional_env=udp_env,
@@ -553,6 +558,10 @@ def generate_launch_description():
     localization_launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(localization_launch),
         launch_arguments={
+            'red_start_x': LaunchConfiguration('red_start_x'),
+            'red_start_y': LaunchConfiguration('red_start_y'),
+            'blue_start_x': LaunchConfiguration('blue_start_x'),
+            'blue_start_y': LaunchConfiguration('blue_start_y'),
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
             'load_map': LaunchConfiguration('load_map'),
@@ -632,7 +641,7 @@ def generate_launch_description():
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
         chase_margin_s_arg, v_muzzle_arg, fire_lock_s_arg,
         cv_target_publish_rate_hz_arg, idle_direction_arg,
-        zone_start_x_arg, zone_start_y_arg,
+        red_start_x_arg, red_start_y_arg, blue_start_x_arg, blue_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
