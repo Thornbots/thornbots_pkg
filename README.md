@@ -800,8 +800,10 @@ continuing non-firing frames, so hit-turn permission remains live.
 The enemy zone is the other team's configured start, without a mirroring assumption.
 `auto.launch.py` owns the four defaults: `red_start_x`, `red_start_y`,
 `blue_start_x`, `blue_start_y` (metres from field centre, x toward blue's base,
-y left). The temporary unmeasured scrim defaults remain red (-3.53, -0.426)
-and blue (3.53, -0.426); configure surveyed values per robot through
+y left). The defaults are the Starting Zone centres of the ARCC Season 2 3v3
+Battlefield, red (-5.25, -3.0) and blue (5.25, -3.0), matching sim's default
+[world](../sim/README.md#the-world-frame); they are not surveyed, so configure
+measured values per robot (or the Spooky Scrim's (∓3.53, -0.426)) through
 `AUTO_LAUNCH_ARGS` in `/etc/thornbots/launch.env`
 ([startup options](../isaac-ros-startup/README.md#use)). The same arguments feed
 navigation, EKF/AMCL/saved-map SLAM priors, and operator field registration.

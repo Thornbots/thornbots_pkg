@@ -218,15 +218,16 @@ def generate_launch_description():
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
-    # Temporary unmeasured scrim defaults; per-robot overrides belong in launch.env.
+    # Starting Zone centres of the ARCC Season 2 3v3 Battlefield (sim's default
+    # world); surveyed per-robot overrides belong in launch.env.
     red_start_x_arg = DeclareLaunchArgument(
-        'red_start_x', default_value='-3.53', description='Red start field X, metres.')
+        'red_start_x', default_value='-5.25', description='Red start field X, metres.')
     red_start_y_arg = DeclareLaunchArgument(
-        'red_start_y', default_value='-0.426', description='Red start field Y, metres.')
+        'red_start_y', default_value='-3.0', description='Red start field Y, metres.')
     blue_start_x_arg = DeclareLaunchArgument(
-        'blue_start_x', default_value='3.53', description='Blue start field X, metres.')
+        'blue_start_x', default_value='5.25', description='Blue start field X, metres.')
     blue_start_y_arg = DeclareLaunchArgument(
-        'blue_start_y', default_value='-0.426', description='Blue start field Y, metres.')
+        'blue_start_y', default_value='-3.0', description='Blue start field Y, metres.')
 
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
