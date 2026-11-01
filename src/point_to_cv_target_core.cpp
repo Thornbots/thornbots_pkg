@@ -20,6 +20,32 @@
 namespace thornbots_pkg
 {
 
+bool FireLock::update(
+  double now_s, uint32_t track_id, bool eligible, bool spinning,
+  const Vector3d & velocity, double lock_s, double stationary_speed_mps,
+  double grace_s)
+{
+  if (!std::isfinite(now_s)) {
+    reset();
+    return false;
+  }
+  if (track_id != track_id_ || now_s < last_s_ ||
+    (ineligible_since_s_ && now_s - *ineligible_since_s_ > grace_s))
+  {
+    reset();
+  }
+  track_id_ = track_id;
+  last_s_ = now_s;
+  if (!eligible) {
+    if (!ineligible_since_s_) {ineligible_since_s_ = now_s;}
+    return false;
+  }
+  ineligible_since_s_.reset();
+  if (!since_s_) {since_s_ = now_s;}
+  return lock_s == 0.0 || (!spinning && velocity.norm() < stationary_speed_mps) ||
+         now_s >= *since_s_ + lock_s;
+}
+
 double py_mod(double a, double b)
 {
   double r = std::fmod(a, b);
@@ -59,6 +85,24 @@ int quarter_index(double turns)
 }
 }  // namespace
 
+int choose_panel(
+  double yaw, double bearing, std::optional<double> held_yaw, double margin_rad)
+{
+  std::array<double, 4> off{};
+  int best = 0;
+  for (int k = 0; k < 4; ++k) {
+    off[k] = std::abs(wrap_to_pi(yaw + k * QUARTER_TURN - bearing));
+    if (off[k] < off[best]) {
+      best = k;
+    }
+  }
+  if (!held_yaw) {
+    return best;
+  }
+  const int held = quarter_index((*held_yaw - yaw) / QUARTER_TURN);
+  return off[held] <= off[best] + margin_rad ? held : best;
+}
+
 Shot plan_shot(
   const ArmorState & state, const std::array<double, 2> & radius,
   const std::array<double, 2> & z_offset, double age_s, const Vector3d & shooter_pos,
@@ -71,7 +115,8 @@ Shot plan_shot(
   const Vector3d shooter_vel = options.shooter_vel;
   const int iterations = options.iterations;
   const double aim_horizon_s = age_s + options.gimbal_lag_s + tick_s / 2.0;
-  const double fire_horizon_s = age_s + options.firmware_latency_s;
+  const double fire_horizon_s =
+    age_s + fire_exit_s(options.firmware_latency_s, options.min_fire_delay_s);
 
   auto center = [&](double t) -> Vector3d {
       const double h = 0.5 * t * t;
@@ -115,11 +160,24 @@ Shot plan_shot(
       return {hit - shooter_vel * t, t};
     };
 
-  if (!options.lead) {
+  if (spinning && !options.lead) {
     return {facing_panel(0.0), 0.0};
   }
   if (!spinning) {
-    return {intercept(facing_panel).aim_pos, 0.0};
+    // Choose near impact, a flight past the aim horizon; held_panel_yaw comes
+    // from the same point last tick.
+    const double t_sel = options.lead ? aim_horizon_s +
+      (center(aim_horizon_s) - shooter(aim_horizon_s)).norm() / std::max(v_muzzle, 1e-6) : 0.0;
+    const int k = choose_panel(
+      yaw + w * t_sel, bearing(t_sel), options.held_panel_yaw, options.panel_switch_margin_rad);
+    const double panel_yaw = wrap_to_pi(yaw + w * t_sel + k * QUARTER_TURN);
+    const auto chosen = [&](double t) -> Vector3d {return panel(k, t);};
+    if (!options.lead) {
+      return {chosen(0.0), 0.0, panel_yaw};
+    }
+    const auto hit = intercept(chosen);
+    return {hit.aim_pos, 0.0,
+      wrap_to_pi(yaw + w * (aim_horizon_s + hit.t_flight) + k * QUARTER_TURN)};
   }
   if (options.chase_settle_s) {
     const Intercept hit = intercept(facing_panel);
@@ -159,6 +217,17 @@ Shot plan_shot(
   return {hit.aim_pos, delay < tick_s ? std::optional<double>(delay) : std::nullopt};
 }
 
+double fire_exit_s(double firmware_latency_s, double min_fire_delay_s)
+{
+  return std::max(firmware_latency_s, min_fire_delay_s);
+}
+
+int wire_fire_delay_ms(double alignment_s, double exit_s)
+{
+  const double ms = std::nearbyint((std::max(alignment_s, 0.0) + exit_s) * 1000.0);
+  return static_cast<int>(std::clamp(ms, 0.0, 65535.0));
+}
+
 void LatencyStat::add(double sample_s)
 {
   ++count_;
@@ -170,40 +239,48 @@ double wrap_to_pi(double a)
   return py_mod(a + M_PI, 2.0 * M_PI) - M_PI;
 }
 
-void Patrol::target_seen(double now_s)
+void IdleLook::target_seen(double stamp_s, const Vector3d & point)
 {
-  last_target_s_ = now_s;
-  yaw_.reset();
+  last_target_s_ = stamp_s;
+  last_enemy_ = point;
+  reset();
 }
 
-void Patrol::hit(double yaw, double now_s)
+IdleLook::Source IdleLook::source(double now_s, double timeout_s, bool hold) const
 {
-  hit_yaw_ = yaw;
-  hit_until_s_ = now_s + hit_turn_s_;
-}
-
-std::optional<double> Patrol::step(double now_s, double gun_yaw)
-{
-  if (last_target_s_ && now_s - *last_target_s_ < after_s_) {
-    return std::nullopt;
+  const bool enemy = last_target_s_ && now_s - *last_target_s_ <= timeout_s + 3.0;
+  const bool hit = last_hit_s_ && now_s - *last_hit_s_ <= 2.0;
+  if (hit && (!enemy || *last_hit_s_ > *last_target_s_)) {
+    return Source::Hit;
   }
-  if (hit_until_s_ && now_s < *hit_until_s_) {
-    yaw_ = hit_yaw_;
-  } else if (!yaw_) {
+  if (enemy) {return Source::LastEnemy;}
+  return hold ? Source::Hold : Source::Zone;
+}
+
+Vector3d IdleLook::point(double now_s, const Vector3d & gun, double gun_yaw,
+  const Vector3d & desired, double rate_rad_s, double switch_rad)
+{
+  const double bearing = std::atan2(desired.y() - gun.y(), desired.x() - gun.x());
+  if (!desired_yaw_ || std::abs(wrap_to_pi(bearing - *desired_yaw_)) >= switch_rad) {
+    desired_yaw_ = bearing;
+  }
+  double dt = 0.0;
+  if (!yaw_) {
     yaw_ = gun_yaw;
   } else {
-    *yaw_ += rate_rad_s_ * (now_s - last_step_s_);
+    dt = std::max(0.0, now_s - last_step_s_);
   }
+  const double step = rate_rad_s * dt;
+  *yaw_ = wrap_to_pi(*yaw_ + std::clamp(wrap_to_pi(*desired_yaw_ - *yaw_), -step, step));
   last_step_s_ = now_s;
-  yaw_ = wrap_to_pi(*yaw_);
-  return yaw_;
+  const double range = std::max(1.0, (desired - gun).head<2>().norm());
+  return {gun.x() + range * std::cos(*yaw_), gun.y() + range * std::sin(*yaw_), desired.z()};
 }
 
-Vector3d patrol_point(const Vector3d & gun_pos, double yaw, double range_m, double pitch_down_rad)
+Vector3d enemy_zone(
+  bool blue, double red_x, double red_y, double blue_x, double blue_y, double height)
 {
-  return Vector3d(
-    gun_pos.x() + range_m * std::cos(yaw), gun_pos.y() + range_m * std::sin(yaw),
-    gun_pos.z() - range_m * std::tan(pitch_down_rad));
+  return {blue ? red_x : blue_x, blue ? red_y : blue_y, height};
 }
 
 }  // namespace thornbots_pkg

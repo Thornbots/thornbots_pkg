@@ -59,7 +59,7 @@ public:
       "measurement_topic", std::string("/cv/tracker/measurement"));
     odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
     pose_latency_s_ = declare_parameter("pose_latency_s", 0.01);
-    // Unmeasured on hardware (../ROADMAP.md, track B); match the emulator's in sim.
+    // Unmeasured on hardware (../../docs/ROADMAP.md, track B); match the emulator's in sim.
     camera_latency_s_ = declare_parameter("camera_latency_s", 0.0);
     track_max_gap_s_ = declare_parameter("track_max_gap_s", 0.5);
     // How long a detection waits for the camera's TF at its capture time
@@ -78,6 +78,8 @@ public:
     single_panel_yaw_std_ = declare_parameter("single_panel_yaw_std", 0.3);
     params_.ekf.q_yaw_accel = declare_parameter("process_noise_yaw_accel", 5.0);  // rad/s^2
     params_.ekf.q_radius = declare_parameter("process_noise_radius", 0.02);  // m/sqrt(s)
+    params_.ekf.radius_prior_std = declare_parameter("radius_prior_std", 0.05);  // m
+    log_innovations_ = declare_parameter("log_innovations", false);
     // A parked, non-spinning hypothesis; hands the lead back once the summed
     // log-likelihood ratio passes still_exit_llr. See README.md.
     params_.still = declare_parameter("still_hypothesis", true);
@@ -250,6 +252,18 @@ private:
       }
       const auto result =
         tracker_->step(panel, T, t_sec, R_meas, gate_nis_, max_outliers_, facing_std);
+      if (log_innovations_) {
+        const auto & f = tracker_->best();
+        RCLCPP_INFO(
+          get_logger(),
+          "innovation t=%.6f track=%u panels=%zu lead=%zu k=%d result=%d "
+          "residual=[%.6f,%.6f,%.6f] nis=%.6f logdet=%.6f "
+          "w=%.6f radius=[%.6f,%.6f] radius_var=%.6f score=%.6f",
+          t_sec, *track_id_, msg.detections.size(), tracker_->lead, f.last_association,
+          static_cast<int>(result), f.last_residual.x(), f.last_residual.y(),
+          f.last_residual.z(), f.last_nis, f.last_logdet, f.state[W], f.state[R],
+          f.other_r, f.P(R, R), tracker_->scores[tracker_->lead]);
+      }
       if (result == StepResult::Reacquire) {
         RCLCPP_INFO_THROTTLE(
           get_logger(), *get_clock(), 1000,
@@ -265,6 +279,7 @@ private:
     const auto [s, P] = tracker_->predicted(now_t.seconds());
     TargetState out;
     out.header.stamp = now_t;
+    out.detection_stamp = stamp;
     out.header.frame_id = odom_frame_;
     out.robot_track_id = first.robot_track_id;
     out.confidence = first.confidence;
@@ -300,6 +315,7 @@ private:
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
   int max_outliers_;
+  bool log_innovations_;
   TrackerParams params_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

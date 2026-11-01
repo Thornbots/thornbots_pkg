@@ -68,8 +68,8 @@ TEST(Relocalizer, MovingOffsetLandsWhereTheMcbWillBe)
   // Localization at t=0.4 says we were 0.1 m further on than /odom did.
   const auto out = rel.decide(0.4, 2.0 * 0.4 + 0.1, 0.0, 1e-6, 0.52);
   ASSERT_TRUE(out);
-  // The MCB reads its odometry at apply_t; /odom shows that one UART leg later.
-  const double mcb_odom_at_apply = 2.0 * (out->apply_t + rel.params().uart_latency_s);
+  // /odom carries the MCB send-start stamp, so predict exactly to apply_t.
+  const double mcb_odom_at_apply = 2.0 * out->apply_t;
   EXPECT_TRUE(approx(out->x, mcb_odom_at_apply + 0.1));
 }
 
@@ -97,11 +97,95 @@ TEST(Relocalizer, HoldOffAfterASend)
 {
   Relocalizer::Params p;
   p.hold_off_s = 0.3;
+  p.resend_count = 0;
   Relocalizer rel(p);
   drive(rel, 0.0, 1.0);
   EXPECT_TRUE(rel.decide(0.4, 0.1, 0.0, 1e-6, 0.5));
   EXPECT_FALSE(rel.decide(0.6, 0.1, 0.0, 1e-6, 0.7));
-  EXPECT_TRUE(rel.decide(0.8, 0.1, 0.0, 1e-6, 0.85));
+  EXPECT_FALSE(rel.decide(0.8, 0.1, 0.0, 1e-6, 0.85));
+  EXPECT_TRUE(rel.decide(0.8, 0.2, 0.0, 1e-6, 0.85));
+}
+
+TEST(Relocalizer, UnchangedOffsetDoesNotRepeatWhileRawKeepsMoving)
+{
+  Relocalizer::Params p;
+  p.resend_count = 0;
+  Relocalizer rel(p);
+  rel.add_odom(0.0, 0.0, 0.0, 1.0, 0.0);
+  rel.add_odom(0.1, 0.1, 0.0, 1.0, 0.0);
+  ASSERT_TRUE(rel.decide(0.1, 0.3, -0.1, 1e-6, 0.1));
+  for (int i = 2; i <= 100; ++i) {
+    const double t = i * 0.1;
+    rel.add_odom(t, t, 0.0, 1.0, 0.0);
+    EXPECT_FALSE(rel.decide(t, t + 0.2, -0.1, 1e-6, t));
+  }
+  const auto next = rel.decide(10.0, 10.3, -0.1, 1e-6, 10.0);
+  ASSERT_TRUE(next);
+  EXPECT_NEAR(next->error_m, 0.1, 1e-12);
+  EXPECT_NEAR(next->x, 10.307, 1e-12);
+  EXPECT_NEAR(next->y, -0.1, 1e-12);
+}
+
+TEST(Relocalizer, ReturnToRawCoordinatesIsANewNavigationCorrection)
+{
+  Relocalizer rel;
+  rel.add_odom(0.0, 0.0, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(0.0, 0.2, 0.0, 1e-6, 0.0));
+  rel.add_odom(1.0, 0.0, 0.0, 0.0, 0.0);
+  const auto reset = rel.decide(1.0, 0.0, 0.0, 1e-6, 1.0);
+  ASSERT_TRUE(reset);
+  EXPECT_DOUBLE_EQ(reset->x, 0.0);
+  rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
+  EXPECT_TRUE(rel.decide(2.0, 0.0, 0.0, 1e-6, 2.0));  // absolute retry, not a new offset
+}
+
+TEST(Relocalizer, ClockResetAndRawDiscontinuityForgetTheSentOffset)
+{
+  Relocalizer rel;
+  rel.add_odom(10.0, -3.53, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(10.0, -3.33, 0.0, 1e-6, 10.0));
+  rel.add_odom(10.01, 3.53, 0.0, 0.0, 0.0);
+  EXPECT_FALSE(rel.odom_at(10.005));
+  ASSERT_TRUE(rel.decide(10.01, 3.73, 0.0, 1e-6, 10.01));
+  rel.add_odom(0.0, 3.53, 0.0, 0.0, 0.0);
+  EXPECT_TRUE(rel.decide(0.0, 3.73, 0.0, 1e-6, 0.0));
+}
+
+TEST(Relocalizer, BothTeamStartsRecoverAfterFirstFrameIsLost)
+{
+  for (double start : {-3.53, 3.53}) {
+    Relocalizer rel;
+    rel.add_odom(1.0, 0.0, 0.0, 0.2, 0.0);
+    const auto lost = rel.decide(1.0, start, 0.0, 1e-6, 1.0);
+    ASSERT_TRUE(lost);
+    EXPECT_NEAR(lost->x, start + 0.0014, 1e-12);
+    double mcb_nav = 0.0;
+    unsigned received = 0;
+    for (int i = 1; i <= 5; ++i) {
+      const double t = 1.0 + i * 0.4;
+      const double raw = (t - 1.0) * 0.2;
+      rel.add_odom(t, raw, 0.0, 0.2, 0.0);
+      const auto retry = rel.decide(t, raw + start, 0.0, 1e-6, t);
+      if (retry) {
+        ++received;
+        mcb_nav = retry->x;
+        EXPECT_NEAR(mcb_nav - raw, start + 0.0014, 1e-12);
+      }
+    }
+    EXPECT_EQ(received, 3u);
+    EXPECT_GT(std::abs(mcb_nav), 3.0);
+  }
+}
+
+TEST(Relocalizer, RetryStillRequiresConfidentFreshLocalization)
+{
+  Relocalizer rel;
+  rel.add_odom(1.0, 0.0, 0.0, 0.0, 0.0);
+  ASSERT_TRUE(rel.decide(1.0, -3.53, 0.0, 1e-6, 1.0));
+  rel.add_odom(2.0, 0.0, 0.0, 0.0, 0.0);
+  EXPECT_FALSE(rel.decide(2.0, -3.53, 0.0, 0.01, 2.0));
+  EXPECT_FALSE(rel.decide(0.0, -3.53, 0.0, 1e-6, 2.0));
+  EXPECT_TRUE(rel.decide(2.0, -3.53, 0.0, 1e-6, 2.0));
 }
 
 TEST(Relocalizer, LocalizationStampOutsideOdomHistory)
@@ -119,15 +203,32 @@ TEST(Relocalizer, InterpolatesBetweenOdomSamples)
 {
   Relocalizer rel;
   rel.add_odom(0.0, 0.0, 0.0, 0.0, 0.0);
-  rel.add_odom(0.1, 1.0, 2.0, 0.0, 0.0);
+  rel.add_odom(0.1, 0.1, 0.2, 0.0, 0.0);
   auto at = rel.odom_at(0.025);
   ASSERT_TRUE(at);
-  EXPECT_TRUE(approx(at->first, 0.25));
-  EXPECT_TRUE(approx(at->second, 0.5));
+  EXPECT_TRUE(approx(at->first, 0.025));
+  EXPECT_TRUE(approx(at->second, 0.05));
   rel.add_odom(0.05, 0.0, 0.0, 0.0, 0.0);  // stamps went back: a sim restart
   at = rel.odom_at(0.05);
   ASSERT_TRUE(at);
   EXPECT_EQ(at->first, 0.0);
   EXPECT_EQ(at->second, 0.0);
   EXPECT_EQ(rel.odom_size(), 1u);
+}
+
+TEST(Relocalizer, SendStartStampDoesNotAddTheInboundUartLegAgain)
+{
+  Relocalizer::Params p;
+  p.uart_latency_s = 0.020;
+  p.mcb_read_delay_s = 0.007;
+  p.latency_std_s = 0.001;
+  Relocalizer rel(p);
+  rel.add_odom(0.4, 1.2, -1.6, 3.0, -4.0);
+  rel.add_odom(0.5, 1.5, -2.0, 3.0, -4.0);
+  // A 30 ms-old send-start sample already covers the inbound UART leg.
+  const auto out = rel.decide(0.4, 1.5, -1.8, 1e-6, 0.53);
+  ASSERT_TRUE(out);
+  EXPECT_NEAR(out->apply_t, 0.557, 1e-12);
+  EXPECT_NEAR(out->x, 1.971, 1e-12);
+  EXPECT_NEAR(out->y, -2.428, 1e-12);
 }
