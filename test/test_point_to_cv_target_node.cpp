@@ -538,6 +538,37 @@ TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
   }
 }
 
+TEST_F(NodeTest, ExplicitIdleZoneUsesFieldCoordinatesForEitherTeam)
+{
+  for (bool blue : {false, true}) {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("idle_zone", std::vector<double>{0.0, -4.625});
+    auto node = std::make_shared<Probe>(options);
+    node->gun_transform();
+    node->navigation_transform(4.625, 0.0);
+    dji_serial_bridge::msg::RefSysStatus referee;
+    referee.is_on_blue_team = blue;
+    referee.delta_angle_got_hit_in = 123.0F;
+    node->on_ref_sys(referee);
+    node->idle_point();
+    node->time_ns(20000000000LL);
+    const auto point = node->idle_point();
+    EXPECT_NEAR(point.x(), -4.625, 1e-6);
+    EXPECT_NEAR(point.y(), -4.625, 1e-6);
+  }
+}
+
+TEST_F(NodeTest, RejectsMalformedIdleZones)
+{
+  for (const auto &zone : std::vector<std::vector<double>>{
+      {0.0}, {0.0, 1.0, 2.0}, {0.0, std::numeric_limits<double>::quiet_NaN()}})
+  {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("idle_zone", zone);
+    EXPECT_THROW(std::make_shared<Probe>(options), std::invalid_argument);
+  }
+}
+
 TEST_F(NodeTest, HitPermissionChangesImmediatelyWithAnyTargetEstimate)
 {
   auto node = std::make_shared<Probe>(rclcpp::NodeOptions());

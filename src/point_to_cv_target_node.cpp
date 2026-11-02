@@ -19,6 +19,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "tf2/exceptions.h"
 
@@ -105,6 +106,13 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Firmware patrol permission is independent of the per-frame hit-turn decision.
   type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
   idle_direction_ = declare_parameter("idle_direction", std::string("zone"));
+  const auto idle_zone = declare_parameter("idle_zone", std::vector<double>{});
+  if (!idle_zone.empty()) {
+    if (idle_zone.size() != 2 || !std::isfinite(idle_zone[0]) || !std::isfinite(idle_zone[1])) {
+      throw std::invalid_argument("idle_zone must be empty or two finite field coordinates");
+    }
+    idle_zone_ = Vector3d(idle_zone[0], idle_zone[1], 0.0);
+  }
   navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
   if (idle_direction_ != "zone" && idle_direction_ != "hold") {
     throw std::invalid_argument("idle_direction must be zone or hold");
@@ -259,7 +267,8 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
     const auto & t = tf.transform.translation;
     const auto & q = tf.transform.rotation;
     zone = quat_to_rot(q.x, q.y, q.z, q.w) *
-      enemy_zone(blue_, red_start_x_, red_start_y_, blue_start_x_, blue_start_y_, idle_height_m_) +
+      idle_zone_.value_or(enemy_zone(
+        blue_, red_start_x_, red_start_y_, blue_start_x_, blue_start_y_, idle_height_m_)) +
       Vector3d(t.x, t.y, t.z);
   } catch (const tf2::TransformException & ex) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
