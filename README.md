@@ -515,7 +515,7 @@ non-spinning target: velocity, acceleration and `w` pinned at exactly 0,
 the centre and yaw random-walking at `still_process_noise_pos` (0.02
 m/sqrt(s)) and `still_process_noise_yaw` (0.05 rad/sqrt(s)). The moving
 filters read a still target's noise as motion (velocity p95 0.19 m/s on
-the gz estimation bench), which Part 1 turned into lead. The still filter
+the gz estimation bench), which the aiming path turned into lead. The still filter
 takes the lead at a 0.25 margin rather than 1.0, since it wins by only
 ~0.6 per sample, and hands it back once a CUSUM of the per-sample
 log-likelihood ratio against the best moving filter passes
