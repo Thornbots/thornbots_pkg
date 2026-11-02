@@ -798,6 +798,10 @@ starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
 The enemy zone is the other team's configured start, without a mirroring assumption.
+An optional `idle_zone` array `[x, y]` overrides that look point in field
+coordinates, through the same navigation-to-raw-frame composition.
+An empty array keeps the team start. The parked sim fixture uses this to look
+south toward its field-safe target paths without changing team starts.
 `auto.launch.py` owns the four defaults: `red_start_x`, `red_start_y`,
 `blue_start_x`, `blue_start_y` (metres from field centre, x toward blue's base,
 y left). The temporary unmeasured scrim defaults remain red (-3.53, -0.426)
