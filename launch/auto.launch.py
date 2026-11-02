@@ -114,6 +114,10 @@ def generate_launch_description():
     )
 
     # Mapping starts a blank graph; field registration belongs to localization's workflow.
+    slam_input_frame_arg = DeclareLaunchArgument(
+        'slam_input_frame', default_value='',
+        description='Forwarded SLAM scan-prior frame; empty uses navigation odometry.'
+    )
     load_map_arg = DeclareLaunchArgument(
         'load_map', default_value=PythonExpression(
             ["'false' if '", LaunchConfiguration('localization_mode'),
@@ -565,6 +569,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
             'load_map': LaunchConfiguration('load_map'),
+            'slam_input_frame': LaunchConfiguration('slam_input_frame'),
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
@@ -635,7 +640,8 @@ def generate_launch_description():
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
         lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
-        localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
+        localization_mode_arg, slam_input_frame_arg, load_map_arg, autosave_map_arg,
+        map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
         lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
