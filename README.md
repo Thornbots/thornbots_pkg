@@ -1018,7 +1018,7 @@ are 0 for passing observed checks, 1 for failed checks, 2 for a collection error
 POSE, head TF, raw odometry and scans are always required; absence fails clearly.
 A publisher that disappears after discovery fails its delivery/coverage check.
 
-For a longer stationary drift sample ([T39](../docs/ROADMAP.md#short-todos)):
+For a longer stationary drift sample ([T39](../docs/ROBOT_TESTS.md#parked-localization)):
 
 ```bash
 ros2 run thornbots_pkg room_check --ros-args -p duration_s:=60.0 -p output_dir:=/workspaces/isaac_ros-dev/evidence
