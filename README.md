@@ -184,7 +184,8 @@ false (a blank pose graph) and `autosave_map` defaults to
 `/scan_odom` or passes through raw odometry; when enabled it starts
 `rf2o_laser_odometry_node` to scan-match `/scan`. The MCB's raw POSE remains
 `/odom` regardless.
-Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
+Both, plus `map_file`, `load_map`, `odom_frame` and the experimental
+`slam_input_frame`, pass through to
 `sentry_localization`.
 
 Raw aim coordinates use the start-relative, field-aligned wire frame; see
