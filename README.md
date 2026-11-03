@@ -173,6 +173,35 @@ ros2 launch thornbots_pkg auto.launch.py
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false
 ```
 
+`detection_producer` selects who supplies `/cv/panel_detections`:
+`external` (default) preserves the separate producer launch workflow;
+`sim` starts `target_driver`, `cv_target_emulator` and `cv_head_aim` from the
+optional `sim` package; `hardware` includes the optional
+`realsense_yolov8_nitros_bridge` RealSense/YOLO/ROI launch with its serial
+bridge disabled. Build/install the selected optional package and its dependencies
+first. These are optional runtime packages, avoiding a dependency cycle with
+`sim`, which itself depends on this package.
+
+```bash
+# Sim world only: leave spawn_target false to avoid a second detection chain.
+ros2 launch sim sim.launch.py spawn_target:=false
+# In another terminal:
+ros2 launch thornbots_pkg auto.launch.py real_hardware:=false detection_producer:=sim
+# Hardware: use the TensorRT plan built for this device; no separate camera launch.
+ros2 launch thornbots_pkg auto.launch.py detection_producer:=hardware engine_file_path:=/path/to/model.plan
+```
+
+Managed producer modes must match `real_hardware`; hardware requires a nonempty
+`engine_file_path`. Stop any separately launched camera/ROI chain or sim target
+chain before selecting a managed producer. Each managed mode selects one chain;
+`external` deliberately adds none. `operator_inputs_only:=true` suppresses the
+managed chain along with the existing CV consumers. Producer capture stamps pass
+through unchanged: sim keeps its sample stamp and queued publish latency;
+hardware keeps the camera/ROI stamp. This composition does not establish native
+camera/YOLO hardware acceptance. See the
+[hardware pipeline](../realsense-yolov8-nitros-bridge/README.md#full-robot-pipeline)
+for engine preparation and the existing external workflow.
+
 `real_hardware` also sets `use_sim_time` (true when `real_hardware:=false`),
 and setting it false keeps the launch off the real serial devices.
 

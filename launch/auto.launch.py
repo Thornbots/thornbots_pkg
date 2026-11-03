@@ -28,7 +28,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
@@ -36,6 +36,33 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+
+def detection_producers(context):
+    """Resolve optional producer packages only for the selected chain."""
+    producer = LaunchConfiguration('detection_producer').perform(context)
+    if producer == 'external':
+        return []
+    hardware = LaunchConfiguration('real_hardware').perform(context).lower() in ('true', '1')
+    if (producer == 'hardware') != hardware:
+        raise RuntimeError('detection_producer must match real_hardware')
+    if producer == 'sim':
+        return [Node(package='sim', executable=executable, name=executable,
+                     output='screen', parameters=[{'use_sim_time': True}])
+                for executable in ('target_driver', 'cv_target_emulator', 'cv_head_aim')]
+    if producer != 'hardware':
+        raise RuntimeError('Unknown detection_producer: ' + producer)
+    engine = LaunchConfiguration('engine_file_path').perform(context)
+    if not engine:
+        raise RuntimeError('hardware detection_producer requires engine_file_path')
+    return [IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('realsense_yolov8_nitros_bridge'),
+            'launch', 'isaac_ros_yolov8_realsense.launch.py')),
+        launch_arguments={'engine_file_path': engine,
+                          'enable_serial_bridge': 'False'}.items(),
+    )]
 
 
 def generate_launch_description():
@@ -584,6 +611,14 @@ def generate_launch_description():
     return LaunchDescription([
         # First: later defaults (mmm_room, autosave_map) read real_hardware.
         real_hardware_arg,
+        DeclareLaunchArgument(
+            'detection_producer', default_value='external',
+            choices=['external', 'sim', 'hardware'],
+            description='external preserves separately launched producers; sim starts the '
+            'target emulator chain; hardware starts RealSense/YOLO/ROI without another UART.'),
+        DeclareLaunchArgument(
+            'engine_file_path', default_value='',
+            description='Per-device TensorRT plan; required for detection_producer:=hardware.'),
         DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
                               description='Request host Wi-Fi disconnect at confirmed battle.'),
         DeclareLaunchArgument('match_wifi_request_file',
@@ -649,6 +684,7 @@ def generate_launch_description():
         dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
+            OpaqueFunction(function=detection_producers),
             mcb_relay_node, mmm_node,
             target_selector_node, target_tracker_node, point_to_cv_target_node,
             lidar_node, lidar_self_filter_node,
