@@ -36,6 +36,7 @@
 #include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "std_msgs/msg/header.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -113,7 +114,11 @@ private:
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RobotPose>::SharedPtr robot_pose_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
+  void start_timers(double publish_rate_hz);
   rclcpp::TimerBase::SharedPtr watchdog_timer_, publish_timer_;
+  rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr epoch_clock_sub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr epoch_ready_pub_;
+  bool epoch_failed_ = false;
 };
 
 }  // namespace thornbots_pkg

@@ -11,6 +11,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rosgraph_msgs REQUIRED)
 find_package(dji_serial_bridge REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -56,7 +57,7 @@ endforeach()
 add_library(point_to_cv_target_node STATIC src/point_to_cv_target_node.cpp)
 target_link_libraries(point_to_cv_target_node PUBLIC point_to_cv_target_core)
 ament_target_dependencies(point_to_cv_target_node PUBLIC
-  rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
+  rclcpp rosgraph_msgs dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
 
 add_executable(target_selector src/target_selector.cpp)
 target_link_libraries(target_selector target_selector_core)

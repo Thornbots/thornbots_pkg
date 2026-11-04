@@ -157,19 +157,51 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     robot_pose_topic, rclcpp::SensorDataQoS(),
     [this](RobotPose::ConstSharedPtr m) {on_robot_pose(*m);});
 
-  watchdog_timer_ = rclcpp::create_timer(
-    this, get_clock(), rclcpp::Duration::from_seconds(0.1), [this]() {check_timeout();});
-  publish_timer_ = rclcpp::create_timer(
-    this, get_clock(), rclcpp::Duration::from_seconds(1.0 / publish_rate_hz),
-    [this]() {on_publish_tick();});
-
   const auto ref_sys_topic = declare_parameter(
     "ref_sys_topic", std::string("/dji_serial_bridge/ref_sys"));
   ref_sys_sub_ = create_subscription<dji_serial_bridge::msg::RefSysStatus>(
     ref_sys_topic, rclcpp::SensorDataQoS(),
     [this](dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr m) {on_ref_sys(*m);});
+  const bool epoch_zero = declare_parameter("deterministic_epoch_zero", false);
+  if (epoch_zero) {
+    if (!get_parameter("use_sim_time").as_bool()) {
+      throw std::invalid_argument("deterministic_epoch_zero requires use_sim_time");
+    }
+    epoch_ready_pub_ = create_publisher<std_msgs::msg::Header>(
+      "~/epoch_zero_ready", rclcpp::QoS(1).reliable().transient_local());
+    epoch_clock_sub_ = create_subscription<rosgraph_msgs::msg::Clock>(
+      "/clock", rclcpp::ClockQoS(), [this, publish_rate_hz](rosgraph_msgs::msg::Clock::ConstSharedPtr msg) {
+        if (epoch_failed_ || publish_timer_) {return;}
+        if (msg->clock.sec != 0 || msg->clock.nanosec != 0 || now().nanoseconds() != 0) {
+          epoch_failed_ = true;
+          RCLCPP_ERROR(get_logger(), "point_to_cv_target missed epoch zero");
+          return;
+        }
+        start_timers(publish_rate_hz);
+        if (now().nanoseconds() != 0) {
+          watchdog_timer_->cancel();
+          publish_timer_->cancel();
+          epoch_failed_ = true;
+          RCLCPP_ERROR(get_logger(), "clock advanced while initializing point_to_cv_target");
+          return;
+        }
+        std_msgs::msg::Header ready;
+        epoch_ready_pub_->publish(ready);
+      });
+  } else {
+    start_timers(publish_rate_hz);
+  }
   RCLCPP_INFO(get_logger(), "point_to_cv_target ready: idle=%s, fire age <= %.3fs",
     idle_direction_.c_str(), fire_max_state_age_s_);
+}
+
+void PointToCvTarget::start_timers(double publish_rate_hz)
+{
+  watchdog_timer_ = rclcpp::create_timer(
+    this, get_clock(), rclcpp::Duration::from_seconds(0.1), [this]() {check_timeout();});
+  publish_timer_ = rclcpp::create_timer(
+    this, get_clock(), rclcpp::Duration::from_seconds(1.0 / publish_rate_hz),
+    [this]() {on_publish_tick();});
 }
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
