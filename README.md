@@ -5,7 +5,7 @@ ARC 2026 Sentry. It puts `/dji_serial_bridge/pose` (hardware or `sim`) and `/sca
 runs `robot_state_publisher` off `urdf/sentry.urdf.xacro` (the `sentry_v2`
 CAD's frames, with its meshes in `meshes/sentry_v2/`), publishes raw MCB
 odometry as `/odom` and `odom->root`, and turns detections into a raw
-world-frame (`odom`) `CVTarget`. Fused navigation uses `nav_odom`;
+world-frame (`odom`) `TargetState` for the MCB's aim planner, plus idle `CVTarget` looks. Fused navigation uses `nav_odom`;
 localization backends are in
 `sentry_localization/README.md`; game rules are in
 `../docs/ARCC_2026_SENTRY_CONTEXT.md`.
@@ -19,13 +19,13 @@ localization backends are in
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `match_wifi_guard` | `/dji_serial_bridge/ref_sys` | opt-in host Wi-Fi disconnect request |
 | `mmm` | PING, `/scan`, `/odom`, `/joint_states`, referee team, `map->root` TF | PING, SLAM reset and localization save service; opt-in host shutdown request |
-| `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
+| `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/cv/target_state` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/target_state`; sets `type_c_based_patrol` on both |
 | `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/localization/odom` | `dji_serial_bridge_node`'s `~/nav_goal` (route waypoint, `nav_odom`) |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
-| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a non-firing idle look); `tick_topic` if set (bench only) |
+| `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/ref_sys` | `/cv/target` (`CVTarget`, odom frame, idle look, only while no target is tracked); `tick_topic`, `state_ack_topic` if set (bench only) |
 
-`mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
+`mcb_relay` forwards outgoing target state, idle looks and relocalization messages to the bridge;
 pose translation, target selection and aiming consume the incoming pose/referee
 topics shown above. `auto.launch.py` starts the relay with
 `real_hardware:=true`; sim's `mcb_*` launches also start it explicitly. It
@@ -34,7 +34,7 @@ also starts `waypoint_nav` with `real_hardware:=true` unless
 [test square](../nav_pkg/README.md#square-test-route). The MCB follows its
 NAV_GOALs only with the remote's right switch up.
 `point_to_cv_target` runs in both modes because
-`/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
+`/cv/target` idle looks also feed sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
 `enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
 `armor_tracker.hpp` for `target_tracker`). Runtime nodes are C++ (`src/`);
@@ -53,7 +53,8 @@ PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, 
 /localization/odom + ref_sys           --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
-/cv/target_state (armor model, confidence, track id) --[point_to_cv_target]--> /cv/target (odom frame)
+/cv/target_state --[mcb_relay]--> dji_serial_bridge_node (~/target_state) --> UART --> MCB (plans aim and fire)
+/cv/target_state, ref_sys --[point_to_cv_target]--> /cv/target (idle look, odom frame, only with no target)
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
            \-[sim's cv_head_aim]--> /head_pan_cmd, /head_pitch_cmd (sim only, see sim/README.md)
 ```
@@ -141,8 +142,8 @@ save guards and failure recovery without ROS.
 The [TargetState](../ros2_dji_serial_bridge/msg/TargetState.msg) boundary lets
 the [aiming bench](../sim/README.md#run-the-tests) replace perception with
 perfect state. [target_tracker](#target_tracker) owns correction up to the
-state's publish-time stamp; [point_to_cv_target](#point_to_cv_target)
-extrapolates to the fire horizon. Detections, target state and aim use raw,
+state's publish-time stamp; the MCB [propagates and plans](../firmware/MCBV3/README.md#aim-and-navigation-odometry)
+from there. Detections, target state and aim use raw,
 never-relocalized `odom`, since
 `map` corrections can jump mid-shot; `map` is for strategy. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
@@ -260,11 +261,11 @@ colcon test --packages-select thornbots_pkg && colcon test-result --verbose
 `test_armor_tracker.cpp` covers the armor EKF, the hypothesis bank, handoffs,
 gating and the still hypothesis; `test_target_selector_core.cpp` scoring,
 centrality, grouping and hysteresis; `test_mcb_relay_core.cpp` the relocalize
-decision; `test_point_to_cv_target_core.cpp` the intercept solve, shot planner,
-latency stat and idle looks; `test_pose_translator_node.cpp` the stamp, frame,
+decision; `test_point_to_cv_target_core.cpp` the latency stat and idle looks;
+`test_pose_translator_node.cpp` the stamp, frame,
 joint and covariance mapping; `test_point_to_cv_target_node.cpp` the publish tick,
-the consumer acknowledgment and the node's subscriptions: `TargetState`,
-`RobotPose` and `RefSysStatus` (idle team/hit events), nothing else. The pytest run is
+the consumer acknowledgment and the node's subscriptions: `TargetState` and
+`RefSysStatus` (idle team/hit events), nothing else. The pytest run is
 the ament copyright check of `include/`, `launch/`, `src/` and `test/`, and
 the flake8 and pep257 checks of `launch/` and `test/`.
 It also runs the ROS-free operator workflow geometry, artifact, convergence
@@ -496,7 +497,7 @@ one within the detector's ~75 degree cone would be seen too. So a frame with
 one panel also measures the tracked panel's yaw as the bearing to the camera,
 +-`single_panel_yaw_std` (0.3 rad). Without it a still target's yaw was
 unobservable and random-walked a quarter turn in 30 s, and since
-`point_to_cv_target` rebuilds the facing panel from centre, yaw and radius, it
+the MCB rebuilds the facing panel from centre, yaw and radius, it
 aimed up to 0.4 m off a target that never moved.
 
 Innovation gating: a normalised innovation over `gate_nis` (16.3, 99.9% for 3
@@ -540,7 +541,7 @@ shorter than one spin period; consumers should weigh `variance` and
 position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
 `acceleration` the centre's. Each state is
 `ArmorTracker::predicted()` at the publish time and stamped with it, as
-`TargetState.msg` asks, so `point_to_cv_target` only extrapolates from there.
+`TargetState.msg` asks, so the MCB only propagates from there.
 See the [CV interface](#cv-interface) for correction ownership.
 
 ### mcb_relay
@@ -578,8 +579,12 @@ The bridge packs the navigation position using the existing `RELOCALIZE`
 payload. Raw POSE and the CV aim frame remain unchanged. See the
 [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 
-`cv_target` is a straight republish, and carries the fire decision with the
-aim point it was solved for.
+`cv_target` and `target_state` are straight republishes except for
+`type_c_based_patrol`, which this node owns: its parameter of that name
+(default false, MCB patrol permission) is written into both messages, so
+`point_to_cv_target` neither declares nor sets it. The tracker's state goes to
+the MCB on every update; the bridge stamps its ages at the write
+([TARGET_STATE](../ros2_dji_serial_bridge/UART_PROTOCOL.md#target_state-id7--tracked-enemy-armor-model)).
 
 ### Robot geometry
 
@@ -629,186 +634,41 @@ TF consistent when overriding the mount; sim uses this same filter.
 
 ### point_to_cv_target
 
-`/cv/target` `x/y/z` is an `odom` point (`header.frame_id`) the MCB holds
-and aims at from wherever the chassis is, since 2026-09-27. It was a
-root-frame point before that and a camera-relative vector before that. See
-`CVTarget.msg` and
-[UART_PROTOCOL](../ros2_dji_serial_bridge/UART_PROTOCOL.md).
+The MCB plans everything after tracking (propagation, spin handling, panel
+choice, lead, fire lock, confidence and detection-age gates, shot timing)
+from the relayed `/cv/target_state`; see
+[MCBV3 aiming](../firmware/MCBV3/README.md#aim-and-navigation-odometry) and the
+[TARGET_STATE contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#target_state-id7--tracked-enemy-armor-model).
+This node keeps what only the Jetson can know: whether a target is tracked and
+where to look otherwise.
 
-Idle enemy-zone points are field coordinates transformed through
-`nav_odom -> odom` before publication. Until that transform exists, idle aim
-holds the muzzle bearing; it does not send field coordinates as raw points.
+- **Target active** from each `/cv/target_state` until its newest detection
+  (`detection_stamp`) is older than `target_timeout_s` (0.5). Publication time
+  cannot refresh it. While active it sends no `CVTarget`, so the MCB's held
+  target state decides; each tick still remembers the tracked centre (the
+  measured `panel` while unconverged) as the last enemy.
+- **Idle**: otherwise each tick publishes an `odom` `CVTarget`
+  ([idle look contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--idle-look-point))
+  with `turn_to_hit` set. `type_c_based_patrol` is left to
+  [mcb_relay](#mcb_relay).
+- **Tick**: the publish timer (`cv_target_publish_rate_hz`, 40) fires whether or
+  not a point is sent. With `tick_topic` set (the lockstep benches) a `Header`
+  goes out every tick, its frame empty when no point was sent;
+  `state_ack_topic` echoes each consumed state's header.
 
-The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone, so anything that publishes a `TargetState` can drive it: `target_tracker` on hardware,
-`sim`'s `target_state_truth` on the aiming bench. Liveness is the state's age
-against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
-the message.
-
-For simulated lockstep initialization, `deterministic_epoch_zero:=true` on
-`auto.launch.py` makes this node wait for an actual zero `/clock` before
-creating its publish and watchdog timers. It then publishes a reliable,
-transient-local zero-stamped `~/epoch_zero_ready`; an advanced first clock
-leaves it unready. This acknowledges only this node’s timer setup, not TF,
-localization, input consumption, or readiness of the rest of the robot stack.
-
-A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
-tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
-`compute_aim_point()` handles three cases per tick:
-
-- No usable state, or TF fails: no target aim; idle logic supplies a
-  non-firing point instead. TF failure logs a throttled `ERROR`.
-  Usable means present and younger than
-  `target_timeout_s`. With `tick_topic` set (the lockstep benches), a
-  `Header` still goes out every tick.
-- `valid == False`: raw `panel` position, no lead, no fire. No
-  extrapolation off an unconverged track.
-- `valid == True`: `plan_shot()`'s aim point in odom. See below.
-
-`plan_shot()` picks a mode per tick, with hysteresis on `|yaw_rate|`: spin
-mode above `spin_enter_rad_s` (3.0), panel mode below `spin_exit_rad_s` (2.0).
-Every mode extrapolates the center with `TargetState.acceleration` and solves
-the intercept on the target's true path (curved by acceleration and spin),
-not a straight line.
-
-- Panel mode leads the panel facing the shooter at impact, with that pair's
-  radius and `z_offset`, and fires now. `choose_panel()` selects the most
-  face-on normal near impact, then holds that physical panel by its odom yaw
-  until another faces us `panel_switch_margin_rad` more squarely. A new track,
-  invalid state, spin mode or timeout clears the hold, including a late update
-  arriving before the timeout timer runs. Holding by yaw survives quarter-turn
-  relabeling of the target model. Zero margin gives the immediate best-panel
-  choice; finite nonnegative margins below pi/2 are accepted.
-- Spin mode, shotgating (`chase_settle_s < 0`, default -1): leads a point on
-  the center-to-shooter line, at the radius and height of the pair arriving
-  next. The line is steady, so the gimbal can hold it while panels sweep
-  past. It fires with `delay_ms` set so a panel normal points along the line
-  at impact, if that alignment falls within one publish tick; about one tick
-  in five at 2 Hz spin. The pair switches only once the last shot at the
-  current one has left the muzzle: its height is a step, and a switch any
-  earlier moved the gun under that shot (staggered 0.5 m/s: 58% to 97%).
-  This is the default after 1 Hz hosted tests showed persistent yaw error
-  while chasing despite fresh detections and valid tracks. It changes only
-  spin mode; nonspinning targets retain panel lead and hysteresis. The
-  [accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md) records the
-  filter, lead and fire-policy ablations and repeat measurements.
-- Spin mode, chase (`chase_settle_s >= 0`, opt-in): leads the facing panel itself and
-  fires on any tick whose panel will have faced the shooter for
-  `chase_settle_s` at impact, with `chase_margin_s` still to go. Both cover
-  the gimbal's jump between panels; 0 and 0 fire every tick. The fire is
-  delayed to leave mid-hold of whichever aim is current then, where that aim
-  is exact. On the point bench's perfect gimbal it hits 94-98% of shots at
-  every tick, against shotgating's one tick in five. A real gimbal has to
-  make a ~7 deg jump every quarter turn and settle; measure that on hardware
-  and set `chase_settle_s` to it, or fall back to shotgating.
-  `auto.launch.py` exposes both chase window controls and the independent
-  gimbal/firmware latency estimates for calibration.
-
-The panel margin was selected on the 45-degree aiming bench to suppress
-noise-driven switches while preserving slow-turn panel transitions. The
-[three-run measurement](../sim/docs/panel-choice-2026-10-11.md#aiming-bench)
-compares margins, exact-yaw controls and synthetic orientation-error stress.
-It uses a perfect gimbal and does not establish hardware calibration or
-measured tracker-noise tolerance.
-
-Two latencies, kept apart. `gimbal_lag_s` (0.05) is how far the gimbal trails
-the aim point, past the half tick each aim is held: the aim leads by
-`gimbal_lag_s` plus half a tick. `auto.launch.py` exposes this calibration;
-the hardware default remains 50 ms. After filtering absolute setpoint rate, the hosted E2E fixture uses zero
-yaw lag from
-command/achieved-angle replay in the
-[accuracy investigation](../sim/docs/aim-accuracy-2026-10-12.md). `firmware_latency_s` (0.020) is indexing request
-to muzzle exit, the sentry's `FIRING_LATENCY_TIME` timed on the robot
-(2026-10-28). The wire delay never goes below `min_fire_delay_s` (0.040), so
-the MCB always waits before requesting; the larger of the two times the fire
-against the spin. Aiming both from the
-firmware latency overshot moving targets in sim by ~27 ms of their motion,
-in the earlier fixture. The outgoing wire delay includes this indexer estimate
-plus the planner's alignment wait, matching the
-[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
-
-`plan_shot()`'s intercept is a time-of-flight fixed point, 2-3 iterations, with
-no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
-aims at the current estimate and fires untimed.
-
-`fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
-MCB in the same frame as the aim it was solved for, and the MCB runs
-`delay_ms` from receiving that frame (no stamp crosses the wire; see
-`ros2_dji_serial_bridge/UART_PROTOCOL.md`). The firmware already reads the
-15-byte payload; remaining timing and frame work is tracked in the bridge's
-[firmware status](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
-
-Both horizons start from this tick's `now - state.header.stamp`, not
-`LatencyStat.mean`, because cached state ages between arrival and tick, by
-up to a tracker period plus tick phase (measured: 20ms mean at arrival, 50ms
-at tick), and the offset jitters. `LatencyStat` is logged as a diagnostic.
-
-Aim state and shooter pose share raw `odom`; lead uses `odom->root` at the
-state stamp and world-frame `RobotPose.vel_x/vel_y`. If the state stamp is
-newer than the newest raw POSE, the latest transform is used and its position
-is carried at that velocity to the state's stamp. The lookup does not wait,
-since waiting in a callback starves `/tf`. Localization corrections do not
-move the CV target or change the outgoing aim frame. See
-[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types)
-for the wire frame and payload contract.
-
-Our own motion: the shot leaves where we are at the aim horizon and carries
-our velocity, so `plan_shot()` returns the intercept less our motion over
-the flight: the odom point a gun at our exit position points through. At
-1 m/s and 3 m the difference is ~0.15 m, three panel half-widths. A still
-shooter gets the intercept itself.
-`solve_intercept()` is no longer on the node's path; only its tests use it.
-
-Every publish tick with a shot solution, a satisfied fire lock and confidence at least
-`fire_confidence_threshold` (0.5) requests fire: up to 40 Hz at the default
-publish rate, with no Jetson fire-rate throttle. Each request carries the
-planner's alignment wait plus the exit delay, rounded to milliseconds and
-clamped to uint16 (40 ms minimum with the defaults). The MCB holds a pending
-request and ignores newer frames until it completes; see the
-[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
-Failed TF, unconverged tracks and stale detections still hold fire, as do the
-spin alignment and chase windows above. HP, heat and power gating are not built.
-
-`TargetState.detection_stamp` carries the newest contributing detection's corrected
-capture time; `header.stamp` still identifies the prediction time. Firing requires
-that capture stamp to be at most
-`fire_max_state_age_s` (0.15 s) old. A held prediction still aims, without
-firing, until `target_timeout_s` (0.5 s). The fire-age limit is a node parameter,
-not a launch argument.
-
-`fire_lock_s` (1.0 s, also a launch argument) requires tracking of the same
-`TargetState.robot_track_id`, starting at the first observation with a converged,
-fresh track above the confidence threshold. Panel handoffs keep that identity.
-`fire_lock_grace_s` (0.3 s, nine frames at 30 fps) preserves the dwell start
-through brief invalid, low-confidence or stale/future states. Gap time counts
-toward the dwell, but firing stays blocked until all gates pass again. Longer
-ineligible gaps, identity changes (even between publish ticks), and target timeout
-reset the lock. State callbacks and publish ticks both observe eligibility.
-Elapsed time uses the node clock, as does fire age; a backwards clock jump restarts
-the dwell. Planner shot windows do not reset it. Setting `fire_lock_s` to 0
-disables only this wait; the other firing gates still apply.
-
-Stationary targets bypass the dwell: the existing spin hysteresis must be outside
-spin mode, and the norm of `TargetState.velocity` (centre velocity in odom,
-including z) must be below `fire_stationary_speed_mps` (0.1 m/s). This tolerance
-allows small parked-target velocity noise; it is not a measured hardware threshold.
-All three lock parameters accept finite nonnegative values and are node parameters,
-not launch arguments. The 40 ms minimum exit delay gives the gimbal more time to
-acquire each aim point before firing.
-
-Every non-target frame clears `fire`, sets `turn_to_hit`, and sets the existing
-`CVTarget.patrol` bit to identify an idle look. Target points leave both bits
-clear, including non-firing coasting estimates. The wire layout is unchanged;
-see the [CV_TARGET flag table](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--aim-point-and-fire-decision).
-`type_c_based_patrol` remains false by default. There is no Jetson patrol or
-patrol launch argument.
-
-Idle looks choose the last enemy until 3 s after the 0.5 s target hold expires,
-or follow the gun for 2 s after REF_SYS reports a hit; the newer capture/event
-wins. The last predicted position is held once aiming expires. Firmware owns
-the hit turn; the Jetson never converts its chassis-relative hit angle. With
-neither recent event, `idle_direction:=zone` (default) looks at the enemy's
-starting zone. `idle_direction:=hold` follows the current gun direction while
-continuing non-firing frames, so hit-turn permission remains live.
+Idle points are `odom` positions (`z` is `idle_height_m`, 0.15, near armor
+height). They choose the last enemy until 3 s after the target hold expires, or
+follow the gun for 2 s after REF_SYS reports a hit; the newer capture/event
+wins. Firmware owns the hit turn; the Jetson never converts its
+chassis-relative hit angle. With neither recent event, `idle_direction:=zone`
+(default) looks at the enemy's starting zone; `idle_direction:=hold` follows the
+current gun direction. Idle yaw changes at most `idle_rate_rad_s` (0.5 rad/s); a
+new bearing must differ by `idle_switch_rad` (pi/6) before adoption. Hit/hold
+looks follow the actual gun so firmware hit turns are not pulled back. Before
+muzzle TF is available, idle frames retain the last commanded point, or the
+muzzle bearing at boot. Zone points are field coordinates transformed through
+`nav_odom -> odom` before publication; until that transform exists the point
+holds the muzzle bearing and never sends field coordinates as raw points.
 
 The enemy zone is the other team's configured start, without a mirroring assumption.
 An optional `idle_zone` array `[x, y]` overrides that look point in field
@@ -824,19 +684,27 @@ measured values per robot (or the Spooky Scrim's (∓3.53, -0.426)) through
 `AUTO_LAUNCH_ARGS` in `/etc/thornbots/launch.env`
 ([startup options](../isaac-ros-startup/README.md#use)). The same arguments feed
 navigation, EKF/AMCL/saved-map SLAM priors, and operator field registration.
-The REF_SYS blue flag chooses the opposing team's pair for idle looks,
-including late blue arrival and missing/zero robot ID. Idle points use
-`idle_height_m` (0.15), near armor height. Idle yaw commands change at most
-`idle_rate_rad_s` (0.5 rad/s); a new bearing must differ by `idle_switch_rad`
-(pi/6, 30 degrees) before adoption. Hit/hold looks follow the actual gun so
-firmware hit turns are not pulled back. Target aiming retains its existing
-response. Before muzzle TF is available, idle frames retain the last commanded
-point, or the enemy zone at boot.
+The REF_SYS blue flag chooses the opposing team's pair, including late blue
+arrival and missing/zero robot ID.
 
 For the robot service, set `AUTO_LAUNCH_ARGS="idle_direction:=hold"` in
 `/etc/thornbots/launch.env` and restart `thornbots` to hold instead of looking
 at the zone. The startup script already forwards these arguments to
 `auto.launch.py`; other launch settings can remain in the same variable.
+
+Anything that publishes a `TargetState` can drive the node: `target_tracker` on
+hardware, `sim`'s `target_state_truth` on the aiming bench. For simulated
+lockstep initialization, `deterministic_epoch_zero:=true` on `auto.launch.py`
+makes this node wait for an actual zero `/clock` before creating its publish and
+watchdog timers. It then publishes a reliable, transient-local zero-stamped
+`~/epoch_zero_ready`; an advanced first clock leaves it unready. This
+acknowledges only this node's timer setup, not TF, localization, input
+consumption, or readiness of the rest of the robot stack.
+
+`LatencyStat` logs the age of each state on arrival as a diagnostic.
+Parameters that drove the Jetson planner (lead, latencies, spin, chase, panel
+margin, fire lock and gates, `v_muzzle`, `gimbal_lag_s`, `robot_pose_topic`) no
+longer exist; their firmware equivalents are in the MCBV3 README.
 
 ### Initial field position
 
@@ -1096,13 +964,13 @@ Optional stale-CV diagnostic, in a separate run (not an acceptance requirement):
 ros2 run thornbots_pkg room_check --ros-args -p stale_cv:=true -p duration_s:=30.0
 ```
 
-First show a tracked panel and let active CV decisions arrive. During collection,
+First show a tracked panel and let tracked states arrive. During collection,
 **you** stop the YOLO launch in its terminal; keep tracker, aiming and relay running.
-The command never kills any process. It counts actual `/cv/target` fire decisions
-and checks that they cease within 200 ms of the last YOLO receipt, with at least
-one second of continued consumer observation. Aim-only and idle traffic are
-allowed. No firing before the stop, no producer stop or no subsequent consumer
-decisions reports NOT EXERCISED. The line is INFO with PASS/FAIL in its detail
+The command never kills any process. It counts `/cv/target_state` messages as
+active decisions and checks that none arrive more than 200 ms after the last
+YOLO receipt, with at least one second of continued observation of `/cv/target`
+idle looks as proof the aiming node still runs. No state before the stop, no
+producer stop or no subsequent idle looks reports NOT EXERCISED. The line is INFO with PASS/FAIL in its detail
 and never changes the run's verdict or exit code. This diagnostic uses observer receipt time,
-not capture time or the exact process-stop time; the aiming node's 150 ms
-capture-age firing gate is tested separately.
+not capture time or the exact process-stop time; the MCB's 150 ms detection-age
+firing gate is the firmware's.

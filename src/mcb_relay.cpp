@@ -19,9 +19,12 @@
 // localization_odom_topic and raw_odom_topic drift apart and the offset is
 // confident, compensated for UART lag and the MCB's read delay
 // (mcb_relay_core.hpp's Relocalizer). Stamped with when the MCB should adopt it.
-// cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
-// The aim point carries the fire decision (fire, delay_ms), so this is the only
-// CV relay. See README.md for design rationale.
+// cv_target: republishes the idle look point on cv_target_input_topic onto
+// cv_target_output_topic. target_state: republishes the tracker's TargetState on
+// target_state_input_topic onto target_state_output_topic; the MCB plans aim and
+// fire from it. Both set type_c_based_patrol from this node's parameter of that
+// name (MCB patrol permission), the only place it is decided.
+// These are the only CV relays. See README.md for design rationale.
 
 #include <algorithm>
 #include <cstdint>
@@ -29,6 +32,7 @@
 #include <string>
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
+#include "dji_serial_bridge/msg/target_state.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -38,6 +42,7 @@ namespace thornbots_pkg
 {
 
 using dji_serial_bridge::msg::CVTarget;
+using dji_serial_bridge::msg::TargetState;
 using geometry_msgs::msg::PointStamped;
 using nav_msgs::msg::Odometry;
 
@@ -74,6 +79,12 @@ public:
     const auto cv_target_in = declare_parameter("cv_target_input_topic", std::string("/cv/target"));
     const auto cv_target_out = declare_parameter(
       "cv_target_output_topic", std::string("/dji_serial_bridge/cv_target"));
+    const auto target_state_in = declare_parameter(
+      "target_state_input_topic", std::string("/cv/target_state"));
+    const auto target_state_out = declare_parameter(
+      "target_state_output_topic", std::string("/dji_serial_bridge/target_state"));
+    // MCB patrol permission for both outputs; false stops firmware patrol.
+    type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
     relocalizer_ = Relocalizer(p);
 
     relocalize_pub_ = create_publisher<PointStamped>(relocalize_out, 10);
@@ -87,14 +98,30 @@ public:
     cv_target_pub_ = create_publisher<CVTarget>(cv_target_out, rclcpp::SensorDataQoS());
     cv_target_sub_ = create_subscription<CVTarget>(
       cv_target_in, rclcpp::SensorDataQoS(),
-      [this](CVTarget::ConstSharedPtr m) {cv_target_pub_->publish(*m);});
+      [this](CVTarget::ConstSharedPtr m) {
+        CVTarget out = *m;
+        out.type_c_based_patrol = type_c_based_patrol_;
+        cv_target_pub_->publish(out);
+      });
+
+    // Matches dji_serial_bridge_node's SensorDataQoS ~/target_state sub.
+    target_state_pub_ = create_publisher<TargetState>(target_state_out, rclcpp::SensorDataQoS());
+    target_state_sub_ = create_subscription<TargetState>(
+      target_state_in, rclcpp::SensorDataQoS(),
+      [this](TargetState::ConstSharedPtr m) {
+        TargetState out = *m;
+        out.type_c_based_patrol = type_c_based_patrol_;
+        target_state_pub_->publish(out);
+      });
 
     RCLCPP_INFO(
       get_logger(),
       "mcb_relay ready\n  %s vs %s -> %s (threshold=%gm, max_std=%gm)\n"
-      "  %s -> %s (aim + fire decision)",
+      "  %s -> %s (idle look)\n  %s -> %s (target state), type_c_based_patrol=%s",
       localization_odom_topic.c_str(), raw_odom_topic.c_str(), relocalize_out.c_str(),
-      p.error_threshold_m, p.max_std_m, cv_target_in.c_str(), cv_target_out.c_str());
+      p.error_threshold_m, p.max_std_m, cv_target_in.c_str(), cv_target_out.c_str(),
+      target_state_in.c_str(), target_state_out.c_str(),
+      type_c_based_patrol_ ? "true" : "false");
   }
 
 private:
@@ -130,10 +157,13 @@ private:
 
   Relocalizer relocalizer_;
   std::string navigation_frame_;
+  bool type_c_based_patrol_ = false;
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;
+  rclcpp::Publisher<TargetState>::SharedPtr target_state_pub_;
+  rclcpp::Subscription<TargetState>::SharedPtr target_state_sub_;
 };
 
 }  // namespace thornbots_pkg

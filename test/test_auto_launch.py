@@ -31,3 +31,17 @@ def test_argument_defaults_resolve_in_declaration_order(arguments):
         declaration.visit(context)
     expected = 'false' if not arguments else 'true'
     assert context.launch_configurations['mmm_room'] == expected
+
+
+REMOVED_ARGUMENTS = {
+    'lead_enabled', 'firmware_latency_s', 'chase_settle_s', 'chase_margin_s',
+    'v_muzzle', 'fire_lock_s', 'gimbal_lag_s',
+}
+
+
+def test_planner_arguments_moved_to_the_mcb_are_not_declared():
+    description = PythonLaunchDescriptionSource(str(LAUNCH)).get_launch_description(
+        LaunchContext())
+    declared = {e.name for e in description.entities if isinstance(e, DeclareLaunchArgument)}
+    assert not declared & REMOVED_ARGUMENTS
+    assert {'cv_target_publish_rate_hz', 'idle_direction', 'target_state_topic'} <= declared

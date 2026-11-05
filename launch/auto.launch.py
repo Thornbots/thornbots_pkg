@@ -166,9 +166,8 @@ def generate_launch_description():
 
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         'enable_cv_target_bridge', default_value='true',
-        description="Launch point_to_cv_target to turn target_tracker's "
-        '/cv/target_state into the odom-frame /cv/target aim '
-        'point. '
+        description='Launch point_to_cv_target to publish the odom-frame '
+        '/cv/target idle look point while no target is tracked. '
         'Independent of real_hardware -- consumed by mcb_relay '
         "when real_hardware:=true, and by sim's cv_head_aim "
         'node when running against sim.'
@@ -178,40 +177,10 @@ def generate_launch_description():
         description='Singular PanelDetection topic (the picked panel), '
         'published by target_selector for debugging and rviz.'
     )
-    lead_enabled_arg = DeclareLaunchArgument(
-        'lead_enabled', default_value='true',
-        description='point_to_cv_target: apply the intercept/lead solve '
-        'to /cv/target. false emits the raw '
-        'target_tracker center with no prediction -- one '
-        'param flip between before/after.'
-    )
-    firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.020',
-        description='point_to_cv_target: MCB indexer request to projectile '
-        'exit, the FIRING_LATENCY_TIME the firmware subtracts (20 ms, timed on '
-        'the robot). Wire fire delays never go under min_fire_delay_s (0.040).'
-    )
-    chase_settle_s_arg = DeclareLaunchArgument(
-        'chase_settle_s', default_value='-1.0',
-        description='point_to_cv_target: negative selects spin alignment gating; '
-                    'nonnegative sets chase settling time, seconds')
-    chase_margin_s_arg = DeclareLaunchArgument(
-        'chase_margin_s', default_value='0.0',
-        description='point_to_cv_target: time margin before a panel stops facing, seconds')
-    fire_lock_s_arg = DeclareLaunchArgument(
-        'fire_lock_s', default_value='1.0',
-        description='point_to_cv_target: same-track confident tracking required '
-        'before firing, seconds; 0 disables the wait')
-    v_muzzle_arg = DeclareLaunchArgument(
-        'v_muzzle', default_value='22.0',
-        description='point_to_cv_target: projectile speed (m/s) used only '
-        "to size the intercept solve's prediction horizon -- "
-        'Type-C computes the real ballistic flight time.'
-    )
     cv_target_publish_rate_hz_arg = DeclareLaunchArgument(
         'cv_target_publish_rate_hz', default_value='40.0',
-        description='point_to_cv_target: /cv/target publish rate, '
-        'decoupled from the ~60Hz detection rate.'
+        description='point_to_cv_target: idle look publish rate '
+        '(also its bench tick), decoupled from the ~60Hz detection rate.'
     )
     idle_direction_arg = DeclareLaunchArgument(
         'idle_direction', default_value='zone', choices=['zone', 'hold'],
@@ -285,11 +254,8 @@ def generate_launch_description():
     target_state_topic_arg = DeclareLaunchArgument(
         'target_state_topic', default_value='/cv/target_state',
         description='TargetState topic published by target_tracker, '
-        "consumed by point_to_cv_target's intercept solver."
+        'relayed to the MCB by mcb_relay and read by point_to_cv_target.'
     )
-    gimbal_lag_s_arg = DeclareLaunchArgument(
-        'gimbal_lag_s', default_value='0.05',
-        description='Measured setpoint-to-gimbal response delay, seconds')
     pose_latency_s_arg = DeclareLaunchArgument(
         'pose_latency_s', default_value='0.01',
         description='Tracker capture-time pose transport calibration, seconds')
@@ -370,8 +336,9 @@ def generate_launch_description():
         additional_env=shm_env,
     )
 
-    # Turns target_tracker's /cv/target_state into the odom-frame CVTarget
-    # published on /cv/target -- consumed by mcb_relay (real_hardware:=true)
+    # Publishes odom-frame idle-look CVTargets on /cv/target while no target
+    # state is fresh (the MCB plans aim and fire from /cv/target_state,
+    # relayed by mcb_relay) -- consumed by mcb_relay (real_hardware:=true)
     # and/or sim's cv_head_aim node (real_hardware:=false), so this runs in
     # both modes; enable_cv_target_bridge lets you disable it if you intend
     # to publish /cv/target yourself.
@@ -385,30 +352,10 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'deterministic_epoch_zero': ParameterValue(
                 LaunchConfiguration('deterministic_epoch_zero'), value_type=bool),
-            'gimbal_lag_s': ParameterValue(
-                LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
             'odom_frame': LaunchConfiguration('aim_frame'),
             'navigation_frame': LaunchConfiguration('odom_frame'),
-            'lead_enabled': ParameterValue(
-                LaunchConfiguration('lead_enabled'), value_type=bool
-            ),
-            'firmware_latency_s': ParameterValue(
-                LaunchConfiguration('firmware_latency_s'), value_type=float
-            ),
-            'chase_settle_s': ParameterValue(
-                LaunchConfiguration('chase_settle_s'), value_type=float
-            ),
-            'chase_margin_s': ParameterValue(
-                LaunchConfiguration('chase_margin_s'), value_type=float
-            ),
-            'v_muzzle': ParameterValue(
-                LaunchConfiguration('v_muzzle'), value_type=float
-            ),
-            'fire_lock_s': ParameterValue(
-                LaunchConfiguration('fire_lock_s'), value_type=float
-            ),
             'cv_target_publish_rate_hz': ParameterValue(
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
@@ -674,15 +621,13 @@ def generate_launch_description():
         localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
-        lead_enabled_arg, firmware_latency_s_arg, chase_settle_s_arg,
-        chase_margin_s_arg, v_muzzle_arg, fire_lock_s_arg,
         cv_target_publish_rate_hz_arg, idle_direction_arg,
         red_start_x_arg, red_start_y_arg, blue_start_x_arg, blue_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
         enable_waypoint_nav_arg, nav_route_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
+        tf_max_wait_s_arg, pose_latency_s_arg,
         dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
