@@ -717,3 +717,76 @@ TEST_F(NodeTest, FloatRearHitsHoldButSentinelDoesNot)
     EXPECT_NE(node->idle_source(), tp::IdleLook::Source::Hit);
   }
 }
+
+TEST_F(NodeTest, EpochZeroStartsTimersOnlyAfterClockAndAcknowledges)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("deterministic_epoch_zero", true);
+  options.append_parameter_override("tick_topic", "/epoch_test/tick");
+  options.append_parameter_override("idle_direction", "hold");
+  auto node = std::make_shared<Probe>(options);
+  auto peer = std::make_shared<rclcpp::Node>("epoch_test_peer");
+  auto clock = peer->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
+  int ready_count = 0;
+  int tick_count = 0;
+  auto ready = peer->create_subscription<Header>(
+    "/point_to_cv_target/epoch_zero_ready", rclcpp::QoS(1).reliable().transient_local(),
+    [&](Header::ConstSharedPtr h) {
+      EXPECT_EQ(h->stamp.sec, 0);
+      EXPECT_EQ(h->stamp.nanosec, 0u);
+      ++ready_count;
+    });
+  auto tick = peer->create_subscription<Header>(
+    "/epoch_test/tick", 10, [&](Header::ConstSharedPtr) {++tick_count;});
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  executor.add_node(peer);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  rosgraph_msgs::msg::Clock msg;
+  while (ready_count == 0 && std::chrono::steady_clock::now() < deadline) {
+    clock->publish(msg);
+    executor.spin_some();
+  }
+  ASSERT_EQ(ready_count, 1);
+  EXPECT_EQ(tick_count, 0);
+  msg.clock.nanosec = 25000000;
+  while (tick_count == 0 && std::chrono::steady_clock::now() < deadline) {
+    clock->publish(msg);
+    executor.spin_some();
+  }
+  EXPECT_EQ(tick_count, 1);
+}
+
+TEST_F(NodeTest, EpochZeroRejectsWallTime)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("deterministic_epoch_zero", true);
+  EXPECT_THROW(std::make_shared<Probe>(options), std::invalid_argument);
+}
+
+TEST_F(NodeTest, EpochZeroRejectsAnAdvancedClock)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("deterministic_epoch_zero", true);
+  options.append_parameter_override("idle_direction", "hold");
+  auto node = std::make_shared<Probe>(options);
+  auto peer = std::make_shared<rclcpp::Node>("epoch_invalid_peer");
+  auto clock = peer->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
+  int ready_count = 0;
+  auto ready = peer->create_subscription<Header>(
+    "/point_to_cv_target/epoch_zero_ready", rclcpp::QoS(1).reliable().transient_local(),
+    [&](Header::ConstSharedPtr) {++ready_count;});
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  executor.add_node(peer);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  rosgraph_msgs::msg::Clock msg;
+  msg.clock.nanosec = 1000000;
+  while (std::chrono::steady_clock::now() < deadline) {
+    clock->publish(msg);
+    executor.spin_some();
+  }
+  EXPECT_EQ(ready_count, 0);
+}

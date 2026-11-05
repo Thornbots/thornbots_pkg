@@ -352,6 +352,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_cv_target_bridge')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'deterministic_epoch_zero': ParameterValue(
+                LaunchConfiguration('deterministic_epoch_zero'), value_type=bool),
             'gimbal_lag_s': ParameterValue(
                 LaunchConfiguration('gimbal_lag_s'), value_type=float),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
@@ -585,6 +587,8 @@ def generate_launch_description():
     return LaunchDescription([
         # First: later defaults (mmm_room, autosave_map) read real_hardware.
         real_hardware_arg,
+        DeclareLaunchArgument('deterministic_epoch_zero', default_value='false',
+                              description='Initialize the aim timers at simulated clock zero.'),
         DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
                               description='Request host Wi-Fi disconnect at confirmed battle.'),
         DeclareLaunchArgument('match_wifi_request_file',

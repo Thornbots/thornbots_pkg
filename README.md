@@ -638,6 +638,13 @@ The node aims from `/cv/target_state` and `/dji_serial_bridge/pose` alone, so an
 against `target_timeout_s` (0.5); confidence and `robot_track_id` come off
 the message.
 
+For simulated lockstep initialization, `deterministic_epoch_zero:=true` on
+`auto.launch.py` makes this node wait for an actual zero `/clock` before
+creating its publish and watchdog timers. It then publishes a reliable,
+transient-local zero-stamped `~/epoch_zero_ready`; an advanced first clock
+leaves it unready. This acknowledges only this node’s timer setup, not TF,
+localization, input consumption, or readiness of the rest of the robot stack.
+
 A timer publishes at `cv_target_publish_rate_hz` (40) from cached state. The
 tracker runs at detection rate (up to ~60Hz), faster than Type-C's PID needs.
 `compute_aim_point()` handles three cases per tick:
