@@ -187,15 +187,23 @@ def generate_launch_description():
         description='With no recent enemy or hit: face the enemy start zone, or hold.'
     )
 
-    # Temporary unmeasured scrim defaults; per-robot overrides belong in launch.env.
+    # Starting Zone centres of the ARCC Season 2 3v3 Battlefield (sim's default
+    # world); surveyed per-robot overrides belong in launch.env.
     red_start_x_arg = DeclareLaunchArgument(
-        'red_start_x', default_value='-3.53', description='Red start field X, metres.')
+        'red_start_x', default_value='-5.25', description='Red start field X, metres.')
     red_start_y_arg = DeclareLaunchArgument(
-        'red_start_y', default_value='-0.426', description='Red start field Y, metres.')
+        'red_start_y', default_value='-3.0', description='Red start field Y, metres.')
     blue_start_x_arg = DeclareLaunchArgument(
-        'blue_start_x', default_value='3.53', description='Blue start field X, metres.')
+        'blue_start_x', default_value='5.25', description='Blue start field X, metres.')
     blue_start_y_arg = DeclareLaunchArgument(
-        'blue_start_y', default_value='-0.426', description='Blue start field Y, metres.')
+        'blue_start_y', default_value='-3.0', description='Blue start field Y, metres.')
+
+    enable_waypoint_nav_arg = DeclareLaunchArgument(
+        'enable_waypoint_nav', default_value='true',
+        description="Launch thornbots_nav's waypoint_nav, which publishes the "
+        "MCB's NAV_GOAL route (real_hardware:=true only). The MCB follows it "
+        'only with the right switch up.'
+    )
 
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
@@ -301,6 +309,23 @@ def generate_launch_description():
         parameters=[{'navigation_frame': LaunchConfiguration('odom_frame')}],
         output='screen',
         condition=IfCondition(real_hardware),
+        additional_env=shm_env,
+    )
+
+    # NAV_GOAL route on the bridge's ~/nav_goal, judged on /localization/odom
+    # in the same navigation frame mcb_relay relocalizes; see thornbots_nav's README.
+    waypoint_nav_node = Node(
+        package='thornbots_nav',
+        executable='waypoint_nav',
+        name='waypoint_nav',
+        output='screen',
+        condition=IfCondition(PythonExpression([
+            "'", real_hardware, "'.lower() == 'true' and '",
+            LaunchConfiguration('enable_waypoint_nav'), "'.lower() == 'true'"])),
+        parameters=[
+            os.path.join(get_package_share_directory('thornbots_nav'), 'config', 'route.yaml'),
+            {'use_sim_time': use_sim_time,
+             'goal_frame': LaunchConfiguration('odom_frame')}],
         additional_env=shm_env,
     )
 
@@ -592,13 +617,14 @@ def generate_launch_description():
         cv_target_publish_rate_hz_arg, idle_direction_arg,
         red_start_x_arg, red_start_y_arg, blue_start_x_arg, blue_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
+        enable_waypoint_nav_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg,
         dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
-            mcb_relay_node, mmm_node,
+            mcb_relay_node, waypoint_nav_node, mmm_node,
             target_selector_node, target_tracker_node, point_to_cv_target_node,
             lidar_node, lidar_self_filter_node,
             odom_tf_broadcaster_node,

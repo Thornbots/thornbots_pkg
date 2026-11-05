@@ -20,18 +20,24 @@ localization backends are in
 | `match_wifi_guard` | `/dji_serial_bridge/ref_sys` | opt-in host Wi-Fi disconnect request |
 | `mmm` | PING, `/scan`, `/odom`, `/joint_states`, referee team, `map->root` TF | PING, SLAM reset and localization save service; opt-in host shutdown request |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/cv/target_state` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/target_state`; sets `type_c_based_patrol` on both |
+| `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/localization/odom` | `dji_serial_bridge_node`'s `~/nav_goal` (route waypoint, `nav_odom`) |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/ref_sys` | `/cv/target` (`CVTarget`, odom frame, idle look, only while no target is tracked); `tick_topic`, `state_ack_topic` if set (bench only) |
 
-`auto.launch.py` starts the relay with `real_hardware:=true`; sim's `mcb_*`
-launches also start it explicitly. `point_to_cv_target` runs in both modes
-because `/cv/target` idle looks also feed sim's `cv_head_aim`. The CV nodes each have an
-enable arg (`enable_target_selector`, `enable_target_tracker`,
-`enable_cv_target_bridge`) and a ROS-free core for unit tests
-(`include/thornbots_pkg/*_core.hpp`, or `armor_tracker.hpp` for
-`target_tracker`). Runtime nodes are C++ (`src/`); launch and the operator
-workflow use Python.
+`mcb_relay` forwards outgoing target state, idle looks and relocalization messages to the bridge;
+pose translation, target selection and aiming consume the incoming pose/referee
+topics shown above. `auto.launch.py` starts the relay with
+`real_hardware:=true`; sim's `mcb_*` launches also start it explicitly. It
+also starts `waypoint_nav` with `real_hardware:=true` unless
+`enable_waypoint_nav:=false`; the MCB follows its NAV_GOALs only with the
+remote's right switch up.
+`point_to_cv_target` runs in both modes because
+`/cv/target` idle looks also feed sim's `cv_head_aim`. The CV nodes each have an enable
+arg (`enable_target_selector`, `enable_target_tracker`,
+`enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
+`armor_tracker.hpp` for `target_tracker`). Runtime nodes are C++ (`src/`);
+launch and the operator workflow use Python.
 
 ```
 /dji_serial_bridge/pose --[pose_translator]--> /odom --[odom_tf_broadcaster]--> odom->root TF
@@ -43,6 +49,7 @@ TF: map -> nav_odom -> odom -> root
 PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, map_autosaver/save_now
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
+/localization/odom + ref_sys           --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
 /cv/target_state --[mcb_relay]--> dji_serial_bridge_node (~/target_state) --> UART --> MCB (plans aim and fire)
@@ -137,10 +144,7 @@ perfect state. [target_tracker](#target_tracker) owns correction up to the
 state's publish-time stamp; the MCB [propagates and plans](../firmware/MCBV3/README.md#aim-and-navigation-odometry)
 from there. Detections, target state and aim use raw,
 never-relocalized `odom`, since
-`map` corrections can jump mid-shot; `map` is for strategy. Raw aim
-coordinates use the start-relative, field-aligned
-[wire frame](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types);
-navigation's `nav_odom` does not change them. See
+`map` corrections can jump mid-shot; `map` is for strategy. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
 and [remaining work](../docs/ROADMAP.md#b-hit-while-we-move).
 
@@ -188,6 +192,11 @@ false (a blank pose graph) and `autosave_map` defaults to
 `/odom` regardless.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 `sentry_localization`.
+
+Raw aim coordinates use the start-relative, field-aligned wire frame; see
+[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+Navigation's corrected `nav_odom` does not change raw `odom` or the CV aim
+frame.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
@@ -291,7 +300,9 @@ position and velocity, everything else zero. It has to be non-zero so the
 navigation EKF can weight `/scan_odom` (rf2o) against the raw POSE input.
 Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in `ekf.yaml`
 fuses the adapter's explicit fixed navigation heading and excludes raw position.
-The adapter does not transform `/odom` yaw through EKF-derived TF.
+The adapter does not transform `/odom` yaw through EKF-derived TF. Its fused
+navigation pose is `nav_odom`; it does not replace raw `/odom` or
+`odom->root`.
 
 `root` is heading-fixed, a deviation from REP 105's body-fixed `base_link`,
 as rf2o's `fixed_heading` and the EKF assume.
@@ -563,8 +574,9 @@ while CV continues in the unchanged raw frame.
   the sent offset. UART has no acknowledgement: losing all four sends is still
   possible, and hardware mailbox/timing validation remains open.
 
-The bridge packs the navigation position into the existing `RELOCALIZE`
-payload.
+The bridge packs the navigation position using the existing `RELOCALIZE`
+payload. Raw POSE and the CV aim frame remain unchanged. See the
+[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
 
 `cv_target` and `target_state` are straight republishes except for
 `type_c_based_patrol`, which this node owns: its parameter of that name
@@ -658,10 +670,16 @@ muzzle bearing at boot. Zone points are field coordinates transformed through
 holds the muzzle bearing and never sends field coordinates as raw points.
 
 The enemy zone is the other team's configured start, without a mirroring assumption.
+An optional `idle_zone` array `[x, y]` overrides that look point in field
+coordinates, through the same navigation-to-raw-frame composition.
+An empty array keeps the team start. The parked sim fixture uses this to look
+south toward its field-safe target paths without changing team starts.
 `auto.launch.py` owns the four defaults: `red_start_x`, `red_start_y`,
 `blue_start_x`, `blue_start_y` (metres from field centre, x toward blue's base,
-y left). The temporary unmeasured scrim defaults remain red (-3.53, -0.426)
-and blue (3.53, -0.426); configure surveyed values per robot through
+y left). The defaults are the Starting Zone centres of the ARCC Season 2 3v3
+Battlefield, red (-5.25, -3.0) and blue (5.25, -3.0), matching sim's default
+[world](../sim/README.md#the-world-frame); they are not surveyed, so configure
+measured values per robot (or the Spooky Scrim's (∓3.53, -0.426)) through
 `AUTO_LAUNCH_ARGS` in `/etc/thornbots/launch.env`
 ([startup options](../isaac-ros-startup/README.md#use)). The same arguments feed
 navigation, EKF/AMCL/saved-map SLAM priors, and operator field registration.
@@ -783,7 +801,9 @@ against the explicit team's start after restart. `--raw-odom` is retained as an
 explicit alias for the wheel default. Room rehearsal uses `mapping "$SESSION" --room`,
 then the same boot/save steps, `prepare-room "$SESSION"`, and `localize
 "$SESSION"`. Room mode keeps boot coordinates and raw passthrough. It makes no
-field registration claim.
+field registration claim. Map the whole field with the
+[broad-field coverage](../sentry_localization/README.md#broad-field-coverage) procedure; a central loop alone
+leaves much of the field unseen.
 
 Room sessions record `frame_mode: room` and `team: null`; boot/save and
 `prepare-room` need no referee (including `robot_id: 0`). On a practice field
@@ -854,8 +874,8 @@ use_rf2o:=false`), which makes no map-localization claim.
 
 Offline workflow regression checks: `python3 -m pytest test/test_operator_workflow.py`
 from this package. Package suites run through `colcon test
---packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises clock ordering, TF,
-serialization, seed gating and parked scan updates.
+--packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises
+clock ordering, TF, serialization, seed gating and parked scan updates.
 
 ## Parked room health check
 
