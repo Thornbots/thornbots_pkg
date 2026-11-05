@@ -236,6 +236,12 @@ def generate_launch_description():
         'only with the right switch up.'
     )
 
+    nav_route_arg = DeclareLaunchArgument(
+        'nav_route', default_value='pipes', choices=['pipes', 'square'],
+        description='waypoint_nav route: pipes (match) or square (off-field '
+        '1 m test square from the start, +x then +y).'
+    )
+
     enable_target_selector_arg = DeclareLaunchArgument(
         'enable_target_selector', default_value='true',
         description="Launch target_selector to turn roi_depth_query's "
@@ -359,7 +365,8 @@ def generate_launch_description():
         parameters=[
             os.path.join(get_package_share_directory('thornbots_nav'), 'config', 'route.yaml'),
             {'use_sim_time': use_sim_time,
-             'goal_frame': LaunchConfiguration('odom_frame')}],
+             'goal_frame': LaunchConfiguration('odom_frame'),
+             'route': LaunchConfiguration('nav_route')}],
         additional_env=shm_env,
     )
 
@@ -672,7 +679,7 @@ def generate_launch_description():
         cv_target_publish_rate_hz_arg, idle_direction_arg,
         red_start_x_arg, red_start_y_arg, blue_start_x_arg, blue_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
-        enable_waypoint_nav_arg,
+        enable_waypoint_nav_arg, nav_route_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
         tf_max_wait_s_arg, pose_latency_s_arg, gimbal_lag_s_arg,
