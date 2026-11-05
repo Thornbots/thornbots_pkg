@@ -30,8 +30,9 @@ pose translation, target selection and aiming consume the incoming pose/referee
 topics shown above. `auto.launch.py` starts the relay with
 `real_hardware:=true`; sim's `mcb_*` launches also start it explicitly. It
 also starts `waypoint_nav` with `real_hardware:=true` unless
-`enable_waypoint_nav:=false`; the MCB follows its NAV_GOALs only with the
-remote's right switch up.
+`enable_waypoint_nav:=false`; `nav_route:=square` selects its off-field
+[test square](../nav_pkg/README.md#square-test-route). The MCB follows its
+NAV_GOALs only with the remote's right switch up.
 `point_to_cv_target` runs in both modes because
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
