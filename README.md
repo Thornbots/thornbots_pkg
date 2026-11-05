@@ -24,16 +24,14 @@ localization backends are in
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a non-firing idle look); `tick_topic` if set (bench only) |
 
-`mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
-pose translation, target selection and aiming consume the incoming pose/referee
-topics shown above. `auto.launch.py` starts the relay with
-`real_hardware:=true`; sim's `mcb_*` launches also start it explicitly.
-`point_to_cv_target` runs in both modes because
-`/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
-arg (`enable_target_selector`, `enable_target_tracker`,
-`enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
-`armor_tracker.hpp` for `target_tracker`). Runtime nodes are C++ (`src/`);
-launch and the operator workflow use Python.
+`auto.launch.py` starts the relay with `real_hardware:=true`; sim's `mcb_*`
+launches also start it explicitly. `point_to_cv_target` runs in both modes
+because `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an
+enable arg (`enable_target_selector`, `enable_target_tracker`,
+`enable_cv_target_bridge`) and a ROS-free core for unit tests
+(`include/thornbots_pkg/*_core.hpp`, or `armor_tracker.hpp` for
+`target_tracker`). Runtime nodes are C++ (`src/`); launch and the operator
+workflow use Python.
 
 ```
 /dji_serial_bridge/pose --[pose_translator]--> /odom --[odom_tf_broadcaster]--> odom->root TF
@@ -138,7 +136,10 @@ perfect state. [target_tracker](#target_tracker) owns correction up to the
 state's publish-time stamp; [point_to_cv_target](#point_to_cv_target)
 extrapolates to the fire horizon. Detections, target state and aim use raw,
 never-relocalized `odom`, since
-`map` corrections can jump mid-shot; `map` is for strategy. See
+`map` corrections can jump mid-shot; `map` is for strategy. Raw aim
+coordinates use the start-relative, field-aligned
+[wire frame](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types);
+navigation's `nav_odom` does not change them. See
 [firmware/frame coordination](../ros2_dji_serial_bridge/README.md#aim-and-navigation-frames)
 and [remaining work](../docs/ROADMAP.md#b-hit-while-we-move).
 
@@ -186,11 +187,6 @@ false (a blank pose graph) and `autosave_map` defaults to
 `/odom` regardless.
 Both, plus `map_file`, `load_map` and `odom_frame`, pass through to
 `sentry_localization`.
-
-Raw aim coordinates use the start-relative, field-aligned wire frame; see
-[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
-Navigation's corrected `nav_odom` does not change raw `odom` or the CV aim
-frame.
 
 ```bash
 ros2 launch thornbots_pkg auto.launch.py real_hardware:=false localization_mode:=mapping load_map:=false
@@ -294,9 +290,7 @@ position and velocity, everything else zero. It has to be non-zero so the
 navigation EKF can weight `/scan_odom` (rf2o) against the raw POSE input.
 Unset fields (z, roll, pitch, yaw) stay 0; `odom0_config` in `ekf.yaml`
 fuses the adapter's explicit fixed navigation heading and excludes raw position.
-The adapter does not transform `/odom` yaw through EKF-derived TF. Its fused
-navigation pose is `nav_odom`; it does not replace raw `/odom` or
-`odom->root`.
+The adapter does not transform `/odom` yaw through EKF-derived TF.
 
 `root` is heading-fixed, a deviation from REP 105's body-fixed `base_link`,
 as rf2o's `fixed_heading` and the EKF assume.
@@ -568,9 +562,8 @@ while CV continues in the unchanged raw frame.
   the sent offset. UART has no acknowledgement: losing all four sends is still
   possible, and hardware mailbox/timing validation remains open.
 
-The bridge packs the navigation position using the existing `RELOCALIZE`
-payload. Raw POSE and the CV aim frame remain unchanged. See the
-[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+The bridge packs the navigation position into the existing `RELOCALIZE`
+payload.
 
 `cv_target` is a straight republish, and carries the fire decision with the
 aim point it was solved for.
@@ -725,11 +718,9 @@ no gravity, drag or elevation (Type-C handles those). `lead_enabled:=false`
 aims at the current estimate and fires untimed.
 
 `fire` and `delay_ms` ride on `CVTarget`, so the fire decision reaches the
-MCB in the same frame as the aim it was solved for, and the MCB runs
-`delay_ms` from receiving that frame (no stamp crosses the wire; see
-`ros2_dji_serial_bridge/UART_PROTOCOL.md`). The firmware already reads the
-15-byte payload; remaining timing and frame work is tracked in the bridge's
-[firmware status](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
+MCB in the same frame as the aim it was solved for; the MCB runs `delay_ms`
+from receiving that frame. Remaining timing and frame work is tracked in the
+bridge's [firmware status](../ros2_dji_serial_bridge/README.md#where-the-firmware-stands).
 
 Both horizons start from this tick's `now - state.header.stamp`, not
 `LatencyStat.mean`, because cached state ages between arrival and tick, by
@@ -741,9 +732,7 @@ state stamp and world-frame `RobotPose.vel_x/vel_y`. If the state stamp is
 newer than the newest raw POSE, the latest transform is used and its position
 is carried at that velocity to the state's stamp. The lookup does not wait,
 since waiting in a callback starves `/tf`. Localization corrections do not
-move the CV target or change the outgoing aim frame. See
-[UART_PROTOCOL message types](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types)
-for the wire frame and payload contract.
+move the CV target or change the outgoing aim frame.
 
 Our own motion: the shot leaves where we are at the aim horizon and carries
 our velocity, so `plan_shot()` returns the intercept less our motion over
@@ -786,8 +775,7 @@ spin mode, and the norm of `TargetState.velocity` (centre velocity in odom,
 including z) must be below `fire_stationary_speed_mps` (0.1 m/s). This tolerance
 allows small parked-target velocity noise; it is not a measured hardware threshold.
 All three lock parameters accept finite nonnegative values and are node parameters,
-not launch arguments. The 40 ms minimum exit delay gives the gimbal more time to
-acquire each aim point before firing.
+not launch arguments.
 
 Every non-target frame clears `fire`, sets `turn_to_hit`, and sets the existing
 `CVTarget.patrol` bit to identify an idle look. Target points leave both bits
@@ -922,9 +910,7 @@ against the explicit team's start after restart. `--raw-odom` is retained as an
 explicit alias for the wheel default. Room rehearsal uses `mapping "$SESSION" --room`,
 then the same boot/save steps, `prepare-room "$SESSION"`, and `localize
 "$SESSION"`. Room mode keeps boot coordinates and raw passthrough. It makes no
-field registration claim. Map the whole field with the
-[broad-field coverage](../sentry_localization/README.md#broad-field-coverage) procedure; a central loop alone
-leaves much of the field unseen.
+field registration claim.
 
 Room sessions record `frame_mode: room` and `team: null`; boot/save and
 `prepare-room` need no referee (including `robot_id: 0`). On a practice field
@@ -995,8 +981,8 @@ use_rf2o:=false`), which makes no map-localization claim.
 
 Offline workflow regression checks: `python3 -m pytest test/test_operator_workflow.py`
 from this package. Package suites run through `colcon test
---packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises
-clock ordering, TF, serialization, seed gating and parked scan updates.
+--packages-select thornbots_pkg sentry_localization`. ROS rehearsal additionally exercises clock ordering, TF,
+serialization, seed gating and parked scan updates.
 
 ## Parked room health check
 
