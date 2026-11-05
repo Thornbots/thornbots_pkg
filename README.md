@@ -20,6 +20,7 @@ localization backends are in
 | `match_wifi_guard` | `/dji_serial_bridge/ref_sys` | opt-in host Wi-Fi disconnect request |
 | `mmm` | PING, `/scan`, `/odom`, `/joint_states`, referee team, `map->root` TF | PING, SLAM reset and localization save service; opt-in host shutdown request |
 | `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target` |
+| `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/localization/odom` | `dji_serial_bridge_node`'s `~/nav_goal` (route waypoint, `nav_odom`) |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/pose` | `/cv/target` (`CVTarget`, odom frame, aim + fire decision, or a non-firing idle look); `tick_topic` if set (bench only) |
@@ -27,7 +28,10 @@ localization backends are in
 `mcb_relay` forwards outgoing aim and relocalization messages to the bridge;
 pose translation, target selection and aiming consume the incoming pose/referee
 topics shown above. `auto.launch.py` starts the relay with
-`real_hardware:=true`; sim's `mcb_*` launches also start it explicitly.
+`real_hardware:=true`; sim's `mcb_*` launches also start it explicitly. It
+also starts `waypoint_nav` with `real_hardware:=true` unless
+`enable_waypoint_nav:=false`; the MCB follows its NAV_GOALs only with the
+remote's right switch up.
 `point_to_cv_target` runs in both modes because
 `/cv/target` also feeds sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
@@ -45,6 +49,7 @@ TF: map -> nav_odom -> odom -> root
 PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, map_autosaver/save_now
 
 /localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
+/localization/odom + ref_sys           --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
 /cv/target_state (armor model, confidence, track id) --[point_to_cv_target]--> /cv/target (odom frame)
@@ -805,10 +810,16 @@ starting zone. `idle_direction:=hold` follows the current gun direction while
 continuing non-firing frames, so hit-turn permission remains live.
 
 The enemy zone is the other team's configured start, without a mirroring assumption.
+An optional `idle_zone` array `[x, y]` overrides that look point in field
+coordinates, through the same navigation-to-raw-frame composition.
+An empty array keeps the team start. The parked sim fixture uses this to look
+south toward its field-safe target paths without changing team starts.
 `auto.launch.py` owns the four defaults: `red_start_x`, `red_start_y`,
 `blue_start_x`, `blue_start_y` (metres from field centre, x toward blue's base,
-y left). The temporary unmeasured scrim defaults remain red (-3.53, -0.426)
-and blue (3.53, -0.426); configure surveyed values per robot through
+y left). The defaults are the Starting Zone centres of the ARCC Season 2 3v3
+Battlefield, red (-5.25, -3.0) and blue (5.25, -3.0), matching sim's default
+[world](../sim/README.md#the-world-frame); they are not surveyed, so configure
+measured values per robot (or the Spooky Scrim's (∓3.53, -0.426)) through
 `AUTO_LAUNCH_ARGS` in `/etc/thornbots/launch.env`
 ([startup options](../isaac-ros-startup/README.md#use)). The same arguments feed
 navigation, EKF/AMCL/saved-map SLAM priors, and operator field registration.
