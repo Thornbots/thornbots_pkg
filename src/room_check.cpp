@@ -163,8 +163,11 @@ public:
       const auto yolo_topic = declare_parameter("yolo_topic", std::string("/detections_output"));
       subscribe<vision_msgs::msg::Detection2DArray>(yolo_topic, "YOLO",
         [this](const auto &) {stale_.detection(wall_now());});
-      subscribe<dji_serial_bridge::msg::CVTarget>("/cv/target", "CV decisions",
-        [this](const auto & m) {stale_.decision(wall_now(), m.fire);});
+      // Tracked states are the active decisions; idle looks show the aiming node still runs.
+      subscribe<dji_serial_bridge::msg::TargetState>("/cv/target_state", "CV states",
+        [this](const auto &) {stale_.decision(wall_now(), true);});
+      subscribe<dji_serial_bridge::msg::CVTarget>("/cv/target", "CV idle looks",
+        [this](const auto &) {stale_.decision(wall_now(), false);});
     }
     if (camera_) {
       subscribe<sensor_msgs::msg::Image>(
