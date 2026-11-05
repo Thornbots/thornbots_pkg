@@ -9,7 +9,8 @@ CV selection/tracking/aiming comes first; do not front-run firing work unless as
 ## Scope
 
 Own robot description, pose translation, target selection/tracking and aiming.
-Only `mcb_relay` publishes outgoing aim/relocalization to the UART bridge.
+Only `mcb_relay` publishes outgoing aim/relocalization to the UART bridge;
+`thornbots_nav`'s `waypoint_nav` publishes NAV_GOAL.
 Localization belongs to `sentry_localization`, worlds to `sim`.
 Keep runtime nodes C++; Python is for launch, with ROS-free cores unit-tested.
 
