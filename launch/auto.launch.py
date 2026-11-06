@@ -559,6 +559,7 @@ def generate_launch_description():
             'seed_require_team': LaunchConfiguration('seed_require_team'),
             'seed_explicit_team': LaunchConfiguration('seed_explicit_team'),
             'seed_known_team': LaunchConfiguration('seed_known_team'),
+            'ekf_frequency_hz': LaunchConfiguration('ekf_frequency_hz'),
             'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
@@ -610,6 +611,10 @@ def generate_launch_description():
         DeclareLaunchArgument('nav_tf_lookup_lag_s', default_value='0.0',
                               description='Age of the nav_odom->odom TF read when '
                               'allow_latest_tf is false: more than the EKF period (33 ms).'),
+        DeclareLaunchArgument(
+            'ekf_frequency_hz', default_value='',
+            description='Simulation only; forwarded to sentry_localization (empty keeps '
+            'config/ekf.yaml).'),
         DeclareLaunchArgument(
             'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
             description='Simulation only; forwarded to sentry_localization to start the EKF '

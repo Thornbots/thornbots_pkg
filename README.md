@@ -664,7 +664,16 @@ where to look otherwise.
 - **Tick**: the publish timer (`cv_target_publish_rate_hz`, 40) fires whether or
   not a point is sent. With `tick_topic` set (the lockstep benches) a `Header`
   goes out every tick, its frame empty when no point was sent;
-  `state_ack_topic` echoes each consumed state's header.
+  `state_ack_topic` echoes each consumed state's header. `cv_target_none_topic` (also
+  lockstep only) publishes a `Header` on each tick that sent no point, so a chain can wait on
+  that or the bridge's TX ack. `target_selector` and `target_tracker` do the same on
+  `target_state_none_topic` for a frame that yields no TargetState, `mcb_relay` on
+  `relocalize_none_topic` for a localization sample that sends no RELOCALIZE, and
+  `waypoint_nav` on `nav_goal_none_topic` for a tick without a goal. The simulator also sets
+  `target_tracker`'s `process_delay_s`/`process_align_s` (run each update that long after the
+  capture, stamped at that time instead of whenever the TF arrived) and `mcb_relay`'s
+  `message_clock` (decide on the localization sample's stamp, not this node's clock) and
+  `raw_odom_ack_topic`. All are off by default; the robot is unchanged.
 
 Idle points are `odom` positions (`z` is `idle_height_m`, 0.15, near armor
 height). They choose the last enemy until 3 s after the target hold expires, or

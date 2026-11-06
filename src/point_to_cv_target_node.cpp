@@ -87,6 +87,9 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
+  // Lockstep: a Header at each tick that sent no CV_TARGET, so a chain waits on that
+  // or the bridge's TX ack, whichever the tick produced.
+  const auto none_topic = declare_parameter("cv_target_none_topic", std::string(""));
 
   allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
   tf_lookup_lag_s_ = declare_parameter("tf_lookup_lag_s", 0.0);
@@ -114,6 +117,9 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   if (!tick_topic.empty()) {
     tick_pub_ = create_publisher<std_msgs::msg::Header>(tick_topic, 10);
     send_tick_ = [this](const std_msgs::msg::Header & h) {tick_pub_->publish(h);};
+  }
+  if (!none_topic.empty()) {
+    none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 10);
   }
   if (!state_ack_topic.empty()) {
     state_ack_pub_ = create_publisher<std_msgs::msg::Header>(state_ack_topic, 100);
@@ -331,6 +337,11 @@ void PointToCvTarget::on_publish_tick()
     last_sent_point_ = point;
     out_frame = out.header.frame_id;
     send_target_(out);
+  }
+  if (none_pub_ && out_frame.empty()) {
+    std_msgs::msg::Header none;
+    none.stamp = now;
+    none_pub_->publish(none);
   }
   if (send_tick_) {
     // Empty frame means no point was published; otherwise name its output frame.

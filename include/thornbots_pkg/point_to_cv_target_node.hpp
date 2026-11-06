@@ -96,7 +96,7 @@ protected:
 
 private:
   rclcpp::Publisher<dji_serial_bridge::msg::CVTarget>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_, none_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr fallback_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
