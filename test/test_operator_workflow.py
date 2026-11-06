@@ -955,3 +955,38 @@ def test_alignment_explicit_launch_args_override_captured_starts(tmp_path, asymm
     manifest = workflow.check(output)
     assert manifest['initial_root'] == [-4.2, 1.5, 0]
     assert manifest['team_starts'] == dict(asymmetric_starts, red_start_y=1.5)
+
+
+@pytest.mark.parametrize('value,expected', [
+    (None, True), ('true', True), ('1', True), ('false', False), ('0', False), ('', False),
+])
+def test_foxglove_switch(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv('THORNBOTS_FOXGLOVE', raising=False)
+    else:
+        monkeypatch.setenv('THORNBOTS_FOXGLOVE', value)
+    assert workflow.foxglove_enabled() is expected
+
+
+def test_foxglove_off_runs_launch_without_a_bridge(monkeypatch, tmp_path, capsys):
+    import subprocess
+    import sys
+    import time
+
+    processes = []
+    real_popen = subprocess.Popen
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setenv('THORNBOTS_FOXGLOVE', 'false')
+    monkeypatch.setattr(workflow.subprocess, 'Popen', launch)
+    monkeypatch.setattr(workflow, 'convergence', lambda args: time.sleep(0.2))
+    workflow.run_stack(
+        NS(command='localize'), tmp_path,
+        [sys.executable, '-c', 'import time; time.sleep(0.5)'],
+    )
+    assert len(processes) == 1
+    assert 'LOCALIZE PASS' in capsys.readouterr().out

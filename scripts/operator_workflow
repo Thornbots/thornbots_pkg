@@ -37,6 +37,11 @@ FOXGLOVE_COMMAND = [
 ]
 
 
+def foxglove_enabled():
+    """THORNBOTS_FOXGLOVE (default on): robot workflows serve the read-only bridge."""
+    return os.environ.get("THORNBOTS_FOXGLOVE", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
 # Contract boot chassis heading for both teams. POSE carries no chassis yaw yet, so
 # captured boot chassis_yaw is a 0 placeholder; registration trusts this instead.
 BOOT_CHASSIS_YAW = math.pi / 2
@@ -1055,7 +1060,10 @@ def run_stack(args, session, launch):
         process = subprocess.Popen(launch, start_new_session=True)
         for signum in (signal.SIGINT, signal.SIGTERM):
             old_handlers[signum] = signal.signal(signum, stop)
-        bridge = subprocess.Popen(FOXGLOVE_COMMAND, start_new_session=True)
+        bridge = (
+            subprocess.Popen(FOXGLOVE_COMMAND, start_new_session=True)
+            if foxglove_enabled() else None
+        )
         if args.command == "localize":
             for name, value in dict(
                 max_std=0.25,
@@ -1070,7 +1078,7 @@ def run_stack(args, session, launch):
             convergence(args)
             if process.poll() is not None:
                 raise RuntimeError("robot launch stopped before parked gates completed")
-            if not stopping and bridge.poll() is not None:
+            if not stopping and bridge is not None and bridge.poll() is not None:
                 raise RuntimeError(f"Foxglove bridge exited {bridge.returncode}")
             print(
                 "LOCALIZE PASS: parked gates passed; verify scan/wall overlap before use.",
@@ -1086,7 +1094,7 @@ def run_stack(args, session, launch):
                 flush=True,
             )
         while process.poll() is None:
-            if not stopping and bridge.poll() is not None:
+            if not stopping and bridge is not None and bridge.poll() is not None:
                 raise RuntimeError(f"Foxglove bridge exited {bridge.returncode}")
             if runtime:
                 runtime.ros.spin_once(runtime.node, timeout_sec=0.1)

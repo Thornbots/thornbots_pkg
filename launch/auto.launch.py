@@ -28,7 +28,10 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable,
+    UnsetEnvironmentVariable,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
@@ -111,6 +114,16 @@ def generate_launch_description():
         'udp_only: every node this file launches goes UDP, at the cost of '
         "the intra-host fast path. Does not reach sentry_localization's "
         'nodes or the camera launch, which keep the container default.'
+    )
+
+    remote_dds_arg = DeclareLaunchArgument(
+        'remote_dds', default_value=EnvironmentVariable(
+            'THORNBOTS_REMOTE_DDS', default_value='false'),
+        description='true/false. Off (default): DDS discovery stays on this machine '
+        '(ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST, no initial peers), so '
+        '`ros2` on another machine sees nothing. On: the container profile and '
+        'the robots Tailscale initial peers, as before. Defaults to '
+        '$THORNBOTS_REMOTE_DDS. See README.md, Remote DDS.'
     )
 
     # Mapping starts a blank graph; field registration belongs to localization's workflow.
@@ -266,25 +279,45 @@ def generate_launch_description():
         'never matched to a newer camera pose. See README.md.'
     )
 
+    # Remote-DDS switch. A profile that lists initial peers defeats
+    # ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST (measured 2026-11-06), so off means
+    # both: the range, and no default profile / the peers-free pinned one.
+    remote = ["'", LaunchConfiguration('remote_dds'), "'.lower() in ('1', 'true')"]
+    remote_on = IfCondition(PythonExpression(remote))
+    remote_off = UnlessCondition(PythonExpression(remote))
+    dds_environment = [
+        SetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST',
+                               condition=remote_off),
+        UnsetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE', condition=remote_off),
+        UnsetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', condition=remote_on),
+        SetEnvironmentVariable(
+            'FASTRTPS_DEFAULT_PROFILES_FILE',
+            EnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
+                                default_value='/etc/fastdds/profile.xml'),
+            condition=remote_on),
+    ]
+
     # Transport per node. udp_env pins a node to UDP; shm_env leaves it on the
     # container default (shared memory + UDP) unless dds_transport:=udp_only.
     # A node on SHM is nearly invisible to `ros2 topic`/`node` run in a shell
     # on the same machine, so the small high-level publishers -- pose, odom,
     # TF, CV target -- stay on UDP and remain greppable from a robot terminal.
-    # Remote machines see every node either way.
-    # See config/fastdds_udp_only.xml.
-    udp_profile = os.path.join(pkg_share, 'config', 'fastdds_udp_only.xml')
-    udp_env = {'FASTRTPS_DEFAULT_PROFILES_FILE': udp_profile}
+    # With remote_dds on, remote machines see every node either way.
+    # See config/fastdds_udp_only.xml (peers) and _local.xml (loopback only).
+    # Pinned nodes also take SYSTEM_DEFAULT: LOCALHOST would add SHM back.
+    udp_profile = PythonExpression([
+        "'", os.path.join(pkg_share, 'config', 'fastdds_udp_only'),
+        "' + ('' if ", *remote, " else '_local') + '.xml'"])
+    udp_env = {'FASTRTPS_DEFAULT_PROFILES_FILE': udp_profile,
+               'ROS_AUTOMATIC_DISCOVERY_RANGE': 'SYSTEM_DEFAULT'}
+    # Keys are substitutions: unpinned nodes get two unused variables instead, so
+    # they inherit the environment block above unchanged.
+    pinned = ["'", LaunchConfiguration('dds_transport'), "' == 'udp_only'"]
     shm_env = {
-        'FASTRTPS_DEFAULT_PROFILES_FILE': PythonExpression([
-            "'", udp_profile, "' if '", LaunchConfiguration('dds_transport'),
-            "' == 'udp_only' else '",
-            EnvironmentVariable(
-                'FASTRTPS_DEFAULT_PROFILES_FILE',
-                default_value='/etc/fastdds/profile.xml',
-            ),
-            "'",
-        ])
+        PythonExpression(["'FASTRTPS_DEFAULT_PROFILES_FILE' if ", *pinned,
+                          " else 'THORNBOTS_DDS_UNPINNED_PROFILE'"]): udp_profile,
+        PythonExpression(["'ROS_AUTOMATIC_DISCOVERY_RANGE' if ", *pinned,
+                          " else 'THORNBOTS_DDS_UNPINNED_RANGE'"]): 'SYSTEM_DEFAULT',
     }
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -618,7 +651,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
             description='Simulation only; forwarded to sentry_localization to start the EKF '
-            'at once from this team\'s start.'),
+            "at once from this team's start."),
         DeclareLaunchArgument(
             'seed_from_raw_odom', default_value='true', choices=['true', 'false'],
             description='Forwarded to sentry_localization: seed EKF x/y from fresh '
@@ -646,6 +679,7 @@ def generate_launch_description():
         lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
         lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
         odom_frame_arg, aim_frame_arg, dds_transport_arg,
+        remote_dds_arg, *dds_environment,
         localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,

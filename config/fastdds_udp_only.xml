@@ -18,7 +18,8 @@ Two reasons a node runs on this instead of the default:
   SIGTERM.
 
 initialPeersList is a copy of the default profile's. Adding a robot means
-editing both files.
+editing both files. This is the remote_dds:=true profile; fastdds_udp_only_local.xml
+(no peers) is the default. Keep the two in step.
 -->
 <dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
     <profiles>

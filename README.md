@@ -219,6 +219,25 @@ on UDP; it does not reach `sentry_localization`'s nodes or the camera launch.
 ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 ```
 
+#### Remote DDS and Foxglove
+
+Defaults: **remote DDS off, Foxglove on** (robot); sim, tests and agent
+containers have both off. Off-machine DDS is the `remote_dds` launch argument,
+default `$THORNBOTS_REMOTE_DDS` (the robot service sets it from `launch.env`).
+Off means discovery stays on the machine: `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`,
+no profile with initial peers, and the six pinned publishers (and
+`sentry_localization`'s two) on loopback-only `*_local.xml` twins of the UDP-only
+profiles. A peers list defeats the range (measured), so the two go together, and
+pinned nodes keep `SYSTEM_DEFAULT` because `LOCALHOST` would put shared memory
+back. **`ros2 topic`/`node` from a laptop over Tailscale therefore sees nothing
+by default**; Foxglove (`ws://<robot IP>:8765`) is the way to look at a robot.
+To get cross-machine `ros2` back, set `THORNBOTS_REMOTE_DDS=true` in the
+robot's `/etc/thornbots/launch.env` and `sudo systemctl restart thornbots`
+(or `remote_dds:=true` on a manual launch). Foxglove is
+`THORNBOTS_FOXGLOVE` (`launch.env`, default `true`) for the service and
+`operator_workflow`; `sim` launches take `foxglove:=`, default `$THORNBOTS_FOXGLOVE`
+or false. A shell inspecting the stack must use the same setting as the stack.
+
 `lidar_serial_port` and `lidar_baudrate` (`/dev/ttyUSB0`, `115200`) configure
 the RPLIDAR A2M8 on hardware. `lidar_inverted` (default `true`, the lidar is
 mounted upside down) sets the driver's `inverted`, which negates scan angles so
@@ -777,7 +796,8 @@ off during a session invalidates that attempt; keep it on throughout.
 
 ### Preparation and rationale
 
-`mapping` and `localize` also start `foxglove_bridge` on port 8765. Connect
+`mapping` and `localize` also start `foxglove_bridge` on port 8765 (skipped
+with `THORNBOTS_FOXGLOVE=false`). Connect
 Foxglove to `ws://<robot IP>:8765` (use an SSH tunnel if the port is unreachable).
 Only `connectionGraph` and `assets` capabilities are enabled: clients cannot
 publish, call services or access parameters. The workflow stops its bridge
