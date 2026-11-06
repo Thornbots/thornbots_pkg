@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+Peers-free twin of fastdds_udp_only.xml: UDP only, no initial peers. This is
+what auto.launch.py pins the six small publishers to while remote_dds is off
+(the default); the twin with the robots' Tailscale peers is used when it is on.
+
+An initialPeersList makes a participant send SPDP unicast to every listed
+address, and that defeats ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST (measured
+2026-11-06: ~125 packets/s to the Tailscale peers from one `ros2 topic pub` on the
+cable profile, with or without the range; 0 here). Pair this file with the
+range. Keep the transport block identical to fastdds_udp_only.xml.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <transport_descriptors>
+            <transport_descriptor>
+                <transport_id>udp_only</transport_id>
+                <type>UDPv4</type>
+                <maxInitialPeersRange>32</maxInitialPeersRange>
+                <interfaceWhiteList>
+                    <address>127.0.0.1</address>
+                </interfaceWhiteList>
+            </transport_descriptor>
+        </transport_descriptors>
+        <participant profile_name="udp_only_participant" is_default_profile="true">
+            <rtps>
+                <useBuiltinTransports>false</useBuiltinTransports>
+                <userTransports>
+                    <transport_id>udp_only</transport_id>
+                </userTransports>
+                <builtin>
+                    <discovery_config>
+                        <discoveryProtocol>SIMPLE</discoveryProtocol>
+                    </discovery_config>
+                    <initialPeersList>
+                        <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+                    </initialPeersList>
+                </builtin>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>

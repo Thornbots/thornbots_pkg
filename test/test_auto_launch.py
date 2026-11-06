@@ -45,3 +45,54 @@ def test_planner_arguments_moved_to_the_mcb_are_not_declared():
     declared = {e.name for e in description.entities if isinstance(e, DeclareLaunchArgument)}
     assert not declared & REMOVED_ARGUMENTS
     assert {'cv_target_publish_rate_hz', 'idle_direction', 'target_state_topic'} <= declared
+
+
+def _description_with(environment, arguments=None):
+    """Perform the DDS environment actions and return the resulting process env."""
+    import os
+    from launch.actions import SetEnvironmentVariable, UnsetEnvironmentVariable
+
+    context = LaunchContext()
+    context.launch_configurations.update(arguments or {})
+    description = PythonLaunchDescriptionSource(str(LAUNCH)).get_launch_description(context)
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(environment)
+    try:
+        for entity in description.entities:
+            if isinstance(entity, DeclareLaunchArgument):
+                entity.visit(context)
+        for entity in description.entities:
+            if isinstance(entity, (SetEnvironmentVariable, UnsetEnvironmentVariable)):
+                entity.visit(context)
+        return dict(context.environment)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+def test_remote_dds_is_off_by_default():
+    environment = _description_with({'FASTRTPS_DEFAULT_PROFILES_FILE': '/etc/fastdds/profile.xml'})
+    assert environment['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+    assert 'FASTRTPS_DEFAULT_PROFILES_FILE' not in environment
+
+
+@pytest.mark.parametrize('how', ['argument', 'environment'])
+def test_remote_dds_on_restores_the_peer_profile(how):
+    environment = {'ROS_AUTOMATIC_DISCOVERY_RANGE': 'LOCALHOST'}
+    arguments = {}
+    if how == 'argument':
+        arguments['remote_dds'] = 'true'
+    else:
+        environment['THORNBOTS_REMOTE_DDS'] = '1'
+    result = _description_with(environment, arguments)
+    assert 'ROS_AUTOMATIC_DISCOVERY_RANGE' not in result
+    assert result['FASTRTPS_DEFAULT_PROFILES_FILE'] == '/etc/fastdds/profile.xml'
+
+
+def test_pinned_profiles_have_peers_only_when_remote():
+    config = Path(__file__).parents[1] / 'config'
+    assert '100.' in (config / 'fastdds_udp_only.xml').read_text()
+    local = (config / 'fastdds_udp_only_local.xml').read_text()
+    import re
+    assert set(re.findall(r'<address>([^<]+)</address>', local)) == {'127.0.0.1'}
