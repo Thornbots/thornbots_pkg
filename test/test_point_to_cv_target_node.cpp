@@ -396,6 +396,7 @@ TEST_F(NodeTest, StrictTfReadsTheStampedPoseAndCountsMissesOnlyOnceTheTreeIsUp)
   rclcpp::NodeOptions options;
   options.append_parameter_override("allow_latest_tf", false);
   options.append_parameter_override("tf_lookup_lag_s", 0.02);
+  options.append_parameter_override("nav_tf_lookup_lag_s", 0.02);
   auto node = std::make_shared<Probe>(options);
   std::vector<CVTarget> points;
   std::vector<Header> ticks;
