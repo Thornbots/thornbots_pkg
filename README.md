@@ -230,7 +230,7 @@ and loopback UDP, initial peers `127.0.0.1` only) as the default profile, no
 `sentry_localization`'s two) on loopback-only `*_local.xml` twins of the UDP-only
 profiles with `SYSTEM_DEFAULT`. The `LOCALHOST` range is not used: measured
 2026-11-06, a 21-node sim stack under it, with or without the profile, timed out
-its first lockstep hold, and without it passes (cause not isolated). A peers list
+its first lockstep hold, and without it passes (the stack has 37 DDS participants and LOCALHOST peers 4). A peers list
 sends discovery to the robots, so off means no Tailscale peers in any profile.
 **`ros2 topic`/`node` from a laptop over Tailscale therefore sees nothing
 by default**; Foxglove (`ws://<robot IP>:8765`) is the way to look at a robot.

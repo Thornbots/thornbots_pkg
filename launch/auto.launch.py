@@ -280,10 +280,11 @@ def generate_launch_description():
     )
 
     # Remote-DDS switch. A profile that lists the robots' Tailscale peers sends SPDP
-    # to them. ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST kept it local but a 21-node sim
-    # stack under it timed out its first lockstep hold (`cv_target ... no ack`,
-    # 2026-11-06; cause not isolated). Off therefore means config/fastdds_local.xml
-    # (SHM and loopback UDP, peers 127.0.0.1) with no range; pinned nodes use _local.xml.
+    # to them. ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST kept it local but peers only 4
+    # participant ids, and the 37-participant sim stack timed out its first lockstep hold
+    # (`cv_target ... no ack`, 2026-11-06). Off therefore means config/fastdds_local.xml
+    # (SHM and loopback UDP, peers 127.0.0.1, range 128) and no range; pinned nodes use
+    # _local.xml.
     remote = ["'", LaunchConfiguration('remote_dds'), "'.lower() in ('1', 'true')"]
     remote_on = IfCondition(PythonExpression(remote))
     remote_off = UnlessCondition(PythonExpression(remote))
