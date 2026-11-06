@@ -647,6 +647,15 @@ where to look otherwise.
   cannot refresh it. While active it sends no `CVTarget`, so the MCB's held
   target state decides; each tick still remembers the tracked centre (the
   measured `panel` while unconverged) as the last enemy.
+- **Latest-TF fallback (hardware default).** The idle look reads the newest
+  `odom<-muzzle` and `nav_odom->odom` transforms (`allow_latest_tf:=true`), which
+  is what the robot runs and keeps. The simulator's lockstep E2E sets
+  `allow_latest_tf:=false`, where each lookup is stamped `tf_lookup_lag_s` (0.1 s,
+  more than the EKF's 33 ms period plus UART delivery) before the tick, never the
+  newest TF that happened to arrive. A stamped lookup that fails after its frame
+  pair has resolved once is counted on `~/latest_tf_fallbacks` (`UInt32`,
+  latched) and the E2E harness fails the run on any count. A first stamp of zero
+  is refused, since tf2 would read it as "newest".
 - **Idle**: otherwise each tick publishes an `odom` `CVTarget`
   ([idle look contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#cv_target-id1--idle-look-point))
   with `turn_to_hit` set. `type_c_based_patrol` is left to

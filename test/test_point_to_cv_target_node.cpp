@@ -69,6 +69,17 @@ public:
     tf.transform.rotation.w = 1.0;
     tf_buffer_->setTransform(tf, "test", true);
   }
+  void gun_transform_at(int64_t ns, double x)
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.stamp = rclcpp::Time(ns, RCL_ROS_TIME);
+    tf.header.frame_id = odom_frame_;
+    tf.child_frame_id = muzzle_frame_;
+    tf.transform.translation.x = x;
+    tf.transform.rotation.w = 1.0;
+    tf_buffer_->setTransform(tf, "test", false);
+  }
+  uint32_t fallbacks() const {return latest_tf_fallbacks_;}
   void navigation_transform(double team_start_x, double team_start_y)
   {
     geometry_msgs::msg::TransformStamped tf;
@@ -378,6 +389,42 @@ TEST_F(NodeTest, MissingGunTransformDoesNotPublishAFieldPointAsRaw)
   node->on_ref_sys(ref);
   node->on_publish_tick();
   EXPECT_FLOAT_EQ(points.back().x, 0.0);
+}
+
+TEST_F(NodeTest, StrictTfReadsTheStampedPoseAndCountsMissesOnlyOnceTheTreeIsUp)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("allow_latest_tf", false);
+  options.append_parameter_override("tf_lookup_lag_s", 0.02);
+  auto node = std::make_shared<Probe>(options);
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->time_ns(140000000);
+  node->on_publish_tick();  // no TF at all yet: not a fallback
+  EXPECT_EQ(node->fallbacks(), 0u);
+  node->navigation_transform(0.0, 0.0);  // static, so only the stamped gun TF is in question
+  node->gun_transform_at(100000000, 1.0);
+  node->gun_transform_at(130000000, 4.0);
+  node->on_publish_tick();  // 120 ms lies inside [100, 130] ms: interpolated, not latest
+  EXPECT_EQ(node->fallbacks(), 0u);
+  EXPECT_EQ(points.size(), 2u);
+  node->time_ns(300000000);
+  node->on_publish_tick();  // 280 ms is past the newest TF: the robot would fall back to latest
+  EXPECT_GE(node->fallbacks(), 1u);
+}
+
+TEST_F(NodeTest, DefaultTfStaysOnTheNewestTransformAndCountsNothing)
+{
+  auto node = std::make_shared<Probe>(rclcpp::NodeOptions());
+  node->gun_transform_at(100000000, 1.0);
+  node->time_ns(900000000);
+  std::vector<CVTarget> points;
+  std::vector<Header> ticks;
+  node->capture(&points, &ticks);
+  node->on_publish_tick();
+  EXPECT_EQ(node->fallbacks(), 0u);
+  EXPECT_EQ(points.size(), 1u);
 }
 
 TEST_F(NodeTest, FloatRearHitsHoldButSentinelDoesNot)

@@ -88,6 +88,14 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
 
+  allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
+  tf_lookup_lag_s_ = declare_parameter("tf_lookup_lag_s", 0.0);
+  if (!std::isfinite(tf_lookup_lag_s_) || tf_lookup_lag_s_ < 0.0) {
+    throw std::invalid_argument("tf_lookup_lag_s must be finite and nonnegative");
+  }
+  fallback_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
+  fallback_pub_->publish(std_msgs::msg::UInt32{});
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   // /tf shares this node's executor, so every lookup below is non-blocking: a
   // timeout wait in a callback starves /tf. See README.md.
@@ -179,11 +187,49 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
   }
 }
 
+geometry_msgs::msg::TransformStamped PointToCvTarget::lookup_tf(
+  const std::string & target, const std::string & source)
+{
+  if (allow_latest_tf_) {
+    return tf_buffer_->lookupTransform(target, source, tf2::TimePointZero);
+  }
+  const auto at = clock_now() - rclcpp::Duration::from_seconds(tf_lookup_lag_s_);
+  if (at.nanoseconds() <= 0) {
+    // A zero stamp means "newest" to tf2, which is exactly what this mode avoids.
+    throw tf2::LookupException("the simulation has not run " +
+      std::to_string(tf_lookup_lag_s_) + " s yet");
+  }
+  try {
+    auto tf = tf_buffer_->lookupTransform(target, source, at);
+    tf_seen_.insert(target + "<-" + source);
+    return tf;
+  } catch (const tf2::TransformException & ex) {
+    // A pair is still coming up until it first resolves; after that a miss is a
+    // point where the robot's latest-TF path would have been used.
+    if (tf_seen_.count(target + "<-" + source)) {
+      count_latest_tf_fallback();
+      if (latest_tf_fallbacks_ <= 20) {
+        RCLCPP_WARN(
+          get_logger(), "latest-TF fallback #%u for %s<-%s: %s", latest_tf_fallbacks_,
+          target.c_str(), source.c_str(), ex.what());
+      }
+    }
+    throw;
+  }
+}
+
+void PointToCvTarget::count_latest_tf_fallback()
+{
+  std_msgs::msg::UInt32 count;
+  count.data = ++latest_tf_fallbacks_;
+  fallback_pub_->publish(count);
+}
+
 std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
 {
   geometry_msgs::msg::TransformStamped tf;
   try {
-    tf = tf_buffer_->lookupTransform(odom_frame_, muzzle_frame_, tf2::TimePointZero);
+    tf = lookup_tf(odom_frame_, muzzle_frame_);
   } catch (const tf2::TransformException & ex) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
@@ -218,7 +264,7 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
   Vector3d zone = gun->first + Vector3d(3.0 * std::cos(gun->second),
     3.0 * std::sin(gun->second), 0.0);
   try {
-    const auto tf = tf_buffer_->lookupTransform(odom_frame_, navigation_frame_, tf2::TimePointZero);
+    const auto tf = lookup_tf(odom_frame_, navigation_frame_);
     const auto & t = tf.transform.translation;
     const auto & q = tf.transform.rotation;
     zone = quat_to_rot(q.x, q.y, q.z, q.w) *
