@@ -224,12 +224,15 @@ ros2 launch thornbots_pkg auto.launch.py dds_transport:=udp_only
 Defaults: **remote DDS off, Foxglove on** (robot); sim, tests and agent
 containers have both off. Off-machine DDS is the `remote_dds` launch argument,
 default `$THORNBOTS_REMOTE_DDS` (the robot service sets it from `launch.env`).
-Off means discovery stays on the machine: `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`,
-no profile with initial peers, and the six pinned publishers (and
+Off means discovery stays on the machine: `config/fastdds_local.xml` (shared memory
+and loopback UDP, initial peers `127.0.0.1` only) as the default profile, no
+`ROS_AUTOMATIC_DISCOVERY_RANGE`, and the six pinned publishers (and
 `sentry_localization`'s two) on loopback-only `*_local.xml` twins of the UDP-only
-profiles. A peers list defeats the range (measured), so the two go together, and
-pinned nodes keep `SYSTEM_DEFAULT` because `LOCALHOST` would put shared memory
-back. **`ros2 topic`/`node` from a laptop over Tailscale therefore sees nothing
+profiles with `SYSTEM_DEFAULT`. The `LOCALHOST` range is not used: measured
+2026-11-06, a 21-node sim stack under it, with or without the profile, timed out
+its first lockstep hold, and without it passes (cause not isolated). A peers list
+sends discovery to the robots, so off means no Tailscale peers in any profile.
+**`ros2 topic`/`node` from a laptop over Tailscale therefore sees nothing
 by default**; Foxglove (`ws://<robot IP>:8765`) is the way to look at a robot.
 To get cross-machine `ros2` back, set `THORNBOTS_REMOTE_DDS=true` in the
 robot's `/etc/thornbots/launch.env` and `sudo systemctl restart thornbots`

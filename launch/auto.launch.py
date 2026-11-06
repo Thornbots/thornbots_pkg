@@ -120,7 +120,7 @@ def generate_launch_description():
         'remote_dds', default_value=EnvironmentVariable(
             'THORNBOTS_REMOTE_DDS', default_value='false'),
         description='true/false. Off (default): DDS discovery stays on this machine '
-        '(ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST, no initial peers), so '
+        '(config/fastdds_local.xml, no Tailscale initial peers), so '
         '`ros2` on another machine sees nothing. On: the container profile and '
         'the robots Tailscale initial peers, as before. Defaults to '
         '$THORNBOTS_REMOTE_DDS. See README.md, Remote DDS.'
@@ -279,16 +279,19 @@ def generate_launch_description():
         'never matched to a newer camera pose. See README.md.'
     )
 
-    # Remote-DDS switch. A profile that lists initial peers defeats
-    # ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST (measured 2026-11-06), so off means
-    # both: the range, and no default profile / the peers-free pinned one.
+    # Remote-DDS switch. A profile that lists the robots' Tailscale peers sends SPDP
+    # to them. ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST kept it local but a 21-node sim
+    # stack under it timed out its first lockstep hold (`cv_target ... no ack`,
+    # 2026-11-06; cause not isolated). Off therefore means config/fastdds_local.xml
+    # (SHM and loopback UDP, peers 127.0.0.1) with no range; pinned nodes use _local.xml.
     remote = ["'", LaunchConfiguration('remote_dds'), "'.lower() in ('1', 'true')"]
     remote_on = IfCondition(PythonExpression(remote))
     remote_off = UnlessCondition(PythonExpression(remote))
     dds_environment = [
-        SetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST',
+        UnsetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', condition=remote_off),
+        SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
+                               os.path.join(pkg_share, 'config', 'fastdds_local.xml'),
                                condition=remote_off),
-        UnsetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE', condition=remote_off),
         UnsetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', condition=remote_on),
         SetEnvironmentVariable(
             'FASTRTPS_DEFAULT_PROFILES_FILE',
