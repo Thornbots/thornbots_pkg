@@ -36,6 +36,7 @@
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/header.hpp"
 #include "thornbots_pkg/mcb_relay_core.hpp"
 
 namespace thornbots_pkg
@@ -86,8 +87,21 @@ public:
     // MCB patrol permission for both outputs; false stops firmware patrol.
     type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
     relocalizer_ = Relocalizer(p);
+    // Lockstep simulation only: decide on the localization sample's own stamp, not this
+    // node's clock, which can trail the sample's by scheduling; and answer each raw
+    // odometry sample so the POSE probe knows the relay has it.
+    message_clock_ = declare_parameter("message_clock", false);
+    const auto odom_ack_topic = declare_parameter("raw_odom_ack_topic", std::string(""));
+    if (!odom_ack_topic.empty()) {
+      odom_ack_pub_ = create_publisher<std_msgs::msg::Header>(odom_ack_topic, 100);
+    }
 
     relocalize_pub_ = create_publisher<PointStamped>(relocalize_out, 10);
+    // Lockstep: a Header per localization sample that sends no RELOCALIZE.
+    const auto none_topic = declare_parameter("relocalize_none_topic", std::string(""));
+    if (!none_topic.empty()) {
+      none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 100);
+    }
     raw_odom_sub_ = create_subscription<Odometry>(
       raw_odom_topic, 10, [this](Odometry::ConstSharedPtr m) {raw_odom_callback(*m);});
     localization_odom_sub_ = create_subscription<Odometry>(
@@ -132,6 +146,9 @@ private:
     relocalizer_.add_odom(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
       msg.twist.twist.linear.x, msg.twist.twist.linear.y);
+    if (odom_ack_pub_) {
+      odom_ack_pub_->publish(msg.header);
+    }
   }
 
   void localization_odom_callback(const Odometry & msg)
@@ -139,8 +156,15 @@ private:
     const auto & cov = msg.pose.covariance;
     const auto out = relocalizer_.decide(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
-      std::max(cov[0], cov[7]), static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9);
+      std::max(cov[0], cov[7]),
+      message_clock_ ? stamp_s(msg.header.stamp) :
+      static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9);
     if (!out) {
+      if (none_pub_) {
+        std_msgs::msg::Header none;
+        none.stamp = now();
+        none_pub_->publish(none);
+      }
       return;
     }
     PointStamped point;
@@ -159,6 +183,8 @@ private:
   std::string navigation_frame_;
   bool type_c_based_patrol_ = false;
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_, odom_ack_pub_;
+  bool message_clock_ = false;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;
