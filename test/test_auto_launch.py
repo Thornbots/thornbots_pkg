@@ -73,8 +73,8 @@ def _description_with(environment, arguments=None):
 
 def test_remote_dds_is_off_by_default():
     environment = _description_with({'FASTRTPS_DEFAULT_PROFILES_FILE': '/etc/fastdds/profile.xml'})
-    assert environment['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
-    assert 'FASTRTPS_DEFAULT_PROFILES_FILE' not in environment
+    assert 'ROS_AUTOMATIC_DISCOVERY_RANGE' not in environment
+    assert environment['FASTRTPS_DEFAULT_PROFILES_FILE'].endswith('config/fastdds_local.xml')
 
 
 @pytest.mark.parametrize('how', ['argument', 'environment'])
@@ -93,6 +93,7 @@ def test_remote_dds_on_restores_the_peer_profile(how):
 def test_pinned_profiles_have_peers_only_when_remote():
     config = Path(__file__).parents[1] / 'config'
     assert '100.' in (config / 'fastdds_udp_only.xml').read_text()
-    local = (config / 'fastdds_udp_only_local.xml').read_text()
     import re
-    assert set(re.findall(r'<address>([^<]+)</address>', local)) == {'127.0.0.1'}
+    for name in ('fastdds_udp_only_local.xml', 'fastdds_local.xml'):
+        local = (config / name).read_text()
+        assert set(re.findall(r'<address>([^<]+)</address>', local)) == {'127.0.0.1'}
