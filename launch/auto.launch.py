@@ -552,6 +552,7 @@ def generate_launch_description():
             'seed_from_raw_odom': LaunchConfiguration('seed_from_raw_odom'),
             'seed_require_team': LaunchConfiguration('seed_require_team'),
             'seed_explicit_team': LaunchConfiguration('seed_explicit_team'),
+            'seed_known_team': LaunchConfiguration('seed_known_team'),
             'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
@@ -591,6 +592,10 @@ def generate_launch_description():
         DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
                               description='Practice navigation team without referee; '
                               'never bypasses the AMCL referee gate.'),
+        DeclareLaunchArgument(
+            'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
+            description='Simulation only; forwarded to sentry_localization to start the EKF '
+            'at once from this team\'s start.'),
         DeclareLaunchArgument(
             'seed_from_raw_odom', default_value='true', choices=['true', 'false'],
             description='Forwarded to sentry_localization: seed EKF x/y from fresh '
