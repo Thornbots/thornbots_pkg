@@ -90,8 +90,11 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 
   allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
   tf_lookup_lag_s_ = declare_parameter("tf_lookup_lag_s", 0.0);
-  if (!std::isfinite(tf_lookup_lag_s_) || tf_lookup_lag_s_ < 0.0) {
-    throw std::invalid_argument("tf_lookup_lag_s must be finite and nonnegative");
+  nav_tf_lookup_lag_s_ = declare_parameter("nav_tf_lookup_lag_s", 0.0);
+  if (!std::isfinite(tf_lookup_lag_s_) || tf_lookup_lag_s_ < 0.0 ||
+    !std::isfinite(nav_tf_lookup_lag_s_) || nav_tf_lookup_lag_s_ < 0.0)
+  {
+    throw std::invalid_argument("TF lookup lags must be finite and nonnegative");
   }
   fallback_pub_ = create_publisher<std_msgs::msg::UInt32>(
     "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
@@ -188,16 +191,16 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 }
 
 geometry_msgs::msg::TransformStamped PointToCvTarget::lookup_tf(
-  const std::string & target, const std::string & source)
+  const std::string & target, const std::string & source, double lag_s)
 {
   if (allow_latest_tf_) {
     return tf_buffer_->lookupTransform(target, source, tf2::TimePointZero);
   }
-  const auto at = clock_now() - rclcpp::Duration::from_seconds(tf_lookup_lag_s_);
+  const auto at = clock_now() - rclcpp::Duration::from_seconds(lag_s);
   if (at.nanoseconds() <= 0) {
     // A zero stamp means "newest" to tf2, which is exactly what this mode avoids.
     throw tf2::LookupException("the simulation has not run " +
-      std::to_string(tf_lookup_lag_s_) + " s yet");
+      std::to_string(lag_s) + " s yet");
   }
   try {
     auto tf = tf_buffer_->lookupTransform(target, source, at);
@@ -229,7 +232,7 @@ std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
 {
   geometry_msgs::msg::TransformStamped tf;
   try {
-    tf = lookup_tf(odom_frame_, muzzle_frame_);
+    tf = lookup_tf(odom_frame_, muzzle_frame_, tf_lookup_lag_s_);
   } catch (const tf2::TransformException & ex) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
@@ -264,7 +267,7 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
   Vector3d zone = gun->first + Vector3d(3.0 * std::cos(gun->second),
     3.0 * std::sin(gun->second), 0.0);
   try {
-    const auto tf = lookup_tf(odom_frame_, navigation_frame_);
+    const auto tf = lookup_tf(odom_frame_, navigation_frame_, nav_tf_lookup_lag_s_);
     const auto & t = tf.transform.translation;
     const auto & q = tf.transform.rotation;
     zone = quat_to_rot(q.x, q.y, q.z, q.w) *

@@ -62,7 +62,7 @@ protected:
   std::optional<std::pair<Vector3d, double>> gun_pose();
   // Throws tf2::TransformException; see allow_latest_tf_.
   geometry_msgs::msg::TransformStamped lookup_tf(
-    const std::string & target, const std::string & source);
+    const std::string & target, const std::string & source, double lag_s);
   void count_latest_tf_fallback();
   Vector3d idle_point_now(const rclcpp::Time & now);
   virtual rclcpp::Time clock_now() const {return get_clock()->now();}
@@ -86,7 +86,7 @@ protected:
   // Robot default true: take the newest TF. Simulation lockstep sets false so
   // a lookup is at a stamp, never at whatever TF happened to arrive last.
   bool allow_latest_tf_ = true;
-  double tf_lookup_lag_s_ = 0.0;
+  double tf_lookup_lag_s_ = 0.0, nav_tf_lookup_lag_s_ = 0.0;
   uint32_t latest_tf_fallbacks_ = 0;
   std::set<std::string> tf_seen_;  // frame pairs that have resolved once
 

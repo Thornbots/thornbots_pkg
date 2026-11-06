@@ -373,6 +373,8 @@ def generate_launch_description():
                 LaunchConfiguration('allow_latest_tf'), value_type=bool),
             'tf_lookup_lag_s': ParameterValue(
                 LaunchConfiguration('tf_lookup_lag_s'), value_type=float),
+            'nav_tf_lookup_lag_s': ParameterValue(
+                LaunchConfiguration('nav_tf_lookup_lag_s'), value_type=float),
         }],
         additional_env=udp_env,
     )
@@ -602,9 +604,12 @@ def generate_launch_description():
             'Simulation lockstep sets false: lookups are stamped tf_lookup_lag_s before '
             'now and each miss is counted on ~/latest_tf_fallbacks.'),
         DeclareLaunchArgument('tf_lookup_lag_s', default_value='0.0',
-                              description='Age of the TF point_to_cv_target reads when '
-                              'allow_latest_tf is false; it must exceed the slowest TF source period (the EKF, '
-                              '33 ms) plus UART delivery.'),
+                              description='Age of the odom<-muzzle TF point_to_cv_target reads '
+                              'when allow_latest_tf is false: UART delivery of the pose plus '
+                              'one pose period.'),
+        DeclareLaunchArgument('nav_tf_lookup_lag_s', default_value='0.0',
+                              description='Age of the nav_odom->odom TF read when '
+                              'allow_latest_tf is false: more than the EKF period (33 ms).'),
         DeclareLaunchArgument(
             'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
             description='Simulation only; forwarded to sentry_localization to start the EKF '
