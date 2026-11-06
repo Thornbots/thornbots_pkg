@@ -28,6 +28,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -37,6 +38,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "std_msgs/msg/u_int32.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "thornbots_pkg/point_to_cv_target_core.hpp"
@@ -55,8 +57,13 @@ protected:
   void check_timeout();
   void on_publish_tick();
 
-  // The muzzle's newest odom (position, yaw), or nullopt.
+  // The muzzle's odom (position, yaw), or nullopt: its newest TF, or with
+  // allow_latest_tf:=false the one stamped tf_lookup_lag_s before now.
   std::optional<std::pair<Vector3d, double>> gun_pose();
+  // Throws tf2::TransformException; see allow_latest_tf_.
+  geometry_msgs::msg::TransformStamped lookup_tf(
+    const std::string & target, const std::string & source);
+  void count_latest_tf_fallback();
   Vector3d idle_point_now(const rclcpp::Time & now);
   virtual rclcpp::Time clock_now() const {return get_clock()->now();}
 
@@ -76,6 +83,12 @@ protected:
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  // Robot default true: take the newest TF. Simulation lockstep sets false so
+  // a lookup is at a stamp, never at whatever TF happened to arrive last.
+  bool allow_latest_tf_ = true;
+  double tf_lookup_lag_s_ = 0.0;
+  uint32_t latest_tf_fallbacks_ = 0;
+  std::set<std::string> tf_seen_;  // frame pairs that have resolved once
 
   bool target_active_ = false;
   dji_serial_bridge::msg::TargetState::ConstSharedPtr latest_state_;
@@ -84,6 +97,7 @@ protected:
 private:
   rclcpp::Publisher<dji_serial_bridge::msg::CVTarget>::SharedPtr pub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr tick_pub_, state_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr fallback_pub_;
   rclcpp::Subscription<dji_serial_bridge::msg::TargetState>::SharedPtr target_state_sub_;
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr ref_sys_sub_;
   void start_timers(double publish_rate_hz);

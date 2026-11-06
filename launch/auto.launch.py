@@ -369,6 +369,10 @@ def generate_launch_description():
             'blue_start_y': ParameterValue(
                 LaunchConfiguration('blue_start_y'), value_type=float),
             'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
+            'allow_latest_tf': ParameterValue(
+                LaunchConfiguration('allow_latest_tf'), value_type=bool),
+            'tf_lookup_lag_s': ParameterValue(
+                LaunchConfiguration('tf_lookup_lag_s'), value_type=float),
         }],
         additional_env=udp_env,
     )
@@ -592,6 +596,15 @@ def generate_launch_description():
         DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
                               description='Practice navigation team without referee; '
                               'never bypasses the AMCL referee gate.'),
+        DeclareLaunchArgument(
+            'allow_latest_tf', default_value='true', choices=['true', 'false'],
+            description='point_to_cv_target takes the newest TF when true (the robot). '
+            'Simulation lockstep sets false: lookups are stamped tf_lookup_lag_s before '
+            'now and each miss is counted on ~/latest_tf_fallbacks.'),
+        DeclareLaunchArgument('tf_lookup_lag_s', default_value='0.0',
+                              description='Age of the TF point_to_cv_target reads when '
+                              'allow_latest_tf is false; it must exceed the slowest TF source period (the EKF, '
+                              '33 ms) plus UART delivery.'),
         DeclareLaunchArgument(
             'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
             description='Simulation only; forwarded to sentry_localization to start the EKF '
