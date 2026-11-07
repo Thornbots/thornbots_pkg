@@ -65,6 +65,8 @@ public:
     // How long a detection waits for the camera's TF at its capture time
     // before it is dropped; never matched to a newer pose. See README.md.
     tf_max_wait_s_ = declare_parameter("tf_max_wait_s", 0.25);
+    // Simulation only (0 = off): wait until TF is this far past the capture query.
+    tf_lookahead_s_ = declare_parameter("tf_lookahead_s", 0.0);
     // Lockstep simulation only: model the update as taking process_delay_s of sim time
     // (rounded up to process_align_s), run at that sim time and stamp it so, instead of
     // whenever the TF happens to arrive. Negative keeps the arrival-driven behavior.
@@ -124,7 +126,9 @@ public:
     }
     sub_ =create_subscription<PanelDetectionArray>(
       robot_panels_topic_, 10, [this](PanelDetectionArray::ConstSharedPtr msg) {
-        if (!msg->detections.empty()) {
+        if (!msg->detections.empty() || process_delay_s_ >= 0.0) {
+          // With a processing delay an empty frame waits its turn too, so its none-mark
+          // cannot reach a lockstep chain before an earlier frame's TargetState.
           waiting_.emplace_back(msg, now());
           drain();
         } else {
@@ -167,12 +171,24 @@ private:
           return;
         }
       }
+      if (msg->detections.empty()) {
+        mark_none(msg->header);
+        waiting_.pop_front();
+        continue;
+      }
       const double waited_s = (now() - arrival).seconds();
       const std::string camera_frame =
         msg->header.frame_id.empty() ? "camera" : msg->header.frame_id;
       const rclcpp::Time query = capture_time(*msg) +
         rclcpp::Duration::from_seconds(pose_latency_s_);
       std::string error;
+      // A sample exactly at the query is interpolated at ratio 0 (1 ulp off) once a newer one
+      // has arrived, so a lockstep run waits until one has.
+      if (tf_lookahead_s_ > 0.0 && waited_s <= tf_max_wait_s_ &&
+        tf_behind(camera_frame, query + rclcpp::Duration::from_seconds(tf_lookahead_s_)))
+      {
+        return;
+      }
       auto tf = lookup(camera_frame, query, error);
       if (!tf) {
         if (waited_s <= tf_max_wait_s_ && tf_behind(camera_frame, query)) {
@@ -343,7 +359,7 @@ private:
   }
 
   std::string robot_panels_topic_, output_topic_, measurement_topic_, odom_frame_;
-  double pose_latency_s_, camera_latency_s_, track_max_gap_s_, tf_max_wait_s_;
+  double pose_latency_s_, camera_latency_s_, track_max_gap_s_, tf_max_wait_s_, tf_lookahead_s_;
   double process_delay_s_, process_align_s_;
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
