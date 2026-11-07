@@ -695,7 +695,11 @@ where to look otherwise.
   `target_tracker`'s `process_delay_s`/`process_align_s` (run each update that long after the
   capture, stamped at that time instead of whenever the TF arrived) and `mcb_relay`'s
   `message_clock` (decide on the localization sample's stamp, not this node's clock) and
-  `raw_odom_ack_topic`. All are off by default; the robot is unchanged.
+  `raw_odom_ack_topic`. With `process_delay_s` set, an empty frame waits its turn behind earlier ones
+  before its none-mark, so a later frame's mark cannot release an earlier tick; `tf_lookahead_s`
+  (default 0) also makes the tracker wait until TF is that far past its query, because tf2
+  returns a sample exactly or slerps at ratio 0 (1 ulp off) by whether the next one has arrived.
+  All are off by default; the robot is unchanged.
 
 Idle points are `odom` positions (`z` is `idle_height_m`, 0.15, near armor
 height). They choose the last enemy until 3 s after the target hold expires, or
