@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+Default profile while remote_dds is off: nothing leaves this machine, and every
+participant on it can find every other. Shared memory and loopback UDP, initial
+peer 127.0.0.1 only, `maxInitialPeersRange` 128.
+
+Why 128: a participant sends discovery only to the first `maxInitialPeersRange`
+participant ids on each peer, so two participants whose ids are both past the range
+never find each other. The sim `mcb_parked` stack has 37 participants (ids 0-36,
+measured 2026-11-06), `mcb_match` more; at 32 the lifecycle matrix lost a lockstep
+hold at bring-up in about 2% of runs, at the LOCALHOST range's 4 in nearly all.
+Do not combine this file with ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST. Pinned
+UDP-only nodes use fastdds_udp_only_local.xml, which has no SHM.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <transport_descriptors>
+            <transport_descriptor>
+                <transport_id>local_udp</transport_id>
+                <type>UDPv4</type>
+                <maxInitialPeersRange>128</maxInitialPeersRange>
+                <interfaceWhiteList>
+                    <address>127.0.0.1</address>
+                </interfaceWhiteList>
+            </transport_descriptor>
+            <transport_descriptor>
+                <transport_id>local_shm</transport_id>
+                <type>SHM</type>
+            </transport_descriptor>
+        </transport_descriptors>
+        <participant profile_name="local_participant" is_default_profile="true">
+            <rtps>
+                <useBuiltinTransports>false</useBuiltinTransports>
+                <userTransports>
+                    <transport_id>local_udp</transport_id>
+                    <transport_id>local_shm</transport_id>
+                </userTransports>
+                <builtin>
+                    <discovery_config>
+                        <discoveryProtocol>SIMPLE</discoveryProtocol>
+                    </discovery_config>
+                    <initialPeersList>
+                        <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+                    </initialPeersList>
+                </builtin>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>

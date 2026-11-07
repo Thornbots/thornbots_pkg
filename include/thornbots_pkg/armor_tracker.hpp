@@ -66,6 +66,7 @@ struct EkfParams
   double q_accel = 2.0;
   double q_yaw_accel = 5.0;
   double q_radius = 0.02;
+  double radius_prior_std = 0.05;
   double r_min = 0.18;
   double r_max = 0.45;
   double spin_prior = 0.0;
@@ -116,6 +117,8 @@ public:
   int n_outliers = 0;
   double last_nis = 0.0;
   double last_logdet = 0.0;  // log det of the last innovation covariance
+  Vector3d last_residual = Vector3d::Zero();  // before measurement/facing updates
+  int last_association = -1;
 
 private:
   std::pair<Cov, Cov> transition(double dt) const;

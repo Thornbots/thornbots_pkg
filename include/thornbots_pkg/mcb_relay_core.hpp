@@ -16,10 +16,10 @@
 //
 // The correction is the offset loc(t) - odom(t) at the localization stamp,
 // /odom interpolated there, added to where the MCB's odometry will read when
-// it applies the frame: latest /odom extrapolated past both UART legs and the
-// MCB's read delay. Sent only when confident: localization's xy std and the
+// it applies the frame: latest send-stamped /odom extrapolated by its age, the
+// outbound UART leg and the MCB's read delay. Sent only when confident: localization's xy std and the
 // extrapolation's (speed x latency_std_s) combined stay under max_std_m, and
-// the offset clears error_threshold_m and n_sigma of that std. See
+// the change from the last sent offset clears the confidence gate. See
 // README.md's ### mcb_relay.
 
 #ifndef THORNBOTS_PKG__MCB_RELAY_CORE_HPP_
@@ -58,6 +58,7 @@ public:
     double latency_std_s = 0.003;
     double hold_off_s = 0.3;
     double history_s = 1.0;
+    unsigned resend_count = 3;
   };
 
   Relocalizer() = default;
@@ -82,6 +83,8 @@ private:
   Params p_;
   std::deque<OdomSample> odom_;
   std::optional<double> last_sent_t_;
+  double sent_offset_x_ = 0.0, sent_offset_y_ = 0.0;
+  unsigned resends_left_ = 0;
 };
 
 }  // namespace thornbots_pkg

@@ -59,12 +59,19 @@ public:
       "measurement_topic", std::string("/cv/tracker/measurement"));
     odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
     pose_latency_s_ = declare_parameter("pose_latency_s", 0.01);
-    // Unmeasured on hardware (../ROADMAP.md, track B); match the emulator's in sim.
+    // Unmeasured on hardware (../../docs/ROADMAP.md, track B); match the emulator's in sim.
     camera_latency_s_ = declare_parameter("camera_latency_s", 0.0);
     track_max_gap_s_ = declare_parameter("track_max_gap_s", 0.5);
     // How long a detection waits for the camera's TF at its capture time
     // before it is dropped; never matched to a newer pose. See README.md.
     tf_max_wait_s_ = declare_parameter("tf_max_wait_s", 0.25);
+    // Simulation only (0 = off): wait until TF is this far past the capture query.
+    tf_lookahead_s_ = declare_parameter("tf_lookahead_s", 0.0);
+    // Lockstep simulation only: model the update as taking process_delay_s of sim time
+    // (rounded up to process_align_s), run at that sim time and stamp it so, instead of
+    // whenever the TF happens to arrive. Negative keeps the arrival-driven behavior.
+    process_delay_s_ = declare_parameter("process_delay_s", -1.0);
+    process_align_s_ = declare_parameter("process_align_s", 0.001);
     params_.ekf.radius = declare_parameter("panel_radius_m", 0.27);  // both pairs, initial
     meas_noise_base_m_ = declare_parameter("meas_noise_base_m", 0.03);
     meas_noise_range_coeff_ = declare_parameter("meas_noise_range_coeff", 0.01);  // * range^2
@@ -78,6 +85,8 @@ public:
     single_panel_yaw_std_ = declare_parameter("single_panel_yaw_std", 0.3);
     params_.ekf.q_yaw_accel = declare_parameter("process_noise_yaw_accel", 5.0);  // rad/s^2
     params_.ekf.q_radius = declare_parameter("process_noise_radius", 0.02);  // m/sqrt(s)
+    params_.ekf.radius_prior_std = declare_parameter("radius_prior_std", 0.05);  // m
+    log_innovations_ = declare_parameter("log_innovations", false);
     // A parked, non-spinning hypothesis; hands the lead back once the summed
     // log-likelihood ratio passes still_exit_llr. See README.md.
     params_.still = declare_parameter("still_hypothesis", true);
@@ -98,6 +107,12 @@ public:
     // Set by the estimation bench only: echo each /clock update once now()
     // reads it, so a lockstep bench sends detections only after it lands.
     const auto clock_ack_topic = declare_parameter("clock_ack_topic", std::string(""));
+    // Lockstep: a Header carrying a detection's stamp when it produces no TargetState
+    // (empty frame, or dropped for missing TF); otherwise the bridge's TX ack answers.
+    const auto none_topic = declare_parameter("target_state_none_topic", std::string(""));
+    if (!none_topic.empty()) {
+      none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 100);
+    }
     if (!clock_ack_topic.empty()) {
       clock_ack_pub_ = create_publisher<std_msgs::msg::Header>(clock_ack_topic, 10);
       rcl_jump_threshold_t every_update{};
@@ -111,9 +126,13 @@ public:
     }
     sub_ =create_subscription<PanelDetectionArray>(
       robot_panels_topic_, 10, [this](PanelDetectionArray::ConstSharedPtr msg) {
-        if (!msg->detections.empty()) {
+        if (!msg->detections.empty() || process_delay_s_ >= 0.0) {
+          // With a processing delay an empty frame waits its turn too, so its none-mark
+          // cannot reach a lockstep chain before an earlier frame's TargetState.
           waiting_.emplace_back(msg, now());
           drain();
+        } else {
+          mark_none(msg->header);
         }
       });
     // Wall-clock retries: a bench that holds sim time until this node
@@ -141,12 +160,35 @@ private:
   {
     while (!waiting_.empty()) {
       const auto & [msg, arrival] = waiting_.front();
+      std::optional<rclcpp::Time> due;
+      if (process_delay_s_ >= 0.0) {
+        const int64_t align = std::max<int64_t>(
+          static_cast<int64_t>(process_align_s_ * 1e9), 1);
+        const int64_t at = capture_time(*msg).nanoseconds() +
+          static_cast<int64_t>(process_delay_s_ * 1e9);
+        due = rclcpp::Time((at + align - 1) / align * align, get_clock()->get_clock_type());
+        if (now() < *due) {
+          return;
+        }
+      }
+      if (msg->detections.empty()) {
+        mark_none(msg->header);
+        waiting_.pop_front();
+        continue;
+      }
       const double waited_s = (now() - arrival).seconds();
       const std::string camera_frame =
         msg->header.frame_id.empty() ? "camera" : msg->header.frame_id;
       const rclcpp::Time query = capture_time(*msg) +
         rclcpp::Duration::from_seconds(pose_latency_s_);
       std::string error;
+      // A sample exactly at the query is interpolated at ratio 0 (1 ulp off) once a newer one
+      // has arrived, so a lockstep run waits until one has.
+      if (tf_lookahead_s_ > 0.0 && waited_s <= tf_max_wait_s_ &&
+        tf_behind(camera_frame, query + rclcpp::Duration::from_seconds(tf_lookahead_s_)))
+      {
+        return;
+      }
       auto tf = lookup(camera_frame, query, error);
       if (!tf) {
         if (waited_s <= tf_max_wait_s_ && tf_behind(camera_frame, query)) {
@@ -162,14 +204,20 @@ private:
           "TF %s<-%s at capture %.3f unavailable after %.3f s (tf_max_wait_s=%.2f) -- "
           "dropping: %s", odom_frame_.c_str(), camera_frame.c_str(), query.seconds(), waited_s,
           tf_max_wait_s_, error.c_str());
+        mark_none(msg->header);
         waiting_.pop_front();
         continue;
       }
       const auto next = msg;
       waiting_.pop_front();
       tf_waits_.push_back(waited_s);
-      update(*next, *tf);
+      update(*next, *tf, due);
     }
+  }
+
+  void mark_none(const std_msgs::msg::Header & header)
+  {
+    if (none_pub_) {none_pub_->publish(header);}
   }
 
   std::optional<geometry_msgs::msg::TransformStamped> lookup(
@@ -215,7 +263,9 @@ private:
     tf_drops_ = 0;
   }
 
-  void update(const PanelDetectionArray & msg, const geometry_msgs::msg::TransformStamped & tf)
+  void update(
+    const PanelDetectionArray & msg, const geometry_msgs::msg::TransformStamped & tf,
+    const std::optional<rclcpp::Time> & due)
   {
     const auto & first = msg.detections.front();
     const rclcpp::Time stamp = capture_time(msg);
@@ -250,6 +300,18 @@ private:
       }
       const auto result =
         tracker_->step(panel, T, t_sec, R_meas, gate_nis_, max_outliers_, facing_std);
+      if (log_innovations_) {
+        const auto & f = tracker_->best();
+        RCLCPP_INFO(
+          get_logger(),
+          "innovation t=%.6f track=%u panels=%zu lead=%zu k=%d result=%d "
+          "residual=[%.6f,%.6f,%.6f] nis=%.6f logdet=%.6f "
+          "w=%.6f radius=[%.6f,%.6f] radius_var=%.6f score=%.6f",
+          t_sec, *track_id_, msg.detections.size(), tracker_->lead, f.last_association,
+          static_cast<int>(result), f.last_residual.x(), f.last_residual.y(),
+          f.last_residual.z(), f.last_nis, f.last_logdet, f.state[W], f.state[R],
+          f.other_r, f.P(R, R), tracker_->scores[tracker_->lead]);
+      }
       if (result == StepResult::Reacquire) {
         RCLCPP_INFO_THROTTLE(
           get_logger(), *get_clock(), 1000,
@@ -260,11 +322,12 @@ private:
     ++n_updates_;
 
     // TargetState describes the target now: predict to the publish time.
-    const rclcpp::Time now_t = std::max(now(), stamp);
+    const rclcpp::Time now_t = due ? std::max(*due, stamp) : std::max(now(), stamp);
     lags_.push_back((now_t - stamp).seconds());
     const auto [s, P] = tracker_->predicted(now_t.seconds());
     TargetState out;
     out.header.stamp = now_t;
+    out.detection_stamp = stamp;
     out.header.frame_id = odom_frame_;
     out.robot_track_id = first.robot_track_id;
     out.confidence = first.confidence;
@@ -296,16 +359,18 @@ private:
   }
 
   std::string robot_panels_topic_, output_topic_, measurement_topic_, odom_frame_;
-  double pose_latency_s_, camera_latency_s_, track_max_gap_s_, tf_max_wait_s_;
+  double pose_latency_s_, camera_latency_s_, track_max_gap_s_, tf_max_wait_s_, tf_lookahead_s_;
+  double process_delay_s_, process_align_s_;
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
   int max_outliers_;
+  bool log_innovations_;
   TrackerParams params_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<TargetState>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr measurement_pub_, clock_ack_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr measurement_pub_, clock_ack_pub_, none_pub_;
   rclcpp::JumpHandler::SharedPtr clock_jump_;
   rclcpp::Subscription<PanelDetectionArray>::SharedPtr sub_;
   rclcpp::TimerBase::SharedPtr drain_timer_, log_timer_;

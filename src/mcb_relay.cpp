@@ -19,9 +19,12 @@
 // localization_odom_topic and raw_odom_topic drift apart and the offset is
 // confident, compensated for UART lag and the MCB's read delay
 // (mcb_relay_core.hpp's Relocalizer). Stamped with when the MCB should adopt it.
-// cv_target: republishes cv_target_input_topic onto cv_target_output_topic.
-// The aim point carries the fire decision (fire, delay_ms), so this is the only
-// CV relay. See README.md for design rationale.
+// cv_target: republishes the idle look point on cv_target_input_topic onto
+// cv_target_output_topic. target_state: republishes the tracker's TargetState on
+// target_state_input_topic onto target_state_output_topic; the MCB plans aim and
+// fire from it. Both set type_c_based_patrol from this node's parameter of that
+// name (MCB patrol permission), the only place it is decided.
+// These are the only CV relays. See README.md for design rationale.
 
 #include <algorithm>
 #include <cstdint>
@@ -29,15 +32,18 @@
 #include <string>
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
+#include "dji_serial_bridge/msg/target_state.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/header.hpp"
 #include "thornbots_pkg/mcb_relay_core.hpp"
 
 namespace thornbots_pkg
 {
 
 using dji_serial_bridge::msg::CVTarget;
+using dji_serial_bridge::msg::TargetState;
 using geometry_msgs::msg::PointStamped;
 using nav_msgs::msg::Odometry;
 
@@ -58,6 +64,7 @@ public:
     const auto localization_odom_topic = declare_parameter(
       "localization_odom_topic", std::string("/localization/odom"));
     const auto raw_odom_topic = declare_parameter("raw_odom_topic", std::string("/odom"));
+    navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
     const auto relocalize_out = declare_parameter(
       "relocalize_output_topic", std::string("/dji_serial_bridge/relocalize"));
     Relocalizer::Params p;
@@ -69,13 +76,32 @@ public:
     p.uart_latency_s = declare_parameter("uart_latency_s", 0.005);
     p.mcb_read_delay_s = declare_parameter("mcb_read_delay_s", 0.002);
     p.latency_std_s = declare_parameter("latency_std_s", 0.003);
-    p.hold_off_s = declare_parameter("hold_off_s", 0.3);  // after a send, for /odom to show it
+    p.hold_off_s = declare_parameter("hold_off_s", 0.3);  // limit navigation fix rate
     const auto cv_target_in = declare_parameter("cv_target_input_topic", std::string("/cv/target"));
     const auto cv_target_out = declare_parameter(
       "cv_target_output_topic", std::string("/dji_serial_bridge/cv_target"));
+    const auto target_state_in = declare_parameter(
+      "target_state_input_topic", std::string("/cv/target_state"));
+    const auto target_state_out = declare_parameter(
+      "target_state_output_topic", std::string("/dji_serial_bridge/target_state"));
+    // MCB patrol permission for both outputs; false stops firmware patrol.
+    type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
     relocalizer_ = Relocalizer(p);
+    // Lockstep simulation only: decide on the localization sample's own stamp, not this
+    // node's clock, which can trail the sample's by scheduling; and answer each raw
+    // odometry sample so the POSE probe knows the relay has it.
+    message_clock_ = declare_parameter("message_clock", false);
+    const auto odom_ack_topic = declare_parameter("raw_odom_ack_topic", std::string(""));
+    if (!odom_ack_topic.empty()) {
+      odom_ack_pub_ = create_publisher<std_msgs::msg::Header>(odom_ack_topic, 100);
+    }
 
     relocalize_pub_ = create_publisher<PointStamped>(relocalize_out, 10);
+    // Lockstep: a Header per localization sample that sends no RELOCALIZE.
+    const auto none_topic = declare_parameter("relocalize_none_topic", std::string(""));
+    if (!none_topic.empty()) {
+      none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 100);
+    }
     raw_odom_sub_ = create_subscription<Odometry>(
       raw_odom_topic, 10, [this](Odometry::ConstSharedPtr m) {raw_odom_callback(*m);});
     localization_odom_sub_ = create_subscription<Odometry>(
@@ -86,14 +112,30 @@ public:
     cv_target_pub_ = create_publisher<CVTarget>(cv_target_out, rclcpp::SensorDataQoS());
     cv_target_sub_ = create_subscription<CVTarget>(
       cv_target_in, rclcpp::SensorDataQoS(),
-      [this](CVTarget::ConstSharedPtr m) {cv_target_pub_->publish(*m);});
+      [this](CVTarget::ConstSharedPtr m) {
+        CVTarget out = *m;
+        out.type_c_based_patrol = type_c_based_patrol_;
+        cv_target_pub_->publish(out);
+      });
+
+    // Matches dji_serial_bridge_node's SensorDataQoS ~/target_state sub.
+    target_state_pub_ = create_publisher<TargetState>(target_state_out, rclcpp::SensorDataQoS());
+    target_state_sub_ = create_subscription<TargetState>(
+      target_state_in, rclcpp::SensorDataQoS(),
+      [this](TargetState::ConstSharedPtr m) {
+        TargetState out = *m;
+        out.type_c_based_patrol = type_c_based_patrol_;
+        target_state_pub_->publish(out);
+      });
 
     RCLCPP_INFO(
       get_logger(),
       "mcb_relay ready\n  %s vs %s -> %s (threshold=%gm, max_std=%gm)\n"
-      "  %s -> %s (aim + fire decision)",
+      "  %s -> %s (idle look)\n  %s -> %s (target state), type_c_based_patrol=%s",
       localization_odom_topic.c_str(), raw_odom_topic.c_str(), relocalize_out.c_str(),
-      p.error_threshold_m, p.max_std_m, cv_target_in.c_str(), cv_target_out.c_str());
+      p.error_threshold_m, p.max_std_m, cv_target_in.c_str(), cv_target_out.c_str(),
+      target_state_in.c_str(), target_state_out.c_str(),
+      type_c_based_patrol_ ? "true" : "false");
   }
 
 private:
@@ -104,6 +146,9 @@ private:
     relocalizer_.add_odom(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
       msg.twist.twist.linear.x, msg.twist.twist.linear.y);
+    if (odom_ack_pub_) {
+      odom_ack_pub_->publish(msg.header);
+    }
   }
 
   void localization_odom_callback(const Odometry & msg)
@@ -111,27 +156,40 @@ private:
     const auto & cov = msg.pose.covariance;
     const auto out = relocalizer_.decide(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
-      std::max(cov[0], cov[7]), static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9);
+      std::max(cov[0], cov[7]),
+      message_clock_ ? stamp_s(msg.header.stamp) :
+      static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9);
     if (!out) {
+      if (none_pub_) {
+        std_msgs::msg::Header none;
+        none.stamp = now();
+        none_pub_->publish(none);
+      }
       return;
     }
     PointStamped point;
     point.header.stamp = rclcpp::Time(static_cast<int64_t>(out->apply_t * 1e9));
-    point.header.frame_id = msg.header.frame_id;
+    point.header.frame_id = navigation_frame_;
     point.point.x = out->x;
     point.point.y = out->y;
     relocalize_pub_->publish(point);
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "Localization %.3fm (std %.3fm) from raw odom - sent relocalize x=%.3f y=%.3f",
+      "Localization %.3fm (std %.3fm) from estimated MCB navigation - sent relocalize x=%.3f y=%.3f",
       out->error_m, out->std_m, out->x, out->y);
   }
 
   Relocalizer relocalizer_;
+  std::string navigation_frame_;
+  bool type_c_based_patrol_ = false;
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_, odom_ack_pub_;
+  bool message_clock_ = false;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;
+  rclcpp::Publisher<TargetState>::SharedPtr target_state_pub_;
+  rclcpp::Subscription<TargetState>::SharedPtr target_state_sub_;
 };
 
 }  // namespace thornbots_pkg

@@ -22,8 +22,13 @@ namespace thornbots_pkg
 
 void Relocalizer::add_odom(double t, double x, double y, double vx, double vy)
 {
-  if (!odom_.empty() && t < odom_.back().t) {
-    odom_.clear();  // clock reset (sim restart)
+  if (!odom_.empty() && (t < odom_.back().t ||
+    std::hypot(x - odom_.back().x, y - odom_.back().y) > 1.0))
+  {
+    odom_.clear();  // clock reset or raw odometry discontinuity
+    last_sent_t_.reset();
+    sent_offset_x_ = sent_offset_y_ = 0.0;
+    resends_left_ = 0;
   }
   odom_.push_back({t, x, y, vx, vy});
   while (!odom_.empty() && odom_.front().t < t - p_.history_s) {
@@ -56,26 +61,37 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   double loc_t, double loc_x, double loc_y, double loc_var_xy, double now)
 {
   if (last_sent_t_ && now - *last_sent_t_ < p_.hold_off_s) {
-    return std::nullopt;  // the last one may not have reached /odom yet
+    return std::nullopt;
   }
   const auto at_loc = odom_at(loc_t);
   if (!at_loc) {
     return std::nullopt;
   }
   const double dx = loc_x - at_loc->first, dy = loc_y - at_loc->second;
-  const double error = std::hypot(dx, dy);
+  const double error = std::hypot(dx - sent_offset_x_, dy - sent_offset_y_);
   const OdomSample & last = odom_.back();
   const double speed = std::hypot(last.vx, last.vy);
   const double std_m =
     std::hypot(std::sqrt(std::max(loc_var_xy, 0.0)), speed * p_.latency_std_s);
-  if (std_m > p_.max_std_m || error <= std::max(p_.error_threshold_m, p_.n_sigma * std_m)) {
+  const bool changed = error > std::max(p_.error_threshold_m, p_.n_sigma * std_m);
+  if (std_m > p_.max_std_m || (!changed && resends_left_ == 0)) {
     return std::nullopt;
   }
-  // /odom is stamped on arrival, one UART leg after the MCB read it, and the
-  // frame we send lands one leg plus a read delay from now.
-  const double horizon = now - last.t + 2.0 * p_.uart_latency_s + p_.mcb_read_delay_s;
-  last_sent_t_ = now;
+  // No UART acknowledgement exists. Repeat absolute fixes on fresh inputs;
+  // never replay an old position while the chassis may have moved.
+  if (changed) {
+    resends_left_ = p_.resend_count;
+  } else {
+    --resends_left_;
+  }
+  // /odom is stamped when the MCB began sending (wire time removed), not on
+  // arrival. Its age already includes the inbound leg; only the outbound
+  // UART leg and firmware read delay remain before application.
   const double apply_t = now + p_.uart_latency_s + p_.mcb_read_delay_s;
+  const double horizon = apply_t - last.t;
+  last_sent_t_ = now;
+  sent_offset_x_ = dx;
+  sent_offset_y_ = dy;
   return RelocalizeCommand{
     last.x + last.vx * horizon + dx, last.y + last.vy * horizon + dy, apply_t, error, std_m};
 }
