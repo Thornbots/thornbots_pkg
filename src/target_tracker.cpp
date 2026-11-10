@@ -310,7 +310,7 @@ private:
           t_sec, *track_id_, msg.detections.size(), tracker_->lead, f.last_association,
           static_cast<int>(result), f.last_residual.x(), f.last_residual.y(),
           f.last_residual.z(), f.last_nis, f.last_logdet, f.state[W], f.state[R],
-          f.other_r, f.P(R, R), tracker_->scores[tracker_->lead]);
+          f.other_r(), f.P(R, R), tracker_->scores[tracker_->lead]);
       }
       if (result == StepResult::Reacquire) {
         RCLCPP_INFO_THROTTLE(

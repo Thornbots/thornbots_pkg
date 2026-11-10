@@ -104,7 +104,7 @@ Vector3d noise(std::mt19937 & rng, double std)
 
 const tp::State & state_of(const tp::ArmorEKF & f) {return f.state;}
 const tp::State & state_of(const tp::ArmorTracker & f) {return f.state();}
-double other_r_of(const tp::ArmorEKF & f) {return f.other_r;}
+double other_r_of(const tp::ArmorEKF & f) {return f.other_r();}
 double other_r_of(const tp::ArmorTracker & f) {return f.other_r();}
 tp::ArmorEKF make(const Vector3d & m, double t, tp::ArmorEKF *)
 {
@@ -180,7 +180,7 @@ TEST(ArmorTracker, SpinInPlaceRecoversRateCentreAndBothRadii)
   const auto & s = r.filt->state;
   EXPECT_LT(std::abs(s[W] - w), 0.1 * w);
   EXPECT_LT((s.segment<2>(POS) - r.centre.head<2>()).norm(), 0.05);
-  const double lo = std::min(s[R], r.filt->other_r), hi = std::max(s[R], r.filt->other_r);
+  const double lo = std::min(s[R], r.filt->other_r()), hi = std::max(s[R], r.filt->other_r());
   EXPECT_LT(std::abs(lo - RY), 0.04);
   EXPECT_LT(std::abs(hi - RX), 0.04);
 }
@@ -208,22 +208,22 @@ TEST(ArmorTracker, HandoffStepsYawAQuarterTurnAndSwapsRadius)
   // Panel at (2.7, 0) faces the camera at yaw pi; turn the chassis 50 deg
   // clockwise so the k=1 panel (yaw pi + 40 deg) is the more head-on one.
   tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), ekf_params(0.30));
-  ekf.other_r = 0.24;
+  ekf.state[tp::OTHER_R] = 0.24;
   ekf.state[YAW] -= 50.0 * M_PI / 180.0;
   const double yaw_before = ekf.state[YAW];
-  const Vector3d k1 = tp::panel_positions(ekf.state, ekf.other_r)[1].pos;
+  const Vector3d k1 = tp::panel_positions(ekf.state, ekf.other_r())[1].pos;
   const auto [k, distance] = ekf.associate(k1, CAMERA);
   EXPECT_EQ(k, 1);
   EXPECT_LT(distance, 1e-9);
   EXPECT_NEAR(ekf.state[YAW], yaw_before + M_PI / 2.0, 1e-12);
   EXPECT_EQ(ekf.state[R], 0.24);
-  EXPECT_EQ(ekf.other_r, 0.30);
+  EXPECT_EQ(ekf.other_r(), 0.30);
 }
 
 TEST(ArmorTracker, BackPanelIsNeverAssociated)
 {
   tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), ekf_params(0.30));
-  const Vector3d back = tp::panel_positions(ekf.state, ekf.other_r)[2].pos;
+  const Vector3d back = tp::panel_positions(ekf.state, ekf.other_r())[2].pos;
   EXPECT_NE(ekf.associate(back, CAMERA).first, 2);
 }
 
@@ -286,7 +286,7 @@ TEST(ArmorTracker, InnovationDiagnosticsRetainTheGatedPreUpdateResidual)
   const Vector3d panel(2.7, 0.0, 0.3);
   tp::ArmorEKF ekf(panel, CAMERA, 0.0, iso(1e-4), ekf_params());
   const Vector3d measurement = panel + Vector3d(0.0, 0.0, 1.0);
-  const Vector3d expected = measurement - tp::panel_positions(ekf.state, ekf.other_r)[0].pos;
+  const Vector3d expected = measurement - tp::panel_positions(ekf.state, ekf.other_r())[0].pos;
   const double nis = ekf.nis(measurement, iso(1e-4));
   EXPECT_EQ(ekf.step(measurement, CAMERA, 0.0, iso(1e-4), 0.0, 1),
     tp::StepResult::Reacquire);
@@ -417,7 +417,7 @@ TEST(ArmorTracker, OddHandoffFlipsDzAndItsCovariance)
   ekf.state[DZ] = 0.04;
   ekf.P(2, DZ) = ekf.P(DZ, 2) = -1e-4;
   ekf.state[YAW] -= 50.0 * M_PI / 180.0;
-  const Vector3d k1 = tp::panel_positions(ekf.state, ekf.other_r)[1].pos;
+  const Vector3d k1 = tp::panel_positions(ekf.state, ekf.other_r())[1].pos;
   EXPECT_NEAR(k1.z(), 0.3 - 0.04, 1e-12);
   EXPECT_EQ(ekf.associate(k1, CAMERA).first, 1);
   EXPECT_NEAR(ekf.state[DZ], -0.04, 1e-15);
@@ -550,4 +550,59 @@ TEST(ArmorTracker, SpinningInPlaceIsNeverLedByTheStillHypothesis)
 {
   auto r = run<tp::ArmorTracker>(Vector3d::Zero(), 2.0 * M_PI * 1.5, 4.0);
   EXPECT_FALSE(r.filt->best().p.still);
+}
+
+TEST(ArmorTracker, OddHandoffTransformsFullPairCovarianceAndGeometry)
+{
+  tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), ekf_params(0.30));
+  ekf.state[tp::OTHER_R] = 0.24;
+  ekf.state[DZ] = 0.04;
+  ekf.state[YAW] -= 50.0 * M_PI / 180.0;
+  tp::Cov a = tp::Cov::Identity();
+  a(R, POS) = 0.12;
+  a(tp::OTHER_R, YAW) = 0.23;
+  a(DZ, R) = 0.14;
+  a(DZ, tp::OTHER_R) = -0.17;
+  ekf.P = a * a.transpose();
+  const auto panels = tp::panel_positions(ekf.state, ekf.other_r());
+  tp::Cov transform = tp::Cov::Identity();
+  transform.row(R).swap(transform.row(tp::OTHER_R));
+  transform(DZ, DZ) = -1.0;
+  const tp::Cov expected = transform * ekf.P * transform.transpose();
+  ASSERT_EQ(ekf.associate(panels[1].pos, CAMERA).first, 1);
+  EXPECT_TRUE(ekf.P.isApprox(expected, 1e-12));
+  const auto after = tp::panel_positions(ekf.state, ekf.other_r());
+  for (int k = 0; k < 4; ++k) {
+    EXPECT_LT((after[k].pos - panels[(k + 1) % 4].pos).norm(), 1e-12);
+  }
+}
+
+TEST(ArmorTracker, OtherRadiusPredictionAndReacquisitionKeepUncertainty)
+{
+  auto params = ekf_params(0.30);
+  tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), params);
+  ekf.state[tp::OTHER_R] = 0.24;
+  ekf.P(tp::OTHER_R, tp::OTHER_R) = 0.003;
+  ekf.P(R, tp::OTHER_R) = ekf.P(tp::OTHER_R, R) = 0.0002;
+  const auto [state, covariance] = ekf.predicted(1.0);
+  EXPECT_DOUBLE_EQ(state[tp::OTHER_R], 0.24);
+  EXPECT_NEAR(covariance(tp::OTHER_R, tp::OTHER_R), 0.0034, 1e-12);
+  ekf.reacquire(Vector3d(2.7, 0.0, 0.3), CAMERA, 1.0, iso(1e-4));
+  EXPECT_DOUBLE_EQ(ekf.other_r(), 0.24);
+  EXPECT_DOUBLE_EQ(ekf.P(tp::OTHER_R, tp::OTHER_R), 0.003);
+  EXPECT_DOUBLE_EQ(ekf.P(R, tp::OTHER_R), 0.0002);
+}
+
+TEST(ArmorTracker, FacingUpdateConstrainsBothCorrelatedRadii)
+{
+  tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), ekf_params());
+  ekf.state[YAW] -= 1.0;
+  ekf.P.setIdentity();
+  ekf.P(R, YAW) = ekf.P(YAW, R) = -0.4;
+  ekf.P(tp::OTHER_R, YAW) = ekf.P(YAW, tp::OTHER_R) = 0.4;
+  ekf.update_facing(CAMERA, 0.1);
+  EXPECT_GE(ekf.state[R], ekf.p.r_min);
+  EXPECT_LE(ekf.state[R], ekf.p.r_max);
+  EXPECT_GE(ekf.other_r(), ekf.p.r_min);
+  EXPECT_LE(ekf.other_r(), ekf.p.r_max);
 }
