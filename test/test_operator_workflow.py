@@ -532,6 +532,7 @@ def test_failed_localize_stops_owned_launch_without_pass(monkeypatch, tmp_path, 
     import subprocess
     import sys
 
+    monkeypatch.setenv('THORNBOTS_FOXGLOVE', 'true')
     processes = []
     real_popen = subprocess.Popen
 
@@ -578,6 +579,7 @@ def test_workflow_signal_stops_launch_and_bridge(monkeypatch, tmp_path, signum):
     import sys
     import time
 
+    monkeypatch.setenv('THORNBOTS_FOXGLOVE', 'true')
     processes = []
     real_popen = subprocess.Popen
     command = [sys.executable, '-c', 'import time; time.sleep(60)']
@@ -609,6 +611,7 @@ def test_bridge_failure_stops_launch_without_localize_pass(monkeypatch, tmp_path
     import sys
     import time
 
+    monkeypatch.setenv('THORNBOTS_FOXGLOVE', 'true')
     processes = []
     real_popen = subprocess.Popen
 
