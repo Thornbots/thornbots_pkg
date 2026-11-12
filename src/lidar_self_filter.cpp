@@ -17,9 +17,7 @@
 // lidar's frame; no joint-state sub needed), republishing on scan. Works for
 // sim and real hardware.
 //
-// Robot-measured 2026-10-31 (flipped lidar, level pitch): -1.927..-0.171 rad
-// (-110.4..-9.8 deg) in the inverted scan frame, scan zero 2.579 rad CCW of
-// the gun. See README.md for evidence.
+// Upright mount sector from the Oct 26 robot session; see README.md.
 
 #include <cmath>
 #include <limits>
@@ -39,8 +37,8 @@ public:
   LidarSelfFilter()
   : Node("lidar_self_filter")
   {
-    declare_parameter("blind_angle_start", -1.927);
-    declare_parameter("blind_angle_end", -0.171);
+    declare_parameter("blind_angle_start", -0.5585);
+    declare_parameter("blind_angle_end", 1.0123);
     sub_ = create_subscription<LaserScan>(
       "scan_raw", 10, [this](LaserScan::ConstSharedPtr m) {scan_callback(*m);});
     pub_ = create_publisher<LaserScan>("scan", 10);
