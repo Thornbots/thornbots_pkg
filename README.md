@@ -652,6 +652,10 @@ benches acknowledge every consumed estimate with `state_ack_topic`, using
 `input_stamp` (or `detection_stamp` for fixtures without input provenance),
 retaining the input model's frame. `target_state_none_topic` marks suppressed inputs using that same driving frame stamp,
 so suppression does not deadlock the graph or count as a missing detection.
+When a fixture sets `consumer_ack_topic`, input acknowledgments wait until the
+consumer has acknowledged all states emitted before that input was processed.
+This requires one ordered consumer, connected before inputs start; it is off on
+the robot and does not establish UART delivery.
 
 Core/unit coverage exercises YOLO score propagation, decay and hysteresis
 boundaries, nonfinite data, confidence loss/clear, reassignment, track switches,

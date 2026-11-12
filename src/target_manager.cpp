@@ -36,12 +36,20 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
   const auto input = declare_parameter("input_topic", std::string("/cv/tracker/target_state"));
   const auto output = declare_parameter("output_topic", std::string("/cv/target_state"));
   const auto ack = declare_parameter("state_ack_topic", std::string(""));
+  const auto consumer_ack = declare_parameter("consumer_ack_topic", std::string(""));
   const auto none = declare_parameter("target_state_none_topic", std::string(""));
   pub_ = create_publisher<Message>(output, 10);
   send_ = [this](const Message & m) {pub_->publish(m);};
   if (!ack.empty()) {
     ack_pub_ = create_publisher<std_msgs::msg::Header>(ack, 100);
     ack_ = [this](const std_msgs::msg::Header & h) {ack_pub_->publish(h);};
+  }
+  if (!consumer_ack.empty()) {
+    consumer_ack_sub_ = create_subscription<std_msgs::msg::Header>(
+      consumer_ack, 100, [this](std_msgs::msg::Header::ConstSharedPtr) {
+        if (consumed_ < emitted_) {++consumed_;}
+        flush_acks();
+      });
   }
   if (!none.empty()) {
     none_pub_ = create_publisher<std_msgs::msg::Header>(none, 100);
@@ -116,7 +124,20 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
   h.stamp = (msg->input_stamp.sec != 0 || msg->input_stamp.nanosec != 0) ?
     msg->input_stamp : msg->detection_stamp;
   if (event == TargetEvent::None && none_) {none_(h);}
-  if (ack_) {ack_(h);}
+  if (ack_) {
+    if (consumer_ack_sub_) {
+      pending_acks_.emplace_back(emitted_, h);
+      flush_acks();
+    } else {ack_(h);}
+  }
+}
+
+void TargetManagerNode::flush_acks()
+{
+  while (!pending_acks_.empty() && pending_acks_.front().first <= consumed_) {
+    ack_(pending_acks_.front().second);
+    pending_acks_.pop_front();
+  }
 }
 
 void TargetManagerNode::tick()
@@ -143,6 +164,7 @@ void TargetManagerNode::emit(TargetEvent event, const rclcpp::Time & at)
     out.reset = false;
   }
   send_(out);
+  ++emitted_;
   if (observe_) {observe_(event, out);}
 }
 }  // namespace thornbots_pkg

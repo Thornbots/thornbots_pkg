@@ -32,7 +32,8 @@ public:
   std::vector<Message> sent;
   std::vector<Header> acks, suppressed;
   int64_t time_ns = 1100000000;
-  Probe()
+  explicit Probe(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+  : TargetManagerNode(options)
   {
     send_ = [this](const Message & m) {sent.push_back(m);};
     ack_ = [this](const Header & h) {acks.push_back(h);};
@@ -154,6 +155,34 @@ TEST_F(ManagerNodeTest, ConfidentSameIdentityResetReleasesPlannerBeforeReassigni
   EXPECT_TRUE(node.sent[1].clear);
   EXPECT_TRUE(node.sent[2].valid); EXPECT_FALSE(node.sent[2].clear);
   node.tick(); EXPECT_EQ(node.sent.size(), 3u);
+}
+
+TEST_F(ManagerNodeTest, FixtureAckWaitsForEveryEmittedStateToBeConsumed)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("consumer_ack_topic", "/test/manager_consumer_ack");
+  auto manager = std::make_shared<Probe>(options);
+  auto peer = std::make_shared<rclcpp::Node>("manager_consumer_test_peer");
+  auto consumed = peer->create_publisher<Header>("/test/manager_consumer_ack", 100);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(manager); executor.add_node(peer);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (consumed->get_subscription_count() == 0 && std::chrono::steady_clock::now() < deadline) {
+    executor.spin_some();
+  }
+  ASSERT_GT(consumed->get_subscription_count(), 0u);
+  manager->consume(model());
+  auto reset = model(); reset->reset = true; manager->consume(reset);
+  ASSERT_EQ(manager->sent.size(), 3u);
+  EXPECT_TRUE(manager->acks.empty());
+  for (size_t i = 0; i < 3; ++i) {
+    consumed->publish(Header{});
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (manager->acks.size() < (i == 0 ? 1u : i == 2 ? 2u : 1u) &&
+      std::chrono::steady_clock::now() < until) {executor.spin_some();}
+    if (i == 1) {executor.spin_some(); EXPECT_EQ(manager->acks.size(), 1u);}
+  }
+  ASSERT_EQ(manager->acks.size(), 2u);
 }
 
 TEST_F(ManagerNodeTest, EpochZeroRequiresSimulatedClock)
