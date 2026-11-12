@@ -346,8 +346,6 @@ body-fixed `base_link`: nothing on the robot needs one yet, and a turning
 
 #### Odometry pods
 
-The [CAD pod table and firmware channel/sign derivation](../docs/investigations/sentry-cad-2026-10-26.html#odometry-pods)
-record the start-frame encoder axes, red/blue signs and exported wheel geometry.
 The motor-to-CAD yaw datum is unknown, so source-part/channel labels are conditional.
 The pods were omitted from the imported model; its four `wheel_*` links are
 drive wheels, not encoder pods.
@@ -647,9 +645,7 @@ the bore front is 172.976 mm ahead of this aiming origin.
 The clearance datum places the lowest exported wheel on z=0. The exported
 wheel bottoms differ by 32.5 mm, so this does not establish the real settled
 ground plane. The heading-fixed [root convention](#pose_translator) is
-unchanged. The [dated CAD investigation](../docs/investigations/sentry-cad-2026-10-26.html)
-records the archive checksum, derivation, transform comparison, tests and
-hardware checks still required. The earlier Oct 25 position-only fit differed
+unchanged. The earlier Oct 25 position-only fit differed
 from CAD by **10.6 cm** in XY; the Oct 26 joint fit resolves the scan-zero yaw
 and supports the CAD radius (see [self-filter](#lidar_self_filter)).
 
@@ -666,8 +662,7 @@ The lidar is upright again. Defaults restore the Oct 26 CAD translation in
 CCW of the gun, and the level-pitch sector -0.5585..1.0123 rad in the scan
 frame. These values have not been remeasured since the mount was returned
 upright; confirm the mount, nose-up/down sectors and floor-to-scan height on the
-robot. The [Oct 26 evidence](../docs/investigations/lidar-mount-2026-10-26.html)
-records the original fit.
+robot.
 
 The filter compares scan-frame angles without TF. Negative bounds and sectors
 crossing scan zero are supported. Keep the simulated sensor mount and robot
