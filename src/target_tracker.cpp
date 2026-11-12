@@ -39,6 +39,8 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "thornbots_pkg/armor_tracker.hpp"
+#include "thornbots_pkg/target_confidence.hpp"
+#include "thornbots_pkg/target_tracker_node.hpp"
 
 namespace thornbots_pkg
 {
@@ -50,11 +52,11 @@ using namespace std::chrono_literals;
 class TargetTracker : public rclcpp::Node
 {
 public:
-  TargetTracker()
-  : Node("target_tracker")
+  explicit TargetTracker(const rclcpp::NodeOptions & options)
+  : Node("target_tracker", options)
   {
     robot_panels_topic_ = declare_parameter("robot_panels_topic", std::string("/cv/robot_panels"));
-    output_topic_ = declare_parameter("output_topic", std::string("/cv/target_state"));
+    output_topic_ = declare_parameter("output_topic", std::string("/cv/tracker/target_state"));
     measurement_topic_ = declare_parameter(
       "measurement_topic", std::string("/cv/tracker/measurement"));
     odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
@@ -62,6 +64,8 @@ public:
     // Unmeasured on hardware (../../docs/ROADMAP.md, track B); match the emulator's in sim.
     camera_latency_s_ = declare_parameter("camera_latency_s", 0.0);
     track_max_gap_s_ = declare_parameter("track_max_gap_s", 0.5);
+    confidence_tau_s_ = declare_parameter("confidence_decay_tau_s", 0.30);
+    decay_confidence(0.0, 0.0, confidence_tau_s_);
     // How long a detection waits for the camera's TF at its capture time
     // before it is dropped; never matched to a newer pose. See README.md.
     tf_max_wait_s_ = declare_parameter("tf_max_wait_s", 0.25);
@@ -126,13 +130,13 @@ public:
     }
     sub_ =create_subscription<PanelDetectionArray>(
       robot_panels_topic_, 10, [this](PanelDetectionArray::ConstSharedPtr msg) {
-        if (!msg->detections.empty() || process_delay_s_ >= 0.0) {
+        if (!msg->detections.empty() || process_delay_s_ >= 0.0 || tracker_) {
           // With a processing delay an empty frame waits its turn too, so its none-mark
           // cannot reach a lockstep chain before an earlier frame's TargetState.
           waiting_.emplace_back(msg, now());
           drain();
         } else {
-          mark_none(msg->header);
+          publish_empty(*msg, now());
         }
       });
     // Wall-clock retries: a bench that holds sim time until this node
@@ -172,7 +176,7 @@ private:
         }
       }
       if (msg->detections.empty()) {
-        mark_none(msg->header);
+        publish_empty(*msg, due.value_or(now()));
         waiting_.pop_front();
         continue;
       }
@@ -204,7 +208,24 @@ private:
           "TF %s<-%s at capture %.3f unavailable after %.3f s (tf_max_wait_s=%.2f) -- "
           "dropping: %s", odom_frame_.c_str(), camera_frame.c_str(), query.seconds(), waited_s,
           tf_max_wait_s_, error.c_str());
-        mark_none(msg->header);
+        const auto stamp = capture_time(*msg);
+        const auto id = msg->detections.front().robot_track_id;
+        if (!track_id_ || id != *track_id_ || (last_stamp_ &&
+          (stamp < *last_stamp_ || (stamp - *last_stamp_).seconds() > track_max_gap_s_)))
+        {
+          TargetState status;
+          status.header.stamp = due.value_or(now());
+          status.header.frame_id = odom_frame_;
+          status.detection_stamp = stamp;
+          status.input_stamp = msg->header.stamp;
+          status.robot_track_id = id;
+          status.reset = true;
+          tracker_.reset(); track_id_.reset(); last_output_.reset();
+          confidence_.reset(); detection_stamp_.reset(); n_updates_ = 0;
+          pub_->publish(status);
+        } else {
+          mark_none(msg->header);
+        }
         waiting_.pop_front();
         continue;
       }
@@ -218,6 +239,35 @@ private:
   void mark_none(const std_msgs::msg::Header & header)
   {
     if (none_pub_) {none_pub_->publish(header);}
+  }
+
+  void publish_empty(const PanelDetectionArray & msg, const rclcpp::Time & at)
+  {
+    auto out = last_output_.value_or(TargetState{});
+    if (!last_output_) {
+      out.header.stamp = at;
+      out.header.frame_id = odom_frame_;
+      out.detection_stamp = msg.header.stamp;
+      out.selected_track = false;
+    }
+    out.reset = false;
+    out.input_stamp = msg.header.stamp;
+    // Empty input carries the held model's true time; it is not new evidence.
+    if (last_stamp_ && ((at - *last_stamp_).seconds() > track_max_gap_s_ ||
+      at < rclcpp::Time(out.header.stamp, at.get_clock_type())))
+    {
+      out.selected_track = false;
+      out.valid = false;
+      out.reset = true;
+      out.header.stamp = at;
+      out.detection_stamp = msg.header.stamp;
+      tracker_.reset();
+      confidence_.reset();
+      detection_stamp_.reset();
+      track_id_.reset();
+      last_output_.reset();
+    }
+    pub_->publish(out);
   }
 
   std::optional<geometry_msgs::msg::TransformStamped> lookup(
@@ -269,12 +319,16 @@ private:
   {
     const auto & first = msg.detections.front();
     const rclcpp::Time stamp = capture_time(msg);
-    if (!track_id_ || first.robot_track_id != *track_id_ ||
-      (last_stamp_ && (stamp - *last_stamp_).seconds() > track_max_gap_s_))
+    bool reset = !track_id_ || first.robot_track_id != *track_id_ ||
+      (last_stamp_ && (stamp < *last_stamp_ ||
+      (stamp - *last_stamp_).seconds() > track_max_gap_s_));
+    if (reset)
     {
       track_id_ = first.robot_track_id;
       tracker_.reset();
       n_updates_ = 0;
+      confidence_.reset();
+      detection_stamp_.reset();
     }
     last_stamp_ = stamp;
 
@@ -285,21 +339,35 @@ private:
     const double t_sec = stamp.seconds();
     const double facing_std = msg.detections.size() == 1 ? single_panel_yaw_std_ : 0.0;
     std::optional<Vector3d> first_panel;
+    bool accepted_capture = false;
     for (const auto & det : msg.detections) {
+      if (det.robot_track_id != first.robot_track_id || !std::isfinite(det.confidence)) {continue;}
       const Vector3d panel_cam(det.center.x, det.center.y, det.center.z);
+      if (!panel_cam.allFinite()) {continue;}
       const Vector3d panel = rot * panel_cam + T;
       const double range = panel_cam.norm();
       const double stddev = meas_noise_base_m_ + meas_noise_range_coeff_ * range * range;
-      if (!first_panel) {
-        first_panel = panel;
-      }
       const Matrix3d R_meas = ray_covariance(panel, T, stddev, meas_noise_lateral_m_);
       if (!tracker_) {
         tracker_.emplace(panel, T, t_sec, R_meas, params_);
+        first_panel = panel;
+        confidence_.accept(det.confidence, t_sec);
+        accepted_capture = true;
         continue;
       }
       const auto result =
         tracker_->step(panel, T, t_sec, R_meas, gate_nis_, max_outliers_, facing_std);
+      if (result == StepResult::Reacquire) {
+        reset = true;
+        n_updates_ = 0;
+        confidence_.reset();
+        first_panel = panel;
+      }
+      if (result != StepResult::Outlier) {
+        confidence_.accept(det.confidence, t_sec);
+        accepted_capture = true;
+        if (!first_panel) {first_panel = panel;}
+      }
       if (log_innovations_) {
         const auto & f = tracker_->best();
         RCLCPP_INFO(
@@ -319,7 +387,23 @@ private:
           *track_id_, max_outliers_);
       }
     }
-    ++n_updates_;
+    if (accepted_capture) {
+      ++n_updates_;
+      detection_stamp_ = stamp;
+    }
+    if (!tracker_) {
+      TargetState status;
+      status.header.stamp = due.value_or(now());
+      status.header.frame_id = odom_frame_;
+      status.detection_stamp = stamp;
+      status.robot_track_id = first.robot_track_id;
+      status.selected_track = true;
+      status.reset = reset;
+      status.input_stamp = msg.header.stamp;
+      pub_->publish(status);
+      measurement_pub_->publish(msg.header);
+      return;
+    }
 
     // TargetState describes the target now: predict to the publish time.
     const rclcpp::Time now_t = due ? std::max(*due, stamp) : std::max(now(), stamp);
@@ -327,10 +411,10 @@ private:
     const auto [s, P] = tracker_->predicted(now_t.seconds());
     TargetState out;
     out.header.stamp = now_t;
-    out.detection_stamp = stamp;
+    out.detection_stamp = detection_stamp_.value_or(stamp);
     out.header.frame_id = odom_frame_;
     out.robot_track_id = first.robot_track_id;
-    out.confidence = first.confidence;
+    out.confidence = static_cast<float>(confidence_.at(now_t.seconds(), confidence_tau_s_));
     out.center.x = s[POS];
     out.center.y = s[POS + 1];
     out.center.z = s[POS + 2];
@@ -344,16 +428,22 @@ private:
       out.variance[i] = static_cast<float>(P(POS + i, POS + i));
       out.variance[3 + i] = static_cast<float>(P(VEL + i, VEL + i));
     }
-    out.panel.x = first_panel->x();
-    out.panel.y = first_panel->y();
-    out.panel.z = first_panel->z();
+    const auto measured = first_panel.value_or(last_panel_);
+    out.panel.x = measured.x();
+    out.panel.y = measured.y();
+    out.panel.z = measured.z();
+    last_panel_ = measured;
     out.yaw = static_cast<float>(s[YAW]);
     out.yaw_rate = static_cast<float>(s[W]);
     out.yaw_rate_variance = static_cast<float>(P(W, W));
     out.radius = {static_cast<float>(s[R]), static_cast<float>(tracker_->other_r())};
     out.z_offset = {static_cast<float>(s[DZ]), static_cast<float>(-s[DZ])};
-    // Two updates before consumers lead on it; they weigh the variances for anything finer.
-    out.valid = n_updates_ >= 2;
+    out.valid = s.allFinite() && P.allFinite();
+    out.selected_track = true;
+    out.reset = reset;
+    out.update_count = n_updates_;
+    out.input_stamp = msg.header.stamp;
+    last_output_ = out;
     pub_->publish(out);
     measurement_pub_->publish(msg.header);
   }
@@ -361,6 +451,11 @@ private:
   std::string robot_panels_topic_, output_topic_, measurement_topic_, odom_frame_;
   double pose_latency_s_, camera_latency_s_, track_max_gap_s_, tf_max_wait_s_, tf_lookahead_s_;
   double process_delay_s_, process_align_s_;
+  double confidence_tau_s_;
+  TargetConfidence confidence_;
+  Vector3d last_panel_ = Vector3d::Zero();
+  std::optional<TargetState> last_output_;
+  std::optional<rclcpp::Time> detection_stamp_;
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
   int max_outliers_;
@@ -384,12 +479,8 @@ private:
   int n_updates_ = 0;
 };
 
-}  // namespace thornbots_pkg
-
-int main(int argc, char ** argv)
+std::shared_ptr<rclcpp::Node> make_target_tracker(const rclcpp::NodeOptions & options)
 {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<thornbots_pkg::TargetTracker>());
-  rclcpp::shutdown();
-  return 0;
+  return std::make_shared<TargetTracker>(options);
 }
+}  // namespace thornbots_pkg

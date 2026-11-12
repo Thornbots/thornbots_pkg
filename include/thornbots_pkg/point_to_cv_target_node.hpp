@@ -15,8 +15,8 @@
 // ROS wrapper for point_to_cv_target_core.hpp: idle looks while no target is
 // tracked. The MCB plans aim and fire from the relayed /cv/target_state.
 //
-// /cv/target_state sets target-active (until target_timeout_s after its newest
-// detection). Each publish tick sends an odom-frame idle CVTarget only while
+// /cv/target_state sets target-active until clear or assignment-link expiry.
+// Each publish tick sends an odom-frame idle CVTarget only while
 // no target is active. See README.md.
 //
 // The protected members are seams for test/test_point_to_cv_target_node.cpp:
@@ -72,7 +72,7 @@ protected:
   std::function<void(const std_msgs::msg::Header &)> send_tick_, send_ack_;
 
   std::string target_state_topic_, odom_frame_, navigation_frame_, muzzle_frame_;
-  double target_timeout_s_;
+  std::optional<rclcpp::Time> last_assignment_receipt_;
   IdleLook idle_;
   std::string idle_direction_;
   bool blue_ = false;

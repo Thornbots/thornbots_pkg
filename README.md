@@ -22,7 +22,8 @@ localization backends are in
 | `mcb_relay` | `/localization/map_odom` (mapping/none: `/localization/odom`), `/odom`, `/cv/target`, `/cv/target_state` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/target_state`, `/mcb/navigation_odom`; sets `type_c_based_patrol` on both |
 | `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/mcb/navigation_odom` | `dji_serial_bridge_node`'s `~/nav_goal` (absolute field waypoint) |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
-| `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
+| `target_tracker` | `/cv/robot_panels` | `/cv/tracker/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
+| `target_manager` | `/cv/tracker/target_state` | `/cv/target_state` (assign/update/refresh/clear); optional consumed-input and no-send acknowledgments |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/ref_sys` | `/cv/target` (`CVTarget`, odom frame, idle look, only while no target is tracked); `tick_topic`, `state_ack_topic` if set (bench only) |
 
 `mcb_relay` forwards outgoing target state, idle looks and relocalization messages to the bridge;
@@ -36,7 +37,7 @@ NAV_GOALs only with the remote's right switch up.
 `point_to_cv_target` runs in both modes because
 `/cv/target` idle looks also feed sim's `cv_head_aim`. The CV nodes each have an enable
 arg (`enable_target_selector`, `enable_target_tracker`,
-`enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
+`enable_target_manager`, `enable_cv_target_bridge`) and a ROS-free core for unit tests (`include/thornbots_pkg/*_core.hpp`, or
 `armor_tracker.hpp` for `target_tracker`). Runtime nodes are C++ (`src/`);
 launch and the operator workflow use Python.
 
@@ -51,8 +52,9 @@ PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, 
 
 /localization/map_odom vs /odom        --[mcb_relay, gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
 /mcb/navigation_odom + ref_sys         --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
-/cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
+/cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/tracker/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
+/cv/tracker/target_state --[target_manager]--> /cv/target_state
 /cv/target_state --[mcb_relay]--> dji_serial_bridge_node (~/target_state) --> UART --> MCB (plans aim and fire)
 /cv/target_state, ref_sys --[point_to_cv_target]--> /cv/target (idle look, odom frame, only with no target)
 /cv/target --[mcb_relay]--> dji_serial_bridge_node (~/cv_target) --> UART --> MCB
@@ -272,18 +274,26 @@ Agents stopping backgrounded launches use `kill_launch.sh`: [Docker skill](../.c
 
 ## Testing
 
-The unit tests exercise the ROS-free cores on synthetic input and need no
-running graph. `colcon test` runs them all, gtest and the pytest lint checks:
+The tests exercise ROS-free cores, real tracker/manager ROS delivery and the
+manager/relay/bridge handoff on a PTY. They create their own nodes and need no
+running robot or sim stack. `colcon test` includes gtest and pytest lint checks:
 
 ```bash
 cd /workspaces/isaac_ros-dev
-colcon test --packages-select thornbots_pkg && colcon test-result --verbose
+colcon test --packages-select thornbots_pkg --ctest-args -j1
+colcon test-result --verbose
 ./build/thornbots_pkg/test_armor_tracker   # the tracker's gtest alone
 ```
 
 `test_armor_tracker.cpp` covers the armor EKF, the hypothesis bank, handoffs,
 gating and the still hypothesis; `test_target_selector_core.cpp` scoring,
-centrality, grouping and hysteresis; `test_mcb_relay_core.cpp` the relocalize
+centrality, grouping and hysteresis;
+`test_target_manager_core.cpp` confidence and managed send decisions,
+`test_target_manager_node.cpp` stamps, clears and acknowledgments, and
+`test_target_tracker_node.cpp` real ROS propagation, reset/loss delivery and
+the seeded detection-stream measurement. `test_target_handoff_ros.py` checks
+the real manager/relay/bridge path with byte-exact assign/clear flags.
+`test_mcb_relay_core.cpp` covers the relocalize
 decision; `test_point_to_cv_target_core.cpp` the latency stat and idle looks;
 `test_pose_translator_node.cpp` the stamp, frame,
 joint and covariance mapping; `test_point_to_cv_target_node.cpp` the publish tick,
@@ -446,13 +456,11 @@ diverged. With `clock_ack_topic` set (the bench sets
 update once `now()` reads it, and `bench_world` sends a step's detections
 only after the echo of the last tick arrives.
 
-For the estimation bench, `point_to_cv_target` can publish `state_ack_topic`
-(off by default). It echoes each consumed model's Header, retaining the
-model stamp and frame. A `tick_topic` Header records the decision time;
-its frame names the output aim frame when an aim was published, otherwise
-it is empty. The bench waits for model consumption and for the indicated
-output point to arrive before advancing physics. Publication on separate
-DDS topics alone does not establish that ordering.
+The estimation bench's input-consumption and no-send markers belong to
+[target_manager](#target_manager); the sim stand-in owns aim ticks and
+managed-model consumption acknowledgments (see its
+[interface](../sim/README.md#mcb-aim-stand-in)). Publication on separate
+DDS topics alone does not establish consumer completion.
 
 Every TF lookup in `target_tracker` and `point_to_cv_target` is
 non-blocking. `/tf` is serviced by the same executor as the detection
@@ -560,28 +568,33 @@ pulls away at 6 m/s^2 is handed over after about 0.23 s, with up to 9 cm
 error in between (4 cm without the still model); that came from a
 unit-test probe, and the estimation bench has no drive-off cell to confirm it yet.
 
-The filter resets on a `robot_track_id` change or a `track_max_gap_s` gap.
-It publishes on every `/cv/robot_panels` message it can place in odom, from
-the first. `valid` goes true after 2 updates, because an engagement can be
-shorter than one spin period; consumers should weigh `variance` and
-`yaw_rate_variance`. `confidence` is the winning panel's, `panel` its measured
-position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
-`acceleration` the centre's. Each state is
-`ArmorTracker::predicted()` at the publish time and stamped with it, as
-`TargetState.msg` asks, so the MCB only propagates from there.
+The filter resets on a `robot_track_id` change, backward capture time, a
+`track_max_gap_s` gap or outlier-driven position reacquisition. It publishes usable models from the first accepted capture
+on `/cv/tracker/target_state`, with accepted-capture `update_count`, explicit
+`selected_track` and `reset` status. Empty frames retain the model and evidence
+stamps while confidence decays; a gap retirement publishes an unusable reset
+status. The selector forwards empty frames. Rejected/outlier detections never
+refresh confidence or the contributing capture stamp. Status-only inputs identify
+the driving frame separately in `input_stamp` for lockstep no-send acknowledgments.
+
+Each model is `ArmorTracker::predicted()` at its state stamp, carrying predicted
+covariance too. `panel` is the latest accepted measured position for diagnostics,
+`radius` both pairs' radii, `z_offset` `[dz, -dz]`, and `acceleration` the centre's.
 See the [CV interface](#cv-interface) for correction ownership.
 
-### target_manager (proposed)
+<a id="target_manager-proposed"></a>
 
-**Design for review; not implemented.** Insert a C++ target manager between
+### target_manager
+
+The C++ target manager sits between
 `target_tracker` and `mcb_relay`, with a ROS-free core and source-declared tuning
-parameters. The [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-target-assignment-update-and-clear)
+parameters. The [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#target-assignment-update-and-clear)
 is the maintained home for assignment confidence, update triggers, refresh
-cadence, clear semantics and their proposed initial values. The
-[MCBV3 planner](../firmware/MCBV3/README.md#target-handoff-redesign-proposed-review-before-implementation)
+cadence, clear semantics and their initial values. The
+[MCBV3 planner](../firmware/MCBV3/README.md#mcbv3-aiming-planner)
 owns continuous chase, shot windows, alignment and ballistics.
 
-Proposed topic flow (the node table above still describes current code):
+Topic flow:
 
 ```text
 /cv/robot_panels -> target_tracker -> /cv/tracker/target_state
@@ -589,30 +602,32 @@ Proposed topic flow (the node table above still describes current code):
                                       -> point_to_cv_target (idle selection)
 ```
 
-Keep `/cv/target_state` as the managed assignment boundary. Remap the tracker's
+`/cv/target_state` is the managed assignment boundary. Launch remaps the tracker's
 raw output to `/cv/tracker/target_state`; raw estimates must not bypass the
 manager into the relay. Estimation diagnostics and `/cv/tracker/measurement`
 remain tied to every estimator update, including updates that send no managed
 state. Truth-state aiming fixtures feed the manager's input too, so they test
 the same handoff; the sim stand-in consumes the managed output.
 
-The tracker continues to fold in every detection and publish estimates with
-their measurement provenance, propagated YOLO confidence and covariance. Expose
-explicit selected-track/reset status to the manager; remove the existing
-two-update `valid` requirement from assignment. No observation means confidence
-decay, not an immediate clear on a single empty frame. Explicit track retirement,
-filter reset and a track-id change must reach the manager even when the tracker
-produces no usable model. Track switch clears an old assignment
+The tracker folds in every detection and publishes estimates with
+their measurement provenance, propagated YOLO confidence and covariance. It exposes
+explicit selected-track/reset status to the manager; assignment has no
+two-update requirement. No observation means confidence
+decay, not an immediate clear on a single empty frame. Explicit retirement,
+filter resets and track-id changes reach the manager even when the tracker
+produces no usable model, including a switch whose transform is unavailable.
+Track switch clears an old assignment
 immediately if the replacement is still below the assign threshold; a confident
-replacement can be assigned in the same callback. Panel handoffs preserve robot identity.
+replacement can be assigned in the same callback. A confident same-id filter
+reset emits clear before reassignment so the firmware resets its planner too.
+Panel handoffs preserve robot identity.
 
 The manager owns the last emitted model and its true state time, the current
 candidate, and whether an assignment exists. On each estimate it
 evaluates confidence first, then the protocol's drift/identity send rules. Its
 refresh/decision timer evaluates decaying confidence every 5 ms (also on each
-estimate), and predicts covariance as well as state when needed. A stale input
-is never made confident by publishing it again. A refresh
-requires new contributing measurement evidence since the previous emitted
+estimate). A stale input is never made confident by publishing it again.
+A refresh requires new contributing measurement evidence since the previous emitted
 model; if input stops, send no repeated model to keep a dead tracker alive.
 Confidence crossing the clear threshold or an explicit loss event clears the
 assignment immediately on that evaluation; a stopped manager/tracker is also
@@ -621,27 +636,31 @@ sanity check, with no magnitude gate.
 There is no manager dwell timer and no independent detection-age fire gate.
 
 Carry model and detection stamps through unchanged when forwarding an estimate;
-only actual model/covariance propagation advances state time. Clear is a newly
-created decision stamped at that decision time. `mcb_relay` keeps patrol-policy
-ownership and forwards clear without converting it into a look point. The bridge
+only actual model/covariance propagation advances state time. The manager
+forwards estimates without predicting outgoing state, retaining their covariance
+and state stamp; only its drift comparison uses constant-acceleration prediction.
+Clear is a newly created decision stamped at that decision time. `mcb_relay`
+keeps patrol-policy ownership and forwards clear without converting it into a look point. The bridge
 does not contain any assignment policy.
 
-`point_to_cv_target` should consume this assignment/clear boundary, remember the
-last assigned enemy, and resume idle selection immediately on clear. Remove its
-`target_timeout_s` detection hold; use the protocol's assignment/link semantics
-for a missing manager instead. Idle points never fire. Add the manager to normal
-and sim launch paths, with the same DDS profile as the other CV nodes. Lockstep
-benches need acknowledgments for consumed estimates and explicit no-send events,
+`point_to_cv_target` consumes this assignment/clear boundary, remembers the
+last assigned enemy, and resumes idle selection immediately on clear. It uses
+the protocol's receipt-based 0.6 s assignment link deadline for a missing manager,
+rather than a detection-age hold. Idle points never fire. The manager runs in
+normal and sim launch paths with the same DDS profile as the other CV nodes. Lockstep
+benches acknowledge every consumed estimate with `state_ack_topic`, using
+`input_stamp` (or `detection_stamp` for fixtures without input provenance),
+retaining the input model's frame. `target_state_none_topic` marks suppressed inputs using that same driving frame stamp,
 so suppression does not deadlock the graph or count as a missing detection.
 
-Core/unit coverage must exercise YOLO score propagation, decay and hysteresis
+Core/unit coverage exercises YOLO score propagation, decay and hysteresis
 boundaries, nonfinite data, confidence loss/clear, reassignment, track switches,
 panel relabeling, MCB-model drift at a common timestamp, suppressed updates,
-refreshes and stopped input. ROS coverage must establish stamp preservation,
+refreshes and stopped input. ROS coverage establishes stamp preservation,
 empty/reset delivery, relay/bridge clear translation and lockstep progress.
 Validate tuning with the real estimator path; do not substitute an offline
-tracker copy. The design PR changes documentation only; implementation follows
-review with coordinated firmware, bridge and sim integration.
+tracker copy. Deploy with matching firmware, bridge and sim integration. Measurements are
+recorded in [the handoff investigation](docs/target-handoff-2026-11-12.md).
 
 #### Propagated YOLO confidence
 
@@ -666,16 +685,15 @@ The manager continues this same decay from the input's carried state time:
 This is continuation of the same exponential, not a second decay of elapsed
 capture time. It crosses the wire as the model's confidence at its carried
 state stamp; the MCB does not gate shots on it. The wire contract owns the
-[assign/clear thresholds and finite-data check](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-target-assignment-update-and-clear).
+[assign/clear thresholds and finite-data check](../ros2_dji_serial_bridge/UART_PROTOCOL.md#target-assignment-update-and-clear).
 
-Declare the shared ROS-free decay calculation in the planned
-`include/thornbots_pkg/target_confidence.hpp`. Declare `confidence_decay_tau_s`
+The shared ROS-free decay calculation lives in
+`include/thornbots_pkg/target_confidence.hpp`. `confidence_decay_tau_s` is declared
 in `src/target_tracker.cpp` and `src/target_manager.cpp`, fed from one launch
-argument so they cannot use different decay constants. Declare
-`assign_confidence` and `clear_confidence` in `src/target_manager.cpp`; reject
-configuration unless `0 <= clear_confidence < assign_confidence <= 1` and
-`tau > 0`. These names/defaults are design choices for source declarations
-during implementation, not code added by this documentation PR.
+argument so they cannot use different decay constants. `assign_confidence` and
+`clear_confidence` are declared in `src/target_manager.cpp`; configuration is
+rejected unless `0 <= clear_confidence < assign_confidence <= 1` and
+`tau > 0`. Defaults live in those source declarations.
 
 ### mcb_relay
 
@@ -782,18 +800,18 @@ TF consistent when overriding the mount; sim uses this same filter.
 ### point_to_cv_target
 
 The MCB plans everything after tracking (propagation, spin handling, panel
-choice, lead, fire lock, confidence and detection-age gates, shot timing)
+choice, lead, alignment and shot timing)
 from the relayed `/cv/target_state`; see
 [MCBV3 aiming](../firmware/MCBV3/README.md#aim-and-navigation-odometry) and the
 [TARGET_STATE contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#target_state-id7--tracked-enemy-armor-model).
 This node keeps what only the Jetson can know: whether a target is tracked and
 where to look otherwise.
 
-- **Target active** from each `/cv/target_state` until its newest detection
-  (`detection_stamp`) is older than `target_timeout_s` (0.5). Publication time
-  cannot refresh it. While active it sends no `CVTarget`, so the MCB's held
-  target state decides; each tick still remembers the tracked centre (the
-  measured `panel` while unconverged) as the last enemy.
+- **Target active** from an assigned `/cv/target_state` until explicit clear or
+  0.6 s without an assigned-model receipt (exactly 0.6 s expires). Clear resumes
+  idle selection immediately. Nonassigned frames cannot extend the deadline.
+  Each assignment remembers the tracked centre as the last enemy; no raw-panel
+  fallback or detection-age timeout remains.
 - **Latest-TF fallback (hardware default).** The idle look reads the newest
   `odom<-muzzle` and `nav_odom->odom` transforms (`allow_latest_tf:=true`), which
   is what the robot runs and keeps. The simulator's lockstep E2E sets
@@ -813,21 +831,21 @@ where to look otherwise.
   goes out every tick, its frame empty when no point was sent;
   `state_ack_topic` echoes each consumed state's header. `cv_target_none_topic` (also
   lockstep only) publishes a `Header` on each tick that sent no point, so a chain can wait on
-  that or the bridge's TX ack. `target_selector` and `target_tracker` do the same on
-  `target_state_none_topic` for a frame that yields no TargetState, `mcb_relay` on
+  that or the bridge's TX ack. `target_manager` marks each suppressed input on
+  `target_state_none_topic`; `target_tracker` marks TF drops that produce no status, `mcb_relay` on
   `relocalize_none_topic` for every usable or invalid localization result that sends no RELOCALIZE, and
   `waypoint_nav` on `nav_goal_none_topic` for a tick without a goal. The simulator also sets
   `target_tracker`'s `process_delay_s`/`process_align_s` (run each update that long after the
   capture, stamped at that time instead of whenever the TF arrived) and `mcb_relay`'s
   `message_clock` (decide on the localization sample's stamp, not this node's clock) and
   `raw_odom_ack_topic`. With `process_delay_s` set, an empty frame waits its turn behind earlier ones
-  before its none-mark, so a later frame's mark cannot release an earlier tick; `tf_lookahead_s`
+  before its status/no-send acknowledgment, so a later frame's mark cannot release an earlier tick; `tf_lookahead_s`
   (default 0) also makes the tracker wait until TF is that far past its query, because tf2
   returns a sample exactly or slerps at ratio 0 (1 ulp off) by whether the next one has arrived.
   All are off by default; the robot is unchanged.
 
 Idle points are `odom` positions (`z` is `idle_height_m`, 0.15, near armor
-height). They choose the last enemy until 3 s after the target hold expires, or
+height). They choose the last enemy until 3 s after assignment release, or
 follow the gun for 2 s after REF_SYS reports a hit; the newer capture/event
 wins. Firmware owns the hit turn; the Jetson never converts its
 chassis-relative hit angle. With neither recent event, `idle_direction:=zone`
