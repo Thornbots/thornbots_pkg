@@ -345,18 +345,29 @@ def generate_launch_description():
     # directly; see thornbots_pkg/src/mcb_relay.cpp's header comment. Only meaningful
     # alongside dji_serial_bridge_node itself, hence the same real_hardware
     # gate.
+    # Blank mapping has a local-zero map, so retain team-start navigation there.
+    absolute_navigation = ["'", LaunchConfiguration('localization_mode'),
+                           "' == 'amcl' or ('", LaunchConfiguration('localization_mode'),
+                           "' == 'slam' and '", LaunchConfiguration('load_map'), "' == 'true')"]
+    navigation_frame = PythonExpression([
+        "'map' if (", *absolute_navigation, ") else '", LaunchConfiguration('odom_frame'), "'"])
+    relay_input = PythonExpression([
+        "'/localization/map_odom' if (", *absolute_navigation, ") else '/localization/odom'"])
     mcb_relay_node = Node(
         package='thornbots_pkg',
         executable='mcb_relay',
         name='mcb_relay',
-        parameters=[{'navigation_frame': LaunchConfiguration('odom_frame')}],
+        parameters=[{'use_sim_time': use_sim_time,
+                     'absolute_pose': ParameterValue(
+                         PythonExpression(absolute_navigation), value_type=bool),
+                     'localization_odom_topic': relay_input,
+                     'navigation_frame': navigation_frame}],
         output='screen',
         condition=IfCondition(real_hardware),
         additional_env=shm_env,
     )
 
-    # NAV_GOAL route on the bridge's ~/nav_goal, judged on /localization/odom
-    # in the same navigation frame mcb_relay relocalizes; see thornbots_nav's README.
+    # Arrival follows the nominal held firmware position from the relay.
     waypoint_nav_node = Node(
         package='thornbots_nav',
         executable='waypoint_nav',
@@ -368,7 +379,8 @@ def generate_launch_description():
         parameters=[
             os.path.join(get_package_share_directory('thornbots_nav'), 'config', 'route.yaml'),
             {'use_sim_time': use_sim_time,
-             'goal_frame': LaunchConfiguration('odom_frame'),
+             'goal_frame': navigation_frame,
+             'odom_topic': '/mcb/navigation_odom',
              'route': LaunchConfiguration('nav_route')}],
         additional_env=shm_env,
     )

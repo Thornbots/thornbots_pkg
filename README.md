@@ -19,8 +19,8 @@ localization backends are in
 | `lidar_self_filter` | `/scan_raw` | `/scan`, head blind sector blanked |
 | `match_wifi_guard` | `/dji_serial_bridge/ref_sys` | opt-in host Wi-Fi disconnect request |
 | `mmm` | PING, `/scan`, `/odom`, `/joint_states`, referee team, `map->root` TF | PING, SLAM reset and localization save service; opt-in host shutdown request |
-| `mcb_relay` | `/localization/odom`, `/odom`, `/cv/target`, `/cv/target_state` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/target_state`; sets `type_c_based_patrol` on both |
-| `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/localization/odom` | `dji_serial_bridge_node`'s `~/nav_goal` (route waypoint, `nav_odom`) |
+| `mcb_relay` | `/localization/map_odom` (mapping/none: `/localization/odom`), `/odom`, `/cv/target`, `/cv/target_state` | `dji_serial_bridge_node`'s `~/relocalize`, `~/cv_target`, `~/target_state`, `/mcb/navigation_odom`; sets `type_c_based_patrol` on both |
+| `waypoint_nav` ([thornbots_nav](../nav_pkg/README.md)) | `/dji_serial_bridge/ref_sys`, `/mcb/navigation_odom` | `dji_serial_bridge_node`'s `~/nav_goal` (absolute field waypoint) |
 | `target_selector` | `/cv/panel_detections`, `/dji_serial_bridge/ref_sys` (team colour) | `/cv/panel_detection` (one pick), `/cv/panel_polygon` (its corners), `/cv/robot_panels` (that robot's panels) |
 | `target_tracker` | `/cv/robot_panels` | `/cv/target_state` (`TargetState`, odom frame, armor model); `/cv/tracker/measurement` (`Header` of each detection folded in); `clock_ack_topic` if set (bench only) |
 | `point_to_cv_target` | `/cv/target_state`, `/dji_serial_bridge/ref_sys` | `/cv/target` (`CVTarget`, odom frame, idle look, only while no target is tracked); `tick_topic`, `state_ack_topic` if set (bench only) |
@@ -49,8 +49,8 @@ TF: map -> nav_odom -> odom -> root
 /dji_serial_bridge/ref_sys --[match_wifi_guard, opt-in]--> host Wi-Fi disconnect request
 PING / scan / odom / joints / referee / TF --[mmm]--> PING, slam_toolbox/reset, map_autosaver/save_now
 
-/localization/odom vs /odom            --[mcb_relay, drift-gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
-/localization/odom + ref_sys           --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
+/localization/map_odom vs /odom        --[mcb_relay, gated]-------> dji_serial_bridge_node (~/relocalize) --> UART --> MCB
+/mcb/navigation_odom + ref_sys         --[waypoint_nav, thornbots_nav]--> dji_serial_bridge_node (~/nav_goal)   --> UART --> MCB
 /cv/panel_detections --[target_selector]--> /cv/robot_panels --[target_tracker]--> /cv/target_state
                                         \-> /cv/panel_detection (one pick), /cv/panel_polygon (rviz/foxglove)
 /cv/target_state --[mcb_relay]--> dji_serial_bridge_node (~/target_state) --> UART --> MCB (plans aim and fire)
@@ -568,38 +568,53 @@ See the [CV interface](#cv-interface) for correction ownership.
 
 ### mcb_relay
 
-The bridge stays a pure UART/DJI translator; this node reshapes upstream output
-for it. `relocalize` compares fused `/localization/odom` with the estimated MCB
-navigation position: raw `/odom` plus the last sent offset, using no TF (`Relocalizer` in
-`mcb_relay_core.hpp`). Raw `/odom` never reflects a `RELOCALIZE`; the relay
-sends gated absolute navigation positions to correct the navigation offset
-while CV continues in the unchanged raw frame.
+The bridge stays a pure UART/DJI translator. In AMCL and saved-map SLAM,
+`mcb_relay` consumes absolute `/localization/map_odom` in `map`, not the drifting
+local EKF estimate. `auto.launch.py` selects team-start `/localization/odom`
+in `nav_odom` for mapping, blank-map SLAM and `none`: their maps do not establish
+an absolute field reference. Mapping retains its local-zero map and field-start
+navigation independently. It does not claim a global drift correction.
 
-- The desired offset is `loc(t) - odom(t)` at the localization stamp,
-  with `/odom` interpolated there from a 1 s buffer.
-- The navigation position sent is `loc(t)`, adjusted for estimated message
-  delay. Its age already includes the inbound UART leg because the
-  [bridge stamp](../ros2_dji_serial_bridge/UART_PROTOCOL.md#mcb--jetson)
-  estimates MCB send start. Add only the outbound `uart_latency_s` and
-  `mcb_read_delay_s`; both are placeholders until measured on the robot.
-  The point is stamped with the estimated apply time. The wire drops the
-  stamp; see the [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
-- It is sent only when confident: the localization's xy std, combined with
-  speed x `latency_std_s` (3 ms), stays under `max_std_m` (0.02), and the
-  change from the last sent offset clears both `error_threshold_meters` (0.05) and `n_sigma` (3) of
-  that std. The EKF's std reads ~1 mm at rest and ~7 mm at 1 m/s in sim.
-- After a send it waits `hold_off_s` (0.3 s) before another correction,
-  limiting correction rate. Each correction is repeated three times even if
-  the offset is unchanged, recalculating the absolute position from fresh inputs
-  through the same uncertainty gate. A lost first startup frame therefore gets
-  another opportunity; repeats are idempotent offsets, never additive deltas.
-  Raw `/odom` does not echo corrections. Clock resets/raw discontinuities forget
-  the sent offset. UART has no acknowledgement: losing all four sends is still
-  possible, and hardware mailbox/timing validation remains open.
+`Relocalizer` interpolates raw `/odom` at the input stamp, predicts raw motion
+to estimated firmware application time, and rotates **that displacement** by
+the global pose's yaw. It adds the rotated displacement to the absolute pose.
+Firmware then holds a translation offset from its current raw position; no yaw
+correction is sent, and raw POSE/CV axes never move. `nav_odom->odom` remains
+translation-only. The outgoing point is labelled `map` for absolute input,
+`nav_odom` for the fallback, and stamped with predicted application time.
+UART drops the stamp. Outbound UART latency (5 ms), firmware read delay (2 ms)
+and latency spread (3 ms) remain unmeasured robot timing estimates.
 
-The bridge packs the navigation position using the existing `RELOCALIZE`
-payload. Raw POSE and the CV aim frame remain unchanged. See the
-[wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#message-types).
+The proposed AMCL policy is subject to review; defaults live in the node/core:
+
+| Gate | Proposed value | Purpose |
+| --- | --- | --- |
+| Maximum xy std | 0.35 m | largest covariance eigenvalue, including speed/latency and prediction yaw uncertainty |
+| Pose/raw age | 0.2 s | reject stale data and poses more than 0.05 s in the future |
+| Startup | 0.1 s within 0.15 m offset spread | require a stable field fix, even at zero offset |
+| Correction trigger | max(0.10 m, 0.5 × std) | avoid small updates without allowing a 3-sigma AMCL deadband |
+| Offset jump | 1.0 m | reject large discontinuities after startup |
+| Correction step | 0.30 m | cap each translation-offset update after startup |
+| Hold / refresh | 0.3 s / 1.0 s | bound send rate; refresh while global data remains valid |
+| Retries | three | recalculate absolute positions from fresh inputs after a send |
+
+The fallback retains its 0.02 m std, 0.05 m / 3-sigma trigger and 0.3 s hold;
+it shares input freshness and fresh-input retries. A clock reset or >1 m raw
+step clears history and startup state. Covariance must be finite and positive
+semidefinite. Inputs rejected by the map-pose contract never produce fixes.
+A rejected >1 m jump requires a subsequent plausible pose or operator recovery;
+there is no automatic acceptance of a large new global origin.
+
+`/mcb/navigation_odom` estimates firmware's **held** position: raw odometry plus
+the last sent offset after predicted application time. It is stamped with raw
+odometry time, labelled in the selected navigation frame, and has child
+`mcb_navigation` and unknown (infinite) xy covariance. It broadcasts no TF.
+`waypoint_nav` uses it so arrival follows correction gating and step limits.
+There is no UART acknowledgement, so a dropped fix can temporarily separate this
+estimate from firmware; fresh retries restore agreement. Sim scores firmware's
+actual held position through its private hosted readout, including dropped frames.
+See the workspace's [dated measurements](../docs/investigations/absolute-relocalize-2026-11-11.md)
+for before/after truth errors and the proposed thresholds' limits.
 
 `cv_target` and `target_state` are straight republishes except for
 `type_c_based_patrol`, which this node owns: its parameter of that name
@@ -690,7 +705,7 @@ where to look otherwise.
   lockstep only) publishes a `Header` on each tick that sent no point, so a chain can wait on
   that or the bridge's TX ack. `target_selector` and `target_tracker` do the same on
   `target_state_none_topic` for a frame that yields no TargetState, `mcb_relay` on
-  `relocalize_none_topic` for a localization sample that sends no RELOCALIZE, and
+  `relocalize_none_topic` for every usable or invalid localization result that sends no RELOCALIZE, and
   `waypoint_nav` on `nav_goal_none_topic` for a tick without a goal. The simulator also sets
   `target_tracker`'s `process_delay_s`/`process_align_s` (run each update that long after the
   capture, stamped at that time instead of whenever the TF arrived) and `mcb_relay`'s
@@ -881,10 +896,10 @@ A field-aligned map can be used by either team. AMCL starts from the live team's
 configured start with root yaw zero,
 after a valid REF_SYS team report and a raw-zero boot check;
 the map's captured team describes registration provenance. AMCL supplies
-`map->nav_odom`, not `/localization/odom`: with rf2o that topic comes from EKF
-fusing raw velocity/fixed heading and rf2o position; room/`--raw-odom` uses
-raw odometry with the team-start translation (room mode keeps zero). The relay consumes this navigation odometry, so an
-incorrect EKF seed cannot be repaired by a correct AMCL map pose alone.
+`map->nav_odom`. The equivalent correction is composed from same-stamp backend
+and local poses into `/localization/map_odom`, which supplies absolute MCB fixes.
+The local EKF input remains raw velocity/fixed heading and rf2o position;
+room/`--raw-odom` uses raw odometry plus its configured start translation.
 Automatic `localize` and standalone `convergence` both require samples no older
 than 3 seconds, alongside the existing covariance, scan, TF and parked-pose gates.
 

@@ -232,3 +232,93 @@ TEST(Relocalizer, SendStartStampDoesNotAddTheInboundUartLegAgain)
   EXPECT_NEAR(out->x, 1.971, 1e-12);
   EXPECT_NEAR(out->y, -2.428, 1e-12);
 }
+
+namespace
+{
+Relocalizer::Params absolute_params()
+{
+  Relocalizer::Params p;
+  p.absolute_policy = true;
+  p.max_std_m = .35;
+  p.n_sigma = .5;
+  p.error_threshold_m = .1;
+  return p;
+}
+}
+
+TEST(AbsoluteRelocalizer, StartupNeedsStableFreshSamplesAndRetriesAtZeroOffset)
+{
+  Relocalizer rel(absolute_params());
+  rel.add_odom(1, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1, 0, 0, .04, 1));
+  rel.add_odom(1.11, 0, 0, 0, 0);
+  ASSERT_TRUE(rel.decide(1.11, 0, 0, .04, 1.11));
+  EXPECT_FALSE(rel.decide(1.11, 0, 0, .04, 1.5));
+  rel.add_odom(1.5, 0, 0, 0, 0);
+  EXPECT_TRUE(rel.decide(1.5, 0, 0, .04, 1.5));
+}
+
+TEST(AbsoluteRelocalizer, RotationAppliesToPredictionAndFirmwareHoldsOnlyTranslation)
+{
+  auto p = absolute_params(); p.startup_span_s = 0;
+  Relocalizer rel(p);
+  rel.add_odom(1, 0, 0, 1, 0);
+  EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1, M_PI/2));
+  rel.add_odom(1.1, .1, 0, 1, 0);
+  const auto out = rel.decide(1.01, 5, -2.99, .04, 1.1, M_PI/2);
+  ASSERT_TRUE(out);
+  EXPECT_NEAR(out->x, 5, 1e-9);
+  EXPECT_NEAR(out->y, -2.893, 1e-9);
+  EXPECT_FALSE(rel.navigation_at(1.1));
+  rel.add_odom(1.2, .2, 0, 1, 0);
+  const auto held = rel.navigation_at(1.2);
+  ASSERT_TRUE(held);
+  EXPECT_NEAR(held->first, 5.093, 1e-9);
+  EXPECT_NEAR(held->second, -2.893, 1e-9);
+}
+
+TEST(AbsoluteRelocalizer, RejectsInvalidStaleUncertainAndJumpingPosesAndLimitsSteps)
+{
+  Relocalizer rel(absolute_params());
+  rel.add_odom(1, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
+  rel.add_odom(1.11, 0, 0, 0, 0);
+  ASSERT_TRUE(rel.decide(1.11, 5, -3, .04, 1.11));
+  rel.add_odom(2, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.5, 5, -3, .04, 2));
+  EXPECT_FALSE(rel.decide(2, 5, -3, -.01, 2));
+  EXPECT_FALSE(rel.decide(2, 5, -3, .36*.36, 2));
+  EXPECT_FALSE(rel.decide(2, 7, -3, .04, 2));
+  const auto step = rel.decide(2, 5.8, -3, .04, 2);
+  ASSERT_TRUE(step);
+  EXPECT_NEAR(step->x, 5.3, 1e-9);
+  EXPECT_NEAR(step->error_m, .8, 1e-9);
+}
+
+TEST(AbsoluteRelocalizer, BadCovarianceDoesNotBootstrapAndYawUncertaintyCounts)
+{
+  Relocalizer rel(absolute_params());
+  rel.add_odom(1, 0, 0, 4, 0);
+  EXPECT_FALSE(rel.decide(1, 5, -3, NAN, 1));
+  EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
+  rel.add_odom(1.11, .44, 0, 4, 0);
+  EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1.11, 0, 4));
+  EXPECT_FALSE(rel.decide(1.11, 5.44, -3, .04, 1.11));
+  rel.add_odom(1.22, .88, 0, 4, 0);
+  EXPECT_TRUE(rel.decide(1.22, 5.88, -3, .04, 1.22));
+}
+
+TEST(AbsoluteRelocalizer, RefreshDoesNotRequireAChangedOffsetAndStillRejectsStaleData)
+{
+  auto p = absolute_params(); p.resend_count = 0;
+  Relocalizer rel(p);
+  rel.add_odom(1, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
+  rel.add_odom(1.11, 0, 0, 0, 0);
+  ASSERT_TRUE(rel.decide(1.11, 5, -3, .04, 1.11));
+  rel.add_odom(1.6, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.6, 5, -3, .04, 1.6));
+  rel.add_odom(2.2, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.6, 5, -3, .04, 2.2));
+  EXPECT_TRUE(rel.decide(2.2, 5, -3, .04, 2.2));
+}
