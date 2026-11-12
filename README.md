@@ -571,6 +571,74 @@ position, `radius` both pairs' radii, `z_offset` `[dz, -dz]`, and
 `TargetState.msg` asks, so the MCB only propagates from there.
 See the [CV interface](#cv-interface) for correction ownership.
 
+### target_manager (proposed)
+
+**Design for review; not implemented.** Insert a C++ target manager between
+`target_tracker` and `mcb_relay`, with a ROS-free core and source-declared tuning
+parameters. The [wire contract](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-target-assignment-update-and-clear)
+is the maintained home for assignment confidence, update triggers, refresh
+cadence, clear semantics and their proposed initial values. The
+[MCBV3 planner](../firmware/MCBV3/README.md#target-handoff-redesign-proposed-review-before-implementation)
+owns continuous chase, shot windows, alignment and ballistics.
+
+Proposed topic flow (the node table above still describes current code):
+
+```text
+/cv/robot_panels -> target_tracker -> /cv/tracker/target_state
+  -> target_manager -> /cv/target_state -> mcb_relay -> UART bridge -> MCB
+                                      -> point_to_cv_target (idle selection)
+```
+
+Keep `/cv/target_state` as the managed assignment boundary. Remap the tracker's
+raw output to `/cv/tracker/target_state`; raw estimates must not bypass the
+manager into the relay. Estimation diagnostics and `/cv/tracker/measurement`
+remain tied to every estimator update, including updates that send no managed
+state. Truth-state aiming fixtures feed the manager's input too, so they test
+the same handoff; the sim stand-in consumes the managed output.
+
+The tracker continues to fold in every detection and publish estimates with
+their measurement provenance and covariance. Expose its successful update count
+and explicit selected-track/reset status to the manager; its existing two-update
+`valid` flag alone cannot establish assignment confidence. Empty selected-robot
+input, filter reset and a track-id change must reach the manager even when the
+tracker produces no usable model. Track switch clears an old assignment
+immediately if the replacement is still unconverged; a confident replacement
+can be assigned in the same callback. Panel handoffs preserve robot identity.
+
+The manager owns the last emitted model and its true state time, the current
+candidate and count, and whether an assignment exists. On each estimate it
+evaluates confidence first, then the protocol's drift/identity send rules. Its
+refresh timer checks confidence and predicts covariance as well as state when
+needed. A stale input is never made confident by publishing it again. A refresh
+requires new contributing measurement evidence since the previous emitted
+model; if input stops, send no repeated model to keep a dead tracker alive.
+Covariance growth or an explicit loss event clears the assignment as soon as
+observed; a stopped manager/tracker is bounded by the MCB's link timeout.
+There is no manager dwell timer and no independent detection-age fire gate.
+
+Carry model and detection stamps through unchanged when forwarding an estimate;
+only actual model/covariance propagation advances state time. Clear is a newly
+created decision stamped at that decision time. `mcb_relay` keeps patrol-policy
+ownership and forwards clear without converting it into a look point. The bridge
+does not contain any assignment policy.
+
+`point_to_cv_target` should consume this assignment/clear boundary, remember the
+last assigned enemy, and resume idle selection immediately on clear. Remove its
+`target_timeout_s` detection hold; use the protocol's assignment/link semantics
+for a missing manager instead. Idle points never fire. Add the manager to normal
+and sim launch paths, with the same DDS profile as the other CV nodes. Lockstep
+benches need acknowledgments for consumed estimates and explicit no-send events,
+so suppression does not deadlock the graph or count as a missing detection.
+
+Core/unit coverage must exercise update counts and variance boundaries,
+nonfinite data, immediate confidence loss/clear, reconvergence, track switches,
+panel relabeling, MCB-model drift at a common timestamp, suppressed updates,
+refreshes and stopped input. ROS coverage must establish stamp preservation,
+empty/reset delivery, relay/bridge clear translation and lockstep progress.
+Validate tuning with the real estimator path; do not substitute an offline
+tracker copy. The design PR changes documentation only; implementation follows
+review with coordinated firmware, bridge and sim integration.
+
 ### mcb_relay
 
 The bridge stays a pure UART/DJI translator. In AMCL and saved-map SLAM,
