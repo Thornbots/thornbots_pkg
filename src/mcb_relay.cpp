@@ -23,6 +23,7 @@
 #include <string>
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
+#include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -81,10 +82,24 @@ public:
     p.max_pose_age_s = declare_parameter("max_pose_age_s", 0.2);
     p.max_jump_m = declare_parameter("max_jump_m", 1.0);
     p.max_step_m = declare_parameter("max_step_m", 0.3);
+    p.max_start_error_m = declare_parameter("max_start_error_m", 1.0);
     p.startup_span_s = declare_parameter("startup_span_s", 0.1);
     p.startup_spread_m = declare_parameter("startup_spread_m", 0.15);
     p.refresh_s = declare_parameter("refresh_s", 1.0);
     relocalizer_ = Relocalizer(p);
+    const double red_x = declare_parameter("red_start_x", -5.25);
+    const double red_y = declare_parameter("red_start_y", -3.0);
+    const double blue_x = declare_parameter("blue_start_x", 5.25);
+    const double blue_y = declare_parameter("blue_start_y", -3.0);
+    referee_sub_ = create_subscription<dji_serial_bridge::msg::RefSysStatus>(
+      "/dji_serial_bridge/ref_sys", rclcpp::SensorDataQoS(),
+      [this, red_x, red_y, blue_x, blue_y](dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr msg) {
+        if (!start_selected_ && msg->robot_id != 0) {
+          relocalizer_.set_start(msg->is_on_blue_team ? blue_x : red_x,
+            msg->is_on_blue_team ? blue_y : red_y);
+          start_selected_ = true;
+        }
+      });
     navigation_pub_ = create_publisher<Odometry>("/mcb/navigation_odom", 10);
     // Lockstep simulation only: decide on the localization sample's own stamp, not this
     // node's clock, which can trail the sample's by scheduling; and answer each raw
@@ -200,7 +215,8 @@ private:
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
   rclcpp::Publisher<Odometry>::SharedPtr navigation_pub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_, odom_ack_pub_;
-  bool message_clock_ = false;
+  bool message_clock_ = false, start_selected_ = false;
+  rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr referee_sub_;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;

@@ -57,6 +57,7 @@ public:
     bool absolute_policy = false;
     double max_jump_m = 1.0;
     double max_step_m = 0.3;
+    double max_start_error_m = 1.0;
     double startup_span_s = 0.1;
     double startup_spread_m = 0.15;
     double refresh_s = 1.0;
@@ -67,13 +68,16 @@ public:
   explicit Relocalizer(const Params & params)
   : p_(params) {}
 
+  // Referee-selected field start: only a startup plausibility prior.
+  void set_start(double x, double y) {start_ = std::make_pair(x, y);}
+
   // Record one /odom sample; a stamp going backwards clears the history.
   void add_odom(double t, double x, double y, double vx, double vy);
 
   // (x, y) of /odom at t: interpolated, extrapolated up to max_ahead_s, else nullopt.
   std::optional<std::pair<double, double>> odom_at(double t, double max_ahead_s = 0.1) const;
 
-  // loc_var_xy is the larger of localization's x and y variances (m^2); now is
+  // loc_var_xy is localization's largest xy covariance eigenvalue (m^2); now is
   // the send time on the /odom stamps' clock. Returns what to send, or nullopt.
   std::optional<RelocalizeCommand> decide(
     double loc_t, double loc_x, double loc_y, double loc_var_xy, double now,
@@ -88,6 +92,7 @@ public:
 private:
   Params p_;
   std::deque<OdomSample> odom_;
+  std::optional<std::pair<double, double>> start_;
   std::optional<double> last_sent_t_;
   double sent_offset_x_ = 0.0, sent_offset_y_ = 0.0;
   unsigned resends_left_ = 0;

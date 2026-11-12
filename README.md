@@ -591,7 +591,7 @@ The proposed AMCL policy is subject to review; defaults live in the node/core:
 | --- | --- | --- |
 | Maximum xy std | 0.35 m | largest covariance eigenvalue, including speed/latency and prediction yaw uncertainty |
 | Pose/raw age | 0.2 s | reject stale data and poses more than 0.05 s in the future |
-| Startup | 0.1 s within 0.15 m offset spread | require a stable field fix, even at zero offset |
+| Startup | 0.1 s within 0.15 m offset spread; at most 1.0 m from team-start + raw displacement | require a valid referee-selected start and plausible stable field fix, even at zero offset |
 | Correction trigger | max(0.10 m, 0.5 × std) | avoid small updates without allowing a 3-sigma AMCL deadband |
 | Offset jump | 1.0 m | reject large discontinuities after startup |
 | Correction step | 0.30 m | cap each translation-offset update after startup |
@@ -600,7 +600,9 @@ The proposed AMCL policy is subject to review; defaults live in the node/core:
 
 The fallback retains its 0.02 m std, 0.05 m / 3-sigma trigger and 0.3 s hold;
 it shares input freshness and fresh-input retries. A clock reset or >1 m raw
-step clears history and startup state. Covariance must be finite and positive
+step clears history and startup state. The startup prior only rejects an implausible
+first fix; subsequent corrections use absolute map poses. A wrong AMCL basin
+stays unlocalized until the source recovers or an operator resets localization. Covariance must be finite and positive
 semidefinite. Inputs rejected by the map-pose contract never produce fixes.
 A rejected >1 m jump requires a subsequent plausible pose or operator recovery;
 there is no automatic acceptance of a large new global origin.

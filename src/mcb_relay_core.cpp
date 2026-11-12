@@ -109,6 +109,12 @@ std::optional<RelocalizeCommand> Relocalizer::decide(
   double dy = loc_y + s * rx + c * ry - raw_y;
   double error = std::hypot(dx - sent_offset_x_, dy - sent_offset_y_);
   if (p_.absolute_policy && !last_sent_t_) {
+    if (!start_ || std::hypot(loc_x-at_loc->first-start_->first,
+      loc_y-at_loc->second-start_->second) > p_.max_start_error_m)
+    {
+      startup_t_.reset();
+      return std::nullopt;
+    }
     if (!startup_t_ || std::hypot(dx - candidate_x_, dy - candidate_y_) > p_.startup_spread_m) {
       startup_t_ = loc_t;
       candidate_x_ = dx; candidate_y_ = dy;

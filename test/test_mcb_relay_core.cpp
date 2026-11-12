@@ -249,6 +249,7 @@ Relocalizer::Params absolute_params()
 TEST(AbsoluteRelocalizer, StartupNeedsStableFreshSamplesAndRetriesAtZeroOffset)
 {
   Relocalizer rel(absolute_params());
+  rel.set_start(0, 0);
   rel.add_odom(1, 0, 0, 0, 0);
   EXPECT_FALSE(rel.decide(1, 0, 0, .04, 1));
   rel.add_odom(1.11, 0, 0, 0, 0);
@@ -262,6 +263,7 @@ TEST(AbsoluteRelocalizer, RotationAppliesToPredictionAndFirmwareHoldsOnlyTransla
 {
   auto p = absolute_params(); p.startup_span_s = 0;
   Relocalizer rel(p);
+  rel.set_start(5, -3);
   rel.add_odom(1, 0, 0, 1, 0);
   EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1, M_PI/2));
   rel.add_odom(1.1, .1, 0, 1, 0);
@@ -280,6 +282,7 @@ TEST(AbsoluteRelocalizer, RotationAppliesToPredictionAndFirmwareHoldsOnlyTransla
 TEST(AbsoluteRelocalizer, RejectsInvalidStaleUncertainAndJumpingPosesAndLimitsSteps)
 {
   Relocalizer rel(absolute_params());
+  rel.set_start(5, -3);
   rel.add_odom(1, 0, 0, 0, 0);
   EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
   rel.add_odom(1.11, 0, 0, 0, 0);
@@ -298,6 +301,7 @@ TEST(AbsoluteRelocalizer, RejectsInvalidStaleUncertainAndJumpingPosesAndLimitsSt
 TEST(AbsoluteRelocalizer, BadCovarianceDoesNotBootstrapAndYawUncertaintyCounts)
 {
   Relocalizer rel(absolute_params());
+  rel.set_start(5, -3);
   rel.add_odom(1, 0, 0, 4, 0);
   EXPECT_FALSE(rel.decide(1, 5, -3, NAN, 1));
   EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
@@ -312,6 +316,7 @@ TEST(AbsoluteRelocalizer, RefreshDoesNotRequireAChangedOffsetAndStillRejectsStal
 {
   auto p = absolute_params(); p.resend_count = 0;
   Relocalizer rel(p);
+  rel.set_start(5, -3);
   rel.add_odom(1, 0, 0, 0, 0);
   EXPECT_FALSE(rel.decide(1, 5, -3, .04, 1));
   rel.add_odom(1.11, 0, 0, 0, 0);
@@ -321,4 +326,18 @@ TEST(AbsoluteRelocalizer, RefreshDoesNotRequireAChangedOffsetAndStillRejectsStal
   rel.add_odom(2.2, 0, 0, 0, 0);
   EXPECT_FALSE(rel.decide(1.6, 5, -3, .04, 2.2));
   EXPECT_TRUE(rel.decide(2.2, 5, -3, .04, 2.2));
+}
+
+TEST(AbsoluteRelocalizer, StartupRejectsWrongFieldBasinEvenWithSmallCovariance)
+{
+  Relocalizer rel(absolute_params());
+  rel.add_odom(1, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1, 3.4, -5, .04, 1));
+  rel.set_start(-5.25, -3);
+  rel.add_odom(1.2, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.2, 3.4, -5, .04, 1.2));
+  rel.add_odom(1.4, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.4, -5.25, -3, .04, 1.4));
+  rel.add_odom(1.6, 0, 0, 0, 0);
+  EXPECT_TRUE(rel.decide(1.6, -5.25, -3, .04, 1.6));
 }

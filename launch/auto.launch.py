@@ -358,6 +358,14 @@ def generate_launch_description():
         executable='mcb_relay',
         name='mcb_relay',
         parameters=[{'use_sim_time': use_sim_time,
+                     'red_start_x': ParameterValue(
+                         LaunchConfiguration('red_start_x'), value_type=float),
+                     'red_start_y': ParameterValue(
+                         LaunchConfiguration('red_start_y'), value_type=float),
+                     'blue_start_x': ParameterValue(
+                         LaunchConfiguration('blue_start_x'), value_type=float),
+                     'blue_start_y': ParameterValue(
+                         LaunchConfiguration('blue_start_y'), value_type=float),
                      'absolute_pose': ParameterValue(
                          PythonExpression(absolute_navigation), value_type=bool),
                      'localization_odom_topic': relay_input,
