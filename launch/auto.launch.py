@@ -77,22 +77,22 @@ def generate_launch_description():
         'real_hardware:=true.'
     )
     lidar_inverted_arg = DeclareLaunchArgument(
-        'lidar_inverted', default_value='true',
+        'lidar_inverted', default_value='false',
         description='Lidar mounted upside down: sllidar negates scan angles so '
         'the scan frame stays z-up. Only used when real_hardware:=true.')
     lidar_x_arg = DeclareLaunchArgument(
-        'lidar_x', default_value='-0.0056', description='Lidar X in head frame, meters.')
+        'lidar_x', default_value='-0.105', description='Lidar X in head frame, meters.')
     lidar_y_arg = DeclareLaunchArgument(
         'lidar_y', default_value='-0.193326', description='Lidar Y in head frame, meters.')
     lidar_z_arg = DeclareLaunchArgument(
-        'lidar_z', default_value='0.063707', description='Lidar Z in head frame, meters.')
+        'lidar_z', default_value='0.101293', description='Lidar Z in head frame, meters.')
     lidar_yaw_arg = DeclareLaunchArgument(
-        'lidar_yaw', default_value='2.579', description='Lidar yaw CCW from head +X, radians.')
+        'lidar_yaw', default_value='0.5907', description='Lidar yaw CCW from head +X, radians.')
     lidar_blind_angle_start_arg = DeclareLaunchArgument(
-        'lidar_blind_angle_start', default_value='-1.927',
+        'lidar_blind_angle_start', default_value='-0.5585',
         description='Self-filter sector start in scan frame, radians CCW from scan zero.')
     lidar_blind_angle_end_arg = DeclareLaunchArgument(
-        'lidar_blind_angle_end', default_value='-0.171',
+        'lidar_blind_angle_end', default_value='1.0123',
         description='Self-filter sector end in scan frame, radians CCW from scan zero.')
 
     odom_frame_arg = DeclareLaunchArgument(
