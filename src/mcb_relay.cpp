@@ -12,26 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Relay all traffic to and from dji_serial_bridge_node: the sole relay onto
-// its topics; only thornbots_pkg talks to dji_serial_bridge directly.
-//
-// relocalize: publishes corrected (x, y) on relocalize_output_topic when
-// localization_odom_topic and raw_odom_topic drift apart and the offset is
-// confident, compensated for UART lag and the MCB's read delay
-// (mcb_relay_core.hpp's Relocalizer). Stamped with when the MCB should adopt it.
-// cv_target: republishes the idle look point on cv_target_input_topic onto
-// cv_target_output_topic. target_state: republishes the tracker's TargetState on
-// target_state_input_topic onto target_state_output_topic; the MCB plans aim and
-// fire from it. Both set type_c_based_patrol from this node's parameter of that
-// name (MCB patrol permission), the only place it is decided.
-// These are the only CV relays. See README.md for design rationale.
+// Sole outgoing application relay. Absolute map fixes and raw odometry feed
+// the ROS-free Relocalizer; CV stays in raw odom. See README.md#mcb_relay.
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
+#include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -62,15 +54,16 @@ public:
   : Node("mcb_relay")
   {
     const auto localization_odom_topic = declare_parameter(
-      "localization_odom_topic", std::string("/localization/odom"));
+      "localization_odom_topic", std::string("/localization/map_odom"));
     const auto raw_odom_topic = declare_parameter("raw_odom_topic", std::string("/odom"));
-    navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
+    navigation_frame_ = declare_parameter("navigation_frame", std::string("map"));
     const auto relocalize_out = declare_parameter(
       "relocalize_output_topic", std::string("/dji_serial_bridge/relocalize"));
     Relocalizer::Params p;
-    p.error_threshold_m = declare_parameter("error_threshold_meters", 0.05);
-    p.n_sigma = declare_parameter("n_sigma", 3.0);  // offset must clear this many std
-    p.max_std_m = declare_parameter("max_std_m", 0.02);  // EKF reads ~0.001 still, ~0.007 moving
+    p.absolute_policy = declare_parameter("absolute_pose", true);
+    p.error_threshold_m = declare_parameter("error_threshold_meters", p.absolute_policy ? 0.10 : 0.05);
+    p.n_sigma = declare_parameter("n_sigma", p.absolute_policy ? 0.5 : 3.0);
+    p.max_std_m = declare_parameter("max_std_m", p.absolute_policy ? 0.35 : 0.02);
     // Placeholders, unmeasured: one UART leg (USB-serial latency timer
     // included), the MCB's poll of its RX buffer, and their spread.
     p.uart_latency_s = declare_parameter("uart_latency_s", 0.005);
@@ -86,7 +79,28 @@ public:
       "target_state_output_topic", std::string("/dji_serial_bridge/target_state"));
     // MCB patrol permission for both outputs; false stops firmware patrol.
     type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
+    p.max_pose_age_s = declare_parameter("max_pose_age_s", 0.2);
+    p.max_jump_m = declare_parameter("max_jump_m", 1.0);
+    p.max_step_m = declare_parameter("max_step_m", 0.3);
+    p.max_start_error_m = declare_parameter("max_start_error_m", 1.0);
+    p.startup_span_s = declare_parameter("startup_span_s", 0.1);
+    p.startup_spread_m = declare_parameter("startup_spread_m", 0.15);
+    p.refresh_s = declare_parameter("refresh_s", 1.0);
     relocalizer_ = Relocalizer(p);
+    const double red_x = declare_parameter("red_start_x", -5.25);
+    const double red_y = declare_parameter("red_start_y", -3.0);
+    const double blue_x = declare_parameter("blue_start_x", 5.25);
+    const double blue_y = declare_parameter("blue_start_y", -3.0);
+    referee_sub_ = create_subscription<dji_serial_bridge::msg::RefSysStatus>(
+      "/dji_serial_bridge/ref_sys", rclcpp::SensorDataQoS(),
+      [this, red_x, red_y, blue_x, blue_y](dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr msg) {
+        if (!start_selected_ && msg->robot_id != 0) {
+          relocalizer_.set_start(msg->is_on_blue_team ? blue_x : red_x,
+            msg->is_on_blue_team ? blue_y : red_y);
+          start_selected_ = true;
+        }
+      });
+    navigation_pub_ = create_publisher<Odometry>("/mcb/navigation_odom", 10);
     // Lockstep simulation only: decide on the localization sample's own stamp, not this
     // node's clock, which can trail the sample's by scheduling; and answer each raw
     // odometry sample so the POSE probe knows the relay has it.
@@ -146,6 +160,16 @@ private:
     relocalizer_.add_odom(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
       msg.twist.twist.linear.x, msg.twist.twist.linear.y);
+    if (const auto nav = relocalizer_.navigation_at(stamp_s(msg.header.stamp))) {
+      Odometry out = msg;
+      out.header.frame_id = navigation_frame_;
+      out.child_frame_id = "mcb_navigation";
+      out.pose.covariance[0] = out.pose.covariance[7] = std::numeric_limits<double>::infinity();
+      out.pose.pose.position.x = nav->first;
+      out.pose.pose.position.y = nav->second;
+      // Firmware holds a translation offset; its axes remain raw field-aligned axes.
+      navigation_pub_->publish(out);
+    }
     if (odom_ack_pub_) {
       odom_ack_pub_->publish(msg.header);
     }
@@ -154,15 +178,21 @@ private:
   void localization_odom_callback(const Odometry & msg)
   {
     const auto & cov = msg.pose.covariance;
+    const double xy = 0.5 * (cov[1] + cov[6]);
+    const double var = 0.5 * (cov[0] + cov[7] + std::hypot(cov[0] - cov[7], 2.0 * xy));
+    const auto & q = msg.pose.pose.orientation;
+    const double yaw = std::atan2(2.0 * (q.w*q.z + q.x*q.y), 1.0 - 2.0 * (q.y*q.y + q.z*q.z));
+    const bool valid = msg.header.frame_id == navigation_frame_ &&
+      std::isfinite(cov[0]) && std::isfinite(cov[7]) && std::isfinite(xy) &&
+      cov[0] >= 0.0 && cov[7] >= 0.0 && cov[0]*cov[7] >= xy*xy;
     const auto out = relocalizer_.decide(
       stamp_s(msg.header.stamp), msg.pose.pose.position.x, msg.pose.pose.position.y,
-      std::max(cov[0], cov[7]),
-      message_clock_ ? stamp_s(msg.header.stamp) :
-      static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9);
+      valid ? var : std::numeric_limits<double>::infinity(),
+      message_clock_ ? stamp_s(msg.header.stamp) : get_clock()->now().seconds(), yaw, cov[35]);
     if (!out) {
       if (none_pub_) {
         std_msgs::msg::Header none;
-        none.stamp = now();
+        none = msg.header;
         none_pub_->publish(none);
       }
       return;
@@ -183,8 +213,10 @@ private:
   std::string navigation_frame_;
   bool type_c_based_patrol_ = false;
   rclcpp::Publisher<PointStamped>::SharedPtr relocalize_pub_;
+  rclcpp::Publisher<Odometry>::SharedPtr navigation_pub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_, odom_ack_pub_;
-  bool message_clock_ = false;
+  bool message_clock_ = false, start_selected_ = false;
+  rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr referee_sub_;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;
