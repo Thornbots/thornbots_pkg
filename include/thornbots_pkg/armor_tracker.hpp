@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Armor-model EKF for target_tracker (no rclcpp). State [pos, vel, acc, yaw,
-// w, r, dz]: chassis centre, velocity and acceleration in odom, the tracked
+// w, r, dz, other_r]: chassis centre, velocity and acceleration in odom, the tracked
 // panel's outward-normal yaw, spin rate, that panel's radius and its pair's
 // height above the centre (the other pair at -dz). Measurement is one panel:
 // h = pos + r (cos yaw, sin yaw, 0) + (0, 0, dz). See README.md's
@@ -34,7 +34,8 @@ namespace thornbots_pkg
 
 constexpr int POS = 0, VEL = 3, ACC = 6;  // 3-vector blocks
 constexpr int YAW = 9, W = 10, R = 11, DZ = 12;
-constexpr int N_STATE = 13;
+constexpr int OTHER_R = 13;
+constexpr int N_STATE = 14;
 constexpr double DZ_MAX = 0.15;  // m, clamp on the pair height offset
 constexpr double BACK_FACING_COS = -0.3;  // association skips panels facing further away
 
@@ -112,7 +113,7 @@ public:
   EkfParams p;
   State state;
   Cov P;
-  double other_r;
+  double other_r() const {return state[OTHER_R];}
   double t_sec;
   int n_outliers = 0;
   double last_nis = 0.0;
@@ -157,7 +158,7 @@ public:
 
   const ArmorEKF & best() const {return filters[lead];}
   const State & state() const {return best().state;}
-  double other_r() const {return best().other_r;}
+  double other_r() const {return best().other_r();}
   std::pair<State, Cov> predicted(double t_sec) const {return best().predicted(t_sec);}
 
   TrackerParams p;

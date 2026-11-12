@@ -476,15 +476,19 @@ counted `class_id` changes and only worked because the emulator faked them.
 `ArmorEKF` state is the centre's position, velocity and acceleration
 (3-vectors at `POS`/`VEL`/`ACC` in `armor_tracker.hpp`), the tracked
 panel's normal yaw,
-spin rate `w`, that panel's radius and its pair's height `dz` above the
-centre, with the other pair's radius kept aside and its height at `-dz`. A
+spin rate `w`, both panel pairs' radii and the tracked pair's height `dz` above
+the centre, with the other pair's height at `-dz`. Both radii carry covariance
+and receive radius process noise, including while their pair is hidden. A
 panel measures `centre + r * (cos yaw, sin yaw, 0) + (0, 0, dz)`. Only the
 two pairs' difference is observable, so the centre is their mean height;
 `dz` starts at 0 (0.05 m std), drifts at `q_dz` (0.005 m/sqrt(s)) and clamps
 to +-0.15 m. Each detection
 first associates to the nearest of the four predicted panels, skipping those
 facing more than ~107 degrees from the camera; `k != 0` is a handoff, stepping
-yaw by quarter turns and, on odd `k`, swapping radii and flipping `dz`. A cut at exactly 90 degrees
+yaw by quarter turns and, on odd `k`, swapping radii and their covariance
+rows/columns and flipping `dz` with its cross-covariances. Both radius bounds
+and the height bound are enforced after position and facing-yaw updates.
+A cut at exactly 90 degrees
 mis-assigned edge-on panels whenever the camera moved 10cm and held a wrong
 spin for seconds. `PanelDetection.corners` stay unused:
 `roi_depth_node.cpp`'s `deprojectDetection()` puts all four at one

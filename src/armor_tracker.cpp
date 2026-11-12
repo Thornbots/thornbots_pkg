@@ -78,13 +78,13 @@ std::array<Panel, 4> panel_positions(const State & state, double other_r)
 ArmorEKF::ArmorEKF(
   const Vector3d & panel_pos, const Vector3d & camera_pos, double t_sec_in,
   const Matrix3d & pos_var, const EkfParams & params)
-: p(params), other_r(params.radius), t_sec(t_sec_in)
+: p(params), t_sec(t_sec_in)
 {
   if (p.q_jerk <= 0.0) {
     p.accel_prior_std = 0.0;
   }
   state.setZero();
-  state[R] = p.radius;
+  state[R] = state[OTHER_R] = p.radius;
   P.setIdentity();
   P(DZ, DZ) = p.dz_prior_std * p.dz_prior_std;
   reacquire(panel_pos, camera_pos, t_sec_in, pos_var, false);
@@ -94,7 +94,8 @@ void ArmorEKF::reacquire(
   const Vector3d & panel_pos, const Vector3d & camera_pos, double t, const Matrix3d & pos_var,
   bool keep_spin)
 {
-  const double r = state[R];
+  const double r = state[R], other_r = state[OTHER_R];
+  double other_var = P(OTHER_R, OTHER_R), pair_cov = P(R, OTHER_R);
   double dz = state[DZ];
   const double yaw = std::atan2(camera_pos.y() - panel_pos.y(), camera_pos.x() - panel_pos.x());
   double w = state[W], w_var = P(W, W), r_var = P(R, R), dz_var = P(DZ, DZ);
@@ -102,6 +103,8 @@ void ArmorEKF::reacquire(
     w = p.spin_prior;
     w_var = p.spin_prior_std * p.spin_prior_std;
     r_var = p.radius_prior_std * p.radius_prior_std;
+    other_var = r_var;
+    pair_cov = 0.0;
     dz = 0.0;
     dz_var = p.dz_prior_std * p.dz_prior_std;
   }
@@ -110,6 +113,7 @@ void ArmorEKF::reacquire(
   state[YAW] = yaw;
   state[W] = w;
   state[R] = r;
+  state[OTHER_R] = other_r;
   state[DZ] = dz;
   P.setZero();
   P.block<3, 3>(POS, POS) = pos_var + Vector3d(0.01, 0.01, 0.0).asDiagonal().toDenseMatrix();
@@ -118,6 +122,8 @@ void ArmorEKF::reacquire(
   P(YAW, YAW) = 0.5 * 0.5;
   P(W, W) = w_var;
   P(R, R) = r_var;
+  P(OTHER_R, OTHER_R) = other_var;
+  P(R, OTHER_R) = P(OTHER_R, R) = pair_cov;
   P(DZ, DZ) = dz_var;
   t_sec = t;
   n_outliers = 0;
@@ -147,7 +153,7 @@ std::pair<Cov, Cov> ArmorEKF::transition(double dt) const
   if (p.still) {
     Q.block<3, 3>(POS, POS) = dt * p.q_still_pos * p.q_still_pos * I3;
     Q(YAW, YAW) = dt * p.q_still_yaw * p.q_still_yaw;
-    Q(R, R) = dt * p.q_radius * p.q_radius;
+    Q(R, R) = Q(OTHER_R, OTHER_R) = dt * p.q_radius * p.q_radius;
     Q(DZ, DZ) = dt * p.q_dz * p.q_dz;
     return {F, Q};
   }
@@ -160,7 +166,7 @@ std::pair<Cov, Cov> ArmorEKF::transition(double dt) const
   Q(YAW, YAW) = b00 * qy;
   Q(YAW, W) = Q(W, YAW) = b01 * qy;
   Q(W, W) = b11 * qy;
-  Q(R, R) = dt * p.q_radius * p.q_radius;
+  Q(R, R) = Q(OTHER_R, OTHER_R) = dt * p.q_radius * p.q_radius;
   Q(DZ, DZ) = dt * p.q_dz * p.q_dz;
   if (p.q_jerk > 0.0) {
     // Singer: acc' = -acc / tau + jerk noise; exact F, white-jerk Q.
@@ -205,7 +211,7 @@ std::pair<int, double> ArmorEKF::associate(
 {
   int best_k = -1;
   double best_d = std::numeric_limits<double>::infinity();
-  for (const auto & panel : panel_positions(state, other_r)) {
+  for (const auto & panel : panel_positions(state, other_r())) {
     const double to_cam = std::atan2(
       camera_pos.y() - panel.pos.y(), camera_pos.x() - panel.pos.x());
     if (std::cos(panel.yaw - to_cam) <= BACK_FACING_COS) {
@@ -220,7 +226,9 @@ std::pair<int, double> ArmorEKF::associate(
   if (best_k > 0) {
     state[YAW] += best_k * QUARTER_TURN;
     if (best_k % 2) {
-      std::swap(state[R], other_r);
+      std::swap(state[R], state[OTHER_R]);
+      P.row(R).swap(P.row(OTHER_R));
+      P.col(R).swap(P.col(OTHER_R));
       state[DZ] = -state[DZ];
       P.row(DZ) *= -1.0;
       P.col(DZ) *= -1.0;  // P(DZ, DZ) flips twice, staying put
@@ -235,7 +243,7 @@ StepResult ArmorEKF::step(
 {
   predict(t);
   last_association = associate(panel_pos, camera_pos).first;
-  last_residual = panel_pos - panel_positions(state, other_r)[0].pos;
+  last_residual = panel_pos - panel_positions(state, other_r())[0].pos;
   std::tie(last_nis, last_logdet) = innovation(panel_pos, pos_var);
   if (last_nis > gate_nis) {
     if (++n_outliers < max_outliers) {
@@ -263,7 +271,10 @@ void ArmorEKF::update_facing(const Vector3d & camera_pos, double std)
   const State K = P.col(YAW) / S;
   state += K * y;
   P -= K * P.row(YAW);
-  P = 0.5 * (P + P.transpose());
+  P = (0.5 * (P + P.transpose())).eval();
+  state[R] = std::clamp(state[R], p.r_min, p.r_max);
+  state[OTHER_R] = std::clamp(state[OTHER_R], p.r_min, p.r_max);
+  state[DZ] = std::clamp(state[DZ], -DZ_MAX, DZ_MAX);
 }
 
 namespace
@@ -310,6 +321,7 @@ void ArmorEKF::update(const Vector3d & panel_pos, const Matrix3d & pos_var)
   const Cov IKH = Cov::Identity() - K * H;
   P = IKH * P * IKH.transpose() + K * pos_var * K.transpose();  // Joseph form
   state[R] = std::clamp(state[R], p.r_min, p.r_max);
+  state[OTHER_R] = std::clamp(state[OTHER_R], p.r_min, p.r_max);
   state[DZ] = std::clamp(state[DZ], -DZ_MAX, DZ_MAX);
 }
 
@@ -400,12 +412,13 @@ StepResult ArmorTracker::step(
       auto & f = filters[i];
       f.state = leader.state;
       f.state[W] = f.p.spin_prior;
-      f.state[R] = f.other_r = f.p.radius;
+      f.state[R] = f.state[OTHER_R] = f.p.radius;
       f.P = leader.P;
       zero_rows_cols(f.P, W, 1);
       f.P(W, W) = f.p.spin_prior_std * f.p.spin_prior_std;
       zero_rows_cols(f.P, R, 1);
-      f.P(R, R) = f.p.radius_prior_std * f.p.radius_prior_std;
+      zero_rows_cols(f.P, OTHER_R, 1);
+      f.P(R, R) = f.P(OTHER_R, OTHER_R) = f.p.radius_prior_std * f.p.radius_prior_std;
       f.pin_still();
       f.t_sec = leader.t_sec;
       scores[i] = best_score + p.reseed_margin / 2.0;
