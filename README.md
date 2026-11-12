@@ -597,23 +597,27 @@ state. Truth-state aiming fixtures feed the manager's input too, so they test
 the same handoff; the sim stand-in consumes the managed output.
 
 The tracker continues to fold in every detection and publish estimates with
-their measurement provenance and covariance. Expose its successful update count
-and explicit selected-track/reset status to the manager; its existing two-update
-`valid` flag alone cannot establish assignment confidence. Empty selected-robot
-input, filter reset and a track-id change must reach the manager even when the
-tracker produces no usable model. Track switch clears an old assignment
-immediately if the replacement is still unconverged; a confident replacement
-can be assigned in the same callback. Panel handoffs preserve robot identity.
+their measurement provenance, propagated YOLO confidence and covariance. Expose
+explicit selected-track/reset status to the manager; remove the existing
+two-update `valid` requirement from assignment. No observation means confidence
+decay, not an immediate clear on a single empty frame. Explicit track retirement,
+filter reset and a track-id change must reach the manager even when the tracker
+produces no usable model. Track switch clears an old assignment
+immediately if the replacement is still below the assign threshold; a confident
+replacement can be assigned in the same callback. Panel handoffs preserve robot identity.
 
 The manager owns the last emitted model and its true state time, the current
-candidate and count, and whether an assignment exists. On each estimate it
+candidate, and whether an assignment exists. On each estimate it
 evaluates confidence first, then the protocol's drift/identity send rules. Its
-refresh timer checks confidence and predicts covariance as well as state when
-needed. A stale input is never made confident by publishing it again. A refresh
+refresh/decision timer evaluates decaying confidence every 5 ms (also on each
+estimate), and predicts covariance as well as state when needed. A stale input
+is never made confident by publishing it again. A refresh
 requires new contributing measurement evidence since the previous emitted
 model; if input stops, send no repeated model to keep a dead tracker alive.
-Covariance growth or an explicit loss event clears the assignment as soon as
-observed; a stopped manager/tracker is bounded by the MCB's link timeout.
+Confidence crossing the clear threshold or an explicit loss event clears the
+assignment immediately on that evaluation; a stopped manager/tracker is also
+bounded by the MCB's link timeout. Finite covariance remains only a numerical
+sanity check, with no magnitude gate.
 There is no manager dwell timer and no independent detection-age fire gate.
 
 Carry model and detection stamps through unchanged when forwarding an estimate;
@@ -630,14 +634,48 @@ and sim launch paths, with the same DDS profile as the other CV nodes. Lockstep
 benches need acknowledgments for consumed estimates and explicit no-send events,
 so suppression does not deadlock the graph or count as a missing detection.
 
-Core/unit coverage must exercise update counts and variance boundaries,
-nonfinite data, immediate confidence loss/clear, reconvergence, track switches,
+Core/unit coverage must exercise YOLO score propagation, decay and hysteresis
+boundaries, nonfinite data, confidence loss/clear, reassignment, track switches,
 panel relabeling, MCB-model drift at a common timestamp, suppressed updates,
 refreshes and stopped input. ROS coverage must establish stamp preservation,
 empty/reset delivery, relay/bridge clear translation and lockstep progress.
 Validate tuning with the real estimator path; do not substitute an offline
 tracker copy. The design PR changes documentation only; implementation follows
 review with coordinated firmware, bridge and sim integration.
+
+#### Propagated YOLO confidence
+
+Maintain this confidence definition in the tracker, independently of EKF update
+count and covariance magnitude. For each newly accepted capture of the selected
+robot, let `q` be the maximum finite YOLO score of the panels actually associated
+with that robot and accepted into its tracker update, bounded to `[0, 1]`. Use
+the maximum once per capture; do not sum correlated panels or compound evidence
+over repeated frames. Replace the previous anchor with `(q, capture_time)` even
+when the new score is lower. Rejected/outlier detections do not refresh it.
+
+At state time `t`, publish `TargetState.confidence = q * exp(-dt / tau)`, where
+`dt = max(0, t - capture_time)` and the initial decay time constant `tau` is
+**0.30 s**. The capture time is the latency-corrected contributing detection
+stamp, not receipt/publish time. Panel handoffs keep the robot's anchor; new
+robot identity, tracker reset or backward clock jump clears it. No accepted
+detection means exponential decay toward zero, never a timer-driven confidence
+refresh. For example, a last score of 0.8 falls to 0.4 after about 208 ms.
+
+The manager continues this same decay from the input's carried state time:
+`C(now) = input.confidence * exp(-max(0, now - input.header.stamp) / tau)`.
+This is continuation of the same exponential, not a second decay of elapsed
+capture time. It crosses the wire as the model's confidence at its carried
+state stamp; the MCB does not gate shots on it. The wire contract owns the
+[assign/clear thresholds and finite-data check](../ros2_dji_serial_bridge/UART_PROTOCOL.md#proposed-target-assignment-update-and-clear).
+
+Declare the shared ROS-free decay calculation in the planned
+`include/thornbots_pkg/target_confidence.hpp`. Declare `confidence_decay_tau_s`
+in `src/target_tracker.cpp` and `src/target_manager.cpp`, fed from one launch
+argument so they cannot use different decay constants. Declare
+`assign_confidence` and `clear_confidence` in `src/target_manager.cpp`; reject
+configuration unless `0 <= clear_confidence < assign_confidence <= 1` and
+`tau > 0`. These names/defaults are design choices for source declarations
+during implementation, not code added by this documentation PR.
 
 ### mcb_relay
 
