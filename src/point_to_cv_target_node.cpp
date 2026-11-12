@@ -17,8 +17,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "tf2/exceptions.h"
 
@@ -26,8 +27,6 @@ namespace thornbots_pkg
 {
 
 using dji_serial_bridge::msg::CVTarget;
-using dji_serial_bridge::msg::RefSysStatus;
-using dji_serial_bridge::msg::RobotPose;
 using dji_serial_bridge::msg::TargetState;
 using Eigen::Matrix3d;
 
@@ -50,68 +49,65 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 : Node("point_to_cv_target", options)
 {
   target_state_topic_ = declare_parameter("target_state_topic", std::string("/cv/target_state"));
-  const auto robot_pose_topic = declare_parameter(
-    "robot_pose_topic", std::string("/dji_serial_bridge/pose"));
   const auto output_topic = declare_parameter("output_topic", std::string("/cv/target"));
   target_timeout_s_ = declare_parameter("target_timeout_s", 0.5);
-  fire_confidence_threshold_ = declare_parameter("fire_confidence_threshold", 0.5);
-  fire_rate_hz_ = declare_parameter("fire_rate_hz", 2.0);
-  root_frame_ = declare_parameter("root_frame", std::string("root"));
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
-  lead_enabled_ = declare_parameter("lead_enabled", true);
-  // Fire decision to projectile exit; times the fire against the spin.
-  firmware_latency_s_ = declare_parameter("firmware_latency_s", 0.05);
-  // Setpoint to gimbal pointing there, on a moving setpoint; sets how far
-  // ahead the aim point leads. See README.md.
-  gimbal_lag_s_ = declare_parameter("gimbal_lag_s", 0.05);
-  v_muzzle_ = declare_parameter("v_muzzle", 25.0);
-  tof_iterations_ = static_cast<int>(declare_parameter("tof_iterations", 3));
   const double publish_rate_hz = declare_parameter("cv_target_publish_rate_hz", 40.0);
-  tick_s_ = 1.0 / publish_rate_hz;
-  // Spin mode (shotgating, or chase) above enter, back to panel aim below
-  // exit, in |yaw_rate| rad/s.
-  spin_enter_rad_s_ = declare_parameter("spin_enter_rad_s", 3.0);
-  spin_exit_rad_s_ = declare_parameter("spin_exit_rad_s", 2.0);
-  // Spin mode, >= 0 (default): chase the facing panel, firing on any tick whose
-  // panel has faced us this long and will for chase_margin_s more; both cover
-  // the gimbal's jump between panels. < 0: shotgating, hold the center line
-  // and time the fire. README.md.
-  const double chase_settle_s = declare_parameter("chase_settle_s", 0.0);
-  if (chase_settle_s >= 0.0) {
-    chase_settle_s_ = chase_settle_s;
+  idle_direction_ = declare_parameter("idle_direction", std::string("zone"));
+  const auto idle_zone = declare_parameter("idle_zone", std::vector<double>{});
+  if (!idle_zone.empty()) {
+    if (idle_zone.size() != 2 || !std::isfinite(idle_zone[0]) || !std::isfinite(idle_zone[1])) {
+      throw std::invalid_argument("idle_zone must be empty or two finite field coordinates");
+    }
+    idle_zone_ = Vector3d(idle_zone[0], idle_zone[1], 0.0);
   }
-  chase_margin_s_ = declare_parameter("chase_margin_s", 0.0);
-  // Sent with every aim point: whether the MCB may patrol on its own (off: the
-  // Jetson owns where it looks), and turn toward a hit (on).
-  type_c_based_patrol_ = declare_parameter("type_c_based_patrol", false);
-  turn_to_hit_ = declare_parameter("turn_to_hit", true);
-  // Jetson patrol with no target, mirroring the MCB's own (README.md): sweep at
-  // patrol_rate_rad_s (MCB's -0.002 rad per 1 ms cycle), a point
-  // patrol_range_m out and patrol_pitch_down_rad below level.
-  const bool patrol_enabled = declare_parameter("patrol_enabled", true);
-  const double patrol_after_s = declare_parameter("patrol_after_s", 0.2);
-  const double patrol_rate_rad_s = declare_parameter("patrol_rate_rad_s", -2.0);
-  patrol_range_m_ = declare_parameter("patrol_range_m", 3.0);
-  patrol_pitch_down_rad_ = declare_parameter("patrol_pitch_down_rad", 0.05);
-  // Face a hit for hit_turn_s: hit yaw = gun yaw + sign * delta angle.
-  const double hit_turn_s = declare_parameter("hit_turn_s", 0.5);
-  hit_angle_sign_ = declare_parameter("hit_angle_sign", -1.0);
+  navigation_frame_ = declare_parameter("navigation_frame", std::string("nav_odom"));
+  if (idle_direction_ != "zone" && idle_direction_ != "hold") {
+    throw std::invalid_argument("idle_direction must be zone or hold");
+  }
+  // Field coordinates; transform into the continuous raw aim frame before use.
+  red_start_x_ = declare_parameter<double>("red_start_x");
+  red_start_y_ = declare_parameter<double>("red_start_y");
+  blue_start_x_ = declare_parameter<double>("blue_start_x");
+  blue_start_y_ = declare_parameter<double>("blue_start_y");
+  if (!std::isfinite(red_start_x_) || !std::isfinite(red_start_y_) ||
+    !std::isfinite(blue_start_x_) || !std::isfinite(blue_start_y_))
+  {
+    throw std::invalid_argument("Team starts must be finite field coordinates");
+  }
+  idle_height_m_ = declare_parameter("idle_height_m", 0.15);
+  idle_rate_rad_s_ = declare_parameter("idle_rate_rad_s", 0.5);
+  idle_switch_rad_ = declare_parameter("idle_switch_rad", M_PI / 6.0);
+  if (!std::isfinite(idle_rate_rad_s_) || idle_rate_rad_s_ <= 0.0 ||
+    !std::isfinite(idle_switch_rad_) || idle_switch_rad_ < 0.0)
+  {
+    throw std::invalid_argument("idle rate/switch must be finite and nonnegative");
+  }
   muzzle_frame_ = declare_parameter("muzzle_frame", std::string("muzzle"));
-  const auto ref_sys_topic = declare_parameter(
-    "ref_sys_topic", std::string("/dji_serial_bridge/ref_sys"));
   // Bench only: a Header per publish tick, sent or not, for lockstep.
   const auto tick_topic = declare_parameter("tick_topic", std::string(""));
   const auto state_ack_topic = declare_parameter("state_ack_topic", std::string(""));
-  if (patrol_enabled) {
-    patrol_.emplace(patrol_rate_rad_s, patrol_after_s, hit_turn_s);
-  }
+  // Lockstep: a Header at each tick that sent no CV_TARGET, so a chain waits on that
+  // or the bridge's TX ack, whichever the tick produced.
+  const auto none_topic = declare_parameter("cv_target_none_topic", std::string(""));
 
+  allow_latest_tf_ = declare_parameter("allow_latest_tf", true);
+  tf_lookup_lag_s_ = declare_parameter("tf_lookup_lag_s", 0.0);
+  nav_tf_lookup_lag_s_ = declare_parameter("nav_tf_lookup_lag_s", 0.0);
+  if (!std::isfinite(tf_lookup_lag_s_) || tf_lookup_lag_s_ < 0.0 ||
+    !std::isfinite(nav_tf_lookup_lag_s_) || nav_tf_lookup_lag_s_ < 0.0)
+  {
+    throw std::invalid_argument("TF lookup lags must be finite and nonnegative");
+  }
+  fallback_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "~/latest_tf_fallbacks", rclcpp::QoS(1).reliable().transient_local());
+  fallback_pub_->publish(std_msgs::msg::UInt32{});
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   // /tf shares this node's executor, so every lookup below is non-blocking: a
   // timeout wait in a callback starves /tf. See README.md.
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, false);
 
-  // Sensor-like, best-effort traffic: a dropped target update is far less
+  // Sensor-like, best-effort traffic: a dropped idle point is far less
   // harmful than blocking on a slow/disconnected subscriber, and this matches
   // mcb_relay's cv_target subscriber QoS.
   pub_ = create_publisher<CVTarget>(output_topic, rclcpp::SensorDataQoS());
@@ -122,60 +118,73 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
     tick_pub_ = create_publisher<std_msgs::msg::Header>(tick_topic, 10);
     send_tick_ = [this](const std_msgs::msg::Header & h) {tick_pub_->publish(h);};
   }
+  if (!none_topic.empty()) {
+    none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 10);
+  }
   if (!state_ack_topic.empty()) {
     state_ack_pub_ = create_publisher<std_msgs::msg::Header>(state_ack_topic, 100);
     send_ack_ = [this](const std_msgs::msg::Header & h) {state_ack_pub_->publish(h);};
   }
-  robot_pose_sub_ = create_subscription<RobotPose>(
-    robot_pose_topic, rclcpp::SensorDataQoS(),
-    [this](RobotPose::ConstSharedPtr m) {on_robot_pose(*m);});
-  if (patrol_ && turn_to_hit_) {
-    // Matches dji_serial_bridge_node's ~/ref_sys SensorDataQoS publisher.
-    ref_sys_sub_ = create_subscription<RefSysStatus>(
-      ref_sys_topic, rclcpp::SensorDataQoS(),
-      [this](RefSysStatus::ConstSharedPtr m) {on_ref_sys(*m);});
+  const auto ref_sys_topic = declare_parameter(
+    "ref_sys_topic", std::string("/dji_serial_bridge/ref_sys"));
+  ref_sys_sub_ = create_subscription<dji_serial_bridge::msg::RefSysStatus>(
+    ref_sys_topic, rclcpp::SensorDataQoS(),
+    [this](dji_serial_bridge::msg::RefSysStatus::ConstSharedPtr m) {on_ref_sys(*m);});
+  const bool epoch_zero = declare_parameter("deterministic_epoch_zero", false);
+  if (epoch_zero) {
+    if (!get_parameter("use_sim_time").as_bool()) {
+      throw std::invalid_argument("deterministic_epoch_zero requires use_sim_time");
+    }
+    epoch_ready_pub_ = create_publisher<std_msgs::msg::Header>(
+      "~/epoch_zero_ready", rclcpp::QoS(1).reliable().transient_local());
+    epoch_clock_sub_ = create_subscription<rosgraph_msgs::msg::Clock>(
+      "/clock", rclcpp::ClockQoS(), [this, publish_rate_hz](rosgraph_msgs::msg::Clock::ConstSharedPtr msg) {
+        if (epoch_failed_ || publish_timer_) {return;}
+        if (msg->clock.sec != 0 || msg->clock.nanosec != 0 || now().nanoseconds() != 0) {
+          epoch_failed_ = true;
+          RCLCPP_ERROR(get_logger(), "point_to_cv_target missed epoch zero");
+          return;
+        }
+        start_timers(publish_rate_hz);
+        if (now().nanoseconds() != 0) {
+          watchdog_timer_->cancel();
+          publish_timer_->cancel();
+          epoch_failed_ = true;
+          RCLCPP_ERROR(get_logger(), "clock advanced while initializing point_to_cv_target");
+          return;
+        }
+        std_msgs::msg::Header ready;
+        epoch_ready_pub_->publish(ready);
+      });
+  } else {
+    start_timers(publish_rate_hz);
   }
+  RCLCPP_INFO(get_logger(), "point_to_cv_target ready: idle=%s, target timeout %.3fs",
+    idle_direction_.c_str(), target_timeout_s_);
+}
 
+void PointToCvTarget::start_timers(double publish_rate_hz)
+{
   watchdog_timer_ = rclcpp::create_timer(
     this, get_clock(), rclcpp::Duration::from_seconds(0.1), [this]() {check_timeout();});
   publish_timer_ = rclcpp::create_timer(
     this, get_clock(), rclcpp::Duration::from_seconds(1.0 / publish_rate_hz),
     [this]() {on_publish_tick();});
-
-  std::ostringstream patrol_text;
-  if (patrol_) {
-    patrol_text << patrol_->rate_rad_s() << " rad/s, turn_to_hit="
-                << (turn_to_hit_ ? "True" : "False");
-  } else {
-    patrol_text << "off";
-  }
-  const std::string patrol_str = patrol_text.str();
-  RCLCPP_INFO(
-    get_logger(),
-    "point_to_cv_target ready\n  %s + %s\n  -> %s (CVTarget, %s frame, aim + fire, @ %.1fHz)\n"
-    "  lead_enabled=%s v_muzzle=%g firmware_latency_s=%g gimbal_lag_s=%g\n"
-    "  target_timeout_s=%.2f\n  fire <= %.2fHz, spin-timed above %g rad/s, confidence >= %g\n"
-    "  patrol: %s",
-    target_state_topic_.c_str(), robot_pose_topic.c_str(), output_topic.c_str(),
-    odom_frame_.c_str(), publish_rate_hz, lead_enabled_ ? "True" : "False", v_muzzle_,
-    firmware_latency_s_, gimbal_lag_s_, target_timeout_s_, fire_rate_hz_, spin_enter_rad_s_,
-    fire_confidence_threshold_,
-    patrol_str.c_str());
 }
 
 void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
 {
+  const rclcpp::Time now = clock_now();
+  // Account for the held state's age before replacing it, even between ticks.
+  check_timeout();
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
   }
   latest_state_ = msg;
   target_active_ = true;
-  const rclcpp::Time now = clock_now();
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
     latency_stat_.add(latency_s);
-    // Diagnostic only -- the lead solve uses each tick's own state age
-    // instead, which is larger and varies. See README.md.
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 10000,
       "target_state age on arrival: %.1f ms now, %.1f ms mean over %d samples",
@@ -187,32 +196,49 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
   }
 }
 
-void PointToCvTarget::on_robot_pose(const RobotPose & msg)
+geometry_msgs::msg::TransformStamped PointToCvTarget::lookup_tf(
+  const std::string & target, const std::string & source, double lag_s)
 {
-  chassis_vel_root_ = Vector3d(msg.vel_x, msg.vel_y, 0.0);
+  if (allow_latest_tf_) {
+    return tf_buffer_->lookupTransform(target, source, tf2::TimePointZero);
+  }
+  const auto at = clock_now() - rclcpp::Duration::from_seconds(lag_s);
+  if (at.nanoseconds() <= 0) {
+    // A zero stamp means "newest" to tf2, which is exactly what this mode avoids.
+    throw tf2::LookupException("the simulation has not run " +
+      std::to_string(lag_s) + " s yet");
+  }
+  try {
+    auto tf = tf_buffer_->lookupTransform(target, source, at);
+    tf_seen_.insert(target + "<-" + source);
+    return tf;
+  } catch (const tf2::TransformException & ex) {
+    // A pair is still coming up until it first resolves; after that a miss is a
+    // point where the robot's latest-TF path would have been used.
+    if (tf_seen_.count(target + "<-" + source)) {
+      count_latest_tf_fallback();
+      if (latest_tf_fallbacks_ <= 20) {
+        RCLCPP_WARN(
+          get_logger(), "latest-TF fallback #%u for %s<-%s: %s", latest_tf_fallbacks_,
+          target.c_str(), source.c_str(), ex.what());
+      }
+    }
+    throw;
+  }
 }
 
-void PointToCvTarget::on_ref_sys(const RefSysStatus & msg)
+void PointToCvTarget::count_latest_tf_fallback()
 {
-  const double delta = msg.delta_angle_got_hit_in;
-  if (delta == NOT_HIT || !(std::abs(delta) <= M_PI + 1e-3)) {
-    return;
-  }
-  const auto gun = gun_pose();
-  if (!gun) {
-    return;
-  }
-  const double hit_yaw = gun->second + hit_angle_sign_ * delta;
-  patrol_->hit(hit_yaw, seconds(clock_now()));
-  RCLCPP_INFO(
-    get_logger(), "hit at %+.2f rad from the gun: facing odom yaw %+.2f", delta, hit_yaw);
+  std_msgs::msg::UInt32 count;
+  count.data = ++latest_tf_fallbacks_;
+  fallback_pub_->publish(count);
 }
 
 std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
 {
   geometry_msgs::msg::TransformStamped tf;
   try {
-    tf = tf_buffer_->lookupTransform(odom_frame_, muzzle_frame_, tf2::TimePointZero);
+    tf = lookup_tf(odom_frame_, muzzle_frame_, tf_lookup_lag_s_);
   } catch (const tf2::TransformException & ex) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
@@ -225,35 +251,49 @@ std::optional<std::pair<Vector3d, double>> PointToCvTarget::gun_pose()
   return std::make_pair(Vector3d(t.x, t.y, t.z), std::atan2(R(1, 0), R(0, 0)));
 }
 
-std::optional<Vector3d> PointToCvTarget::patrol_point_now(const rclcpp::Time & now)
+void PointToCvTarget::on_ref_sys(const dji_serial_bridge::msg::RefSysStatus & msg)
 {
-  const auto gun = gun_pose();
-  if (!gun) {
-    return std::nullopt;
+  if (blue_ != msg.is_on_blue_team) {
+    idle_.reset();
+    last_sent_point_.reset();
   }
-  const auto yaw = patrol_->step(seconds(now), gun->second);
-  if (!yaw) {
-    return std::nullopt;
+  blue_ = msg.is_on_blue_team;
+  if (std::isfinite(msg.delta_angle_got_hit_in) &&
+    std::abs(msg.delta_angle_got_hit_in) <= static_cast<float>(M_PI))
+  {
+    const auto now = clock_now();
+    idle_.hit(seconds(rclcpp::Time(msg.header.stamp, now.get_clock_type())));
   }
-  return patrol_point(gun->first, *yaw, patrol_range_m_, patrol_pitch_down_rad_);
 }
 
-std::pair<bool, int> PointToCvTarget::fire_decision(
-  std::optional<double> delay_s, const rclcpp::Time & now)
+Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
 {
-  if (!delay_s || fire_rate_hz_ <= 0.0) {
-    return {false, 0};
+  const auto gun = gun_pose();
+  if (!gun) {return last_sent_point_.value_or(Vector3d::Zero());}
+  Vector3d zone = gun->first + Vector3d(3.0 * std::cos(gun->second),
+    3.0 * std::sin(gun->second), 0.0);
+  try {
+    const auto tf = lookup_tf(odom_frame_, navigation_frame_, nav_tf_lookup_lag_s_);
+    const auto & t = tf.transform.translation;
+    const auto & q = tf.transform.rotation;
+    zone = quat_to_rot(q.x, q.y, q.z, q.w) *
+      idle_zone_.value_or(enemy_zone(
+        blue_, red_start_x_, red_start_y_, blue_start_x_, blue_start_y_, idle_height_m_)) +
+      Vector3d(t.x, t.y, t.z);
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+      "Idle zone waits for nav_odom->odom: %s", ex.what());
   }
-  if (latest_state_->confidence < fire_confidence_threshold_) {
-    return {false, 0};
+  const auto source = idle_.source(seconds(now), target_timeout_s_, idle_direction_ == "hold");
+  if (source == IdleLook::Source::Hit || source == IdleLook::Source::Hold) {
+    idle_.reset();
+    return {gun->first.x() + 3.0 * std::cos(gun->second),
+      gun->first.y() + 3.0 * std::sin(gun->second), idle_height_m_};
   }
-  if (last_fire_time_ && seconds(now - *last_fire_time_) < 1.0 / fire_rate_hz_) {
-    return {false, 0};
-  }
-  last_fire_time_ = now;
-  // Python round() is half-to-even, as is nearbyint in the default mode.
-  const double ms = std::nearbyint(*delay_s * 1000.0);
-  return {true, static_cast<int>(std::max(0.0, std::min(65535.0, ms)))};
+  Vector3d desired = source == IdleLook::Source::LastEnemy ? idle_.last_enemy() : zone;
+  desired.z() = idle_height_m_;
+  return idle_.point(seconds(now), gun->first, gun->second, desired,
+    idle_rate_rad_s_, idle_switch_rad_);
 }
 
 void PointToCvTarget::check_timeout()
@@ -263,124 +303,53 @@ void PointToCvTarget::check_timeout()
   }
   const rclcpp::Time now = clock_now();
   const double age_s = seconds(
-    now - rclcpp::Time(latest_state_->header.stamp, now.get_clock_type()));
+    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type()));
   if (age_s <= target_timeout_s_) {
     return;
   }
 
   target_active_ = false;
   RCLCPP_INFO(
-    get_logger(), "Newest '%s' is %.2f s old - publishing no CVTarget until the next one arrives.",
+    get_logger(), "Newest '%s' is %.2f s old - no target until the next one arrives.",
     target_state_topic_.c_str(), age_s);
 }
 
 void PointToCvTarget::on_publish_tick()
 {
+  check_timeout();
   const rclcpp::Time now = clock_now();
-  std::optional<Aim> aim;
+  std::string out_frame;  // empty means no point was published
   if (target_active_) {
-    aim = compute_aim_point();
-  }
-  if (aim && patrol_) {
-    patrol_->target_seen(seconds(now));
-  } else if (!aim && patrol_) {
-    const auto point = patrol_point_now(now);
-    if (point) {
-      aim = Aim{*point, std::nullopt};
-    }
-  }
-  std::string out_frame;  // empty means no aim was published
-  if (aim) {  // no target and no patrol: send nothing, the MCB holds still
+    // The MCB aims from the relayed state; remember where the enemy was.
+    const auto & s = *latest_state_;
+    const auto & p = s.valid ? s.center : s.panel;
+    idle_.target_seen(
+      seconds(rclcpp::Time(s.detection_stamp, now.get_clock_type())), Vector3d(p.x, p.y, p.z));
+  } else {
+    const Vector3d point = idle_point_now(now);
     CVTarget out;
     out.header.stamp = now;
     out.header.frame_id = odom_frame_;
-    out.x = static_cast<float>(aim->pos.x());
-    out.y = static_cast<float>(aim->pos.y());
-    out.z = static_cast<float>(aim->pos.z());
-    const auto fire = fire_decision(aim->fire_delay_s, now);
-    out.fire = fire.first;
-    out.delay_ms = static_cast<uint16_t>(fire.second);
-    out.type_c_based_patrol = type_c_based_patrol_;
-    out.turn_to_hit = turn_to_hit_;
+    out.x = static_cast<float>(point.x());
+    out.y = static_cast<float>(point.y());
+    out.z = static_cast<float>(point.z());
+    out.turn_to_hit = true;
+    last_sent_point_ = point;
     out_frame = out.header.frame_id;
     send_target_(out);
   }
+  if (none_pub_ && out_frame.empty()) {
+    std_msgs::msg::Header none;
+    none.stamp = now;
+    none_pub_->publish(none);
+  }
   if (send_tick_) {
-    // Empty frame means no aim was published; otherwise name its output frame.
+    // Empty frame means no point was published; otherwise name its output frame.
     std_msgs::msg::Header tick;
     tick.stamp = now;
     tick.frame_id = out_frame;
     send_tick_(tick);
   }
-}
-
-std::optional<PointToCvTarget::Aim> PointToCvTarget::compute_aim_point()
-{
-  const auto state = latest_state_;
-  const rclcpp::Time now = clock_now();
-  const rclcpp::Time state_stamp(state->header.stamp, now.get_clock_type());
-  const double state_age_s = seconds(now - state_stamp);
-
-  if (state_age_s > target_timeout_s_) {
-    RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "Newest '%s' is %.2f s old (> target_timeout_s=%.2f) -- not aiming on it.",
-      target_state_topic_.c_str(), state_age_s, target_timeout_s_);
-    return std::nullopt;
-  }
-
-  if (!state->valid) {
-    // Unconverged: aim at the measured panel, no lead, no fire.
-    spinning_ = false;
-    return Aim{Vector3d(state->panel.x, state->panel.y, state->panel.z), std::nullopt};
-  }
-
-  // Our pose at the state's stamp; if TF hasn't reached it yet, the newest one,
-  // carried forward below.
-  geometry_msgs::msg::TransformStamped tf_shooter;
-  try {
-    if (tf_buffer_->canTransform(odom_frame_, root_frame_, state_stamp)) {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, state_stamp);
-    } else {
-      tf_shooter = tf_buffer_->lookupTransform(odom_frame_, root_frame_, tf2::TimePointZero);
-    }
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR_THROTTLE(
-      get_logger(), *get_clock(), 1000, "TF lookup %s<-%s failed: %s", odom_frame_.c_str(),
-      root_frame_.c_str(), ex.what());
-    return std::nullopt;
-  }
-
-  const auto & st = tf_shooter.transform.translation;
-  const auto & sq = tf_shooter.transform.rotation;
-  const Matrix3d shooter_R = quat_to_rot(sq.x, sq.y, sq.z, sq.w);
-  const Vector3d shooter_vel_odom = shooter_R * chassis_vel_root_;
-  // plan_shot wants us at the state's stamp, not the transform's.
-  const double tf_to_state_s = seconds(
-    state_stamp - rclcpp::Time(tf_shooter.header.stamp, now.get_clock_type()));
-  const Vector3d shooter_pos_odom =
-    Vector3d(st.x, st.y, st.z) + shooter_vel_odom * tf_to_state_s;
-
-  const double threshold = spinning_ ? spin_exit_rad_s_ : spin_enter_rad_s_;
-  spinning_ = std::abs(state->yaw_rate) > threshold;
-  const ArmorState armor = {
-    state->center.x, state->center.y, state->center.z, state->velocity.x, state->velocity.y,
-    state->velocity.z, state->yaw, state->yaw_rate};
-  ShotOptions options;
-  options.gimbal_lag_s = gimbal_lag_s_;
-  options.firmware_latency_s = firmware_latency_s_;
-  options.lead = lead_enabled_;
-  options.iterations = tof_iterations_;
-  options.shooter_vel = shooter_vel_odom;
-  options.chase_settle_s = chase_settle_s_;
-  options.chase_margin_s = chase_margin_s_;
-  options.accel = Vector3d(state->acceleration.x, state->acceleration.y, state->acceleration.z);
-  // Age of THIS state at THIS tick, not latency_stat.mean: publishing runs on
-  // its own timer over a cached state. See README.md.
-  const Shot shot = plan_shot(
-    armor, {state->radius[0], state->radius[1]}, {state->z_offset[0], state->z_offset[1]},
-    state_age_s, shooter_pos_odom, v_muzzle_, spinning_, tick_s_, options);
-  return Aim{shot.aim_pos, shot.delay_s};
 }
 
 }  // namespace thornbots_pkg

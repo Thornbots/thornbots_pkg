@@ -16,7 +16,7 @@
 Launch thornbots_pkg's core nodes and hand off to sentry_localization.
 
 Gets /dji_serial_bridge/pose and /scan onto the graph, owns the robot description, then
-hands off to sentry_localization for odom->root/map->odom localization.
+hands off to sentry_localization for map->nav_odom and navigation pose.
 See README.md for design rationale and per-node breakdown.
 
 real_hardware:=true (default) launches dji_serial_bridge_node + sllidar_ros2
@@ -28,8 +28,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable,
+    UnsetEnvironmentVariable,
+)
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command, EnvironmentVariable, LaunchConfiguration, PythonExpression
@@ -73,11 +76,32 @@ def generate_launch_description():
         description='Baud rate for the RPLIDAR A2M8, only used when '
         'real_hardware:=true.'
     )
+    lidar_inverted_arg = DeclareLaunchArgument(
+        'lidar_inverted', default_value='false',
+        description='Lidar mounted upside down: sllidar negates scan angles so '
+        'the scan frame stays z-up. Only used when real_hardware:=true.')
+    lidar_x_arg = DeclareLaunchArgument(
+        'lidar_x', default_value='-0.105', description='Lidar X in head frame, meters.')
+    lidar_y_arg = DeclareLaunchArgument(
+        'lidar_y', default_value='-0.193326', description='Lidar Y in head frame, meters.')
+    lidar_z_arg = DeclareLaunchArgument(
+        'lidar_z', default_value='0.101293', description='Lidar Z in head frame, meters.')
+    lidar_yaw_arg = DeclareLaunchArgument(
+        'lidar_yaw', default_value='0.5907', description='Lidar yaw CCW from head +X, radians.')
+    lidar_blind_angle_start_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_start', default_value='-0.5585',
+        description='Self-filter sector start in scan frame, radians CCW from scan zero.')
+    lidar_blind_angle_end_arg = DeclareLaunchArgument(
+        'lidar_blind_angle_end', default_value='1.0123',
+        description='Self-filter sector end in scan frame, radians CCW from scan zero.')
 
     odom_frame_arg = DeclareLaunchArgument(
-        'odom_frame', default_value='odom',
-        description='Frame sentry_localization/odom_tf_broadcaster treat as '
-        'their drift-free reference, parent of base_frame.'
+        'odom_frame', default_value='nav_odom',
+        description='Fused navigation frame; localization corrections stay upstream of raw aim.'
+    )
+    aim_frame_arg = DeclareLaunchArgument(
+        'aim_frame', default_value='odom',
+        description='Continuous raw MCB odometry frame used by camera tracking and aim.'
     )
 
     dds_transport_arg = DeclareLaunchArgument(
@@ -92,7 +116,17 @@ def generate_launch_description():
         'nodes or the camera launch, which keep the container default.'
     )
 
-    # mapping starts blank by default, so its map frame is the boot pose.
+    remote_dds_arg = DeclareLaunchArgument(
+        'remote_dds', default_value=EnvironmentVariable(
+            'THORNBOTS_REMOTE_DDS', default_value='false'),
+        description='true/false. Off (default): DDS discovery stays on this machine '
+        '(config/fastdds_local.xml, no Tailscale initial peers), so '
+        '`ros2` on another machine sees nothing. On: the container profile and '
+        'the robots Tailscale initial peers, as before. Defaults to '
+        '$THORNBOTS_REMOTE_DDS. See README.md, Remote DDS.'
+    )
+
+    # Mapping starts a blank graph; field registration belongs to localization's workflow.
     load_map_arg = DeclareLaunchArgument(
         'load_map', default_value=PythonExpression(
             ["'false' if '", LaunchConfiguration('localization_mode'),
@@ -104,8 +138,12 @@ def generate_launch_description():
     autosave_map_arg = DeclareLaunchArgument(
         'autosave_map', default_value=LaunchConfiguration('real_hardware'),
         description='Forwarded to sentry_localization: under mapping, save '
-        'the map every 30 s to /workspaces/isaac_ros-dev/maps/<boot time>/. '
+        'the map every 30 s to map_save_dir/<boot time>/. '
         'Default real_hardware.'
+    )
+    map_save_dir_arg = DeclareLaunchArgument(
+        'map_save_dir', default_value='/workspaces/isaac_ros-dev/maps',
+        description='Forwarded to sentry_localization: directory for map autosaves.'
     )
     map_file_arg = DeclareLaunchArgument(
         'map_file', default_value=os.path.join(
@@ -120,17 +158,17 @@ def generate_launch_description():
     )
 
     localization_mode_arg = DeclareLaunchArgument(
-        'localization_mode', default_value='mapping',
+        'localization_mode', default_value='amcl',
         choices=['slam', 'mapping', 'amcl', 'none'],
         description='Forwarded to sentry_localization -- selects who owns '
-        "map->odom. See sentry_localization's "
+        "map->navigation frame. See sentry_localization's "
         'localization.launch.py module docstring for what each '
         'value launches.'
     )
     use_rf2o_arg = DeclareLaunchArgument(
         'use_rf2o', default_value='true',
         description='Forwarded to sentry_localization -- whether rf2o scan '
-        'odometry is fused into odom->root (rf2o_laser_odometry_node on '
+        'odometry is fused into navigation pose (rf2o_laser_odometry_node on '
         '/scan, fused by ekf_node) instead of passing /odom through raw. True '
         'by default so scan-matched odometry is always in the '
         'fusion; set false for raw /odom passthrough. '
@@ -141,9 +179,8 @@ def generate_launch_description():
 
     enable_cv_target_bridge_arg = DeclareLaunchArgument(
         'enable_cv_target_bridge', default_value='true',
-        description="Launch point_to_cv_target to turn target_tracker's "
-        '/cv/target_state into the odom-frame /cv/target aim '
-        'point. '
+        description='Launch point_to_cv_target to publish the odom-frame '
+        '/cv/target idle look point while no target is tracked. '
         'Independent of real_hardware -- consumed by mcb_relay '
         "when real_hardware:=true, and by sim's cv_head_aim "
         'node when running against sim.'
@@ -153,35 +190,38 @@ def generate_launch_description():
         description='Singular PanelDetection topic (the picked panel), '
         'published by target_selector for debugging and rviz.'
     )
-    lead_enabled_arg = DeclareLaunchArgument(
-        'lead_enabled', default_value='true',
-        description='point_to_cv_target: apply the intercept/lead solve '
-        'to /cv/target. false emits the raw '
-        'target_tracker center with no prediction -- one '
-        'param flip between before/after.'
-    )
-    firmware_latency_s_arg = DeclareLaunchArgument(
-        'firmware_latency_s', default_value='0.05',
-        description='point_to_cv_target: static delay from fire decision '
-        'to projectile exit, added to the state age before time of flight. '
-        '0.05 matches the aiming bench; measure it on hardware.'
-    )
-    v_muzzle_arg = DeclareLaunchArgument(
-        'v_muzzle', default_value='25.0',
-        description='point_to_cv_target: projectile speed (m/s) used only '
-        "to size the intercept solve's prediction horizon -- "
-        'Type-C computes the real ballistic flight time.'
-    )
     cv_target_publish_rate_hz_arg = DeclareLaunchArgument(
         'cv_target_publish_rate_hz', default_value='40.0',
-        description='point_to_cv_target: /cv/target publish rate, '
-        'decoupled from the ~60Hz detection rate.'
+        description='point_to_cv_target: idle look publish rate '
+        '(also its bench tick), decoupled from the ~60Hz detection rate.'
     )
-    patrol_enabled_arg = DeclareLaunchArgument(
-        'patrol_enabled', default_value='true',
-        description='point_to_cv_target: with no target, sweep the gun and '
-        'face hits off ref_sys, never firing. false sends nothing between '
-        'targets.'
+    idle_direction_arg = DeclareLaunchArgument(
+        'idle_direction', default_value='zone', choices=['zone', 'hold'],
+        description='With no recent enemy or hit: face the enemy start zone, or hold.'
+    )
+
+    # Starting Zone centres of the ARCC Season 2 3v3 Battlefield (sim's default
+    # world); surveyed per-robot overrides belong in launch.env.
+    red_start_x_arg = DeclareLaunchArgument(
+        'red_start_x', default_value='-5.25', description='Red start field X, metres.')
+    red_start_y_arg = DeclareLaunchArgument(
+        'red_start_y', default_value='-3.0', description='Red start field Y, metres.')
+    blue_start_x_arg = DeclareLaunchArgument(
+        'blue_start_x', default_value='5.25', description='Blue start field X, metres.')
+    blue_start_y_arg = DeclareLaunchArgument(
+        'blue_start_y', default_value='-3.0', description='Blue start field Y, metres.')
+
+    enable_waypoint_nav_arg = DeclareLaunchArgument(
+        'enable_waypoint_nav', default_value='true',
+        description="Launch thornbots_nav's waypoint_nav, which publishes the "
+        "MCB's NAV_GOAL route (real_hardware:=true only). The MCB follows it "
+        'only with the right switch up.'
+    )
+
+    nav_route_arg = DeclareLaunchArgument(
+        'nav_route', default_value='pipes', choices=['pipes', 'square'],
+        description='waypoint_nav route: pipes (match) or square (off-field '
+        '1 m test square from the start, +x then +y).'
     )
 
     enable_target_selector_arg = DeclareLaunchArgument(
@@ -227,8 +267,11 @@ def generate_launch_description():
     target_state_topic_arg = DeclareLaunchArgument(
         'target_state_topic', default_value='/cv/target_state',
         description='TargetState topic published by target_tracker, '
-        "consumed by point_to_cv_target's intercept solver."
+        'relayed to the MCB by mcb_relay and read by point_to_cv_target.'
     )
+    pose_latency_s_arg = DeclareLaunchArgument(
+        'pose_latency_s', default_value='0.01',
+        description='Tracker capture-time pose transport calibration, seconds')
     tf_max_wait_s_arg = DeclareLaunchArgument(
         'tf_max_wait_s', default_value='0.25',
         description='target_tracker: how long a detection waits for the '
@@ -236,25 +279,49 @@ def generate_launch_description():
         'never matched to a newer camera pose. See README.md.'
     )
 
+    # Remote-DDS switch. A profile that lists the robots' Tailscale peers sends SPDP
+    # to them. ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST kept it local but peers only 4
+    # participant ids, and the 37-participant sim stack timed out its first lockstep hold
+    # (`cv_target ... no ack`, 2026-11-06). Off therefore means config/fastdds_local.xml
+    # (SHM and loopback UDP, peers 127.0.0.1, range 128) and no range; pinned nodes use
+    # _local.xml.
+    remote = ["'", LaunchConfiguration('remote_dds'), "'.lower() in ('1', 'true')"]
+    remote_on = IfCondition(PythonExpression(remote))
+    remote_off = UnlessCondition(PythonExpression(remote))
+    dds_environment = [
+        UnsetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', condition=remote_off),
+        SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
+                               os.path.join(pkg_share, 'config', 'fastdds_local.xml'),
+                               condition=remote_off),
+        UnsetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', condition=remote_on),
+        SetEnvironmentVariable(
+            'FASTRTPS_DEFAULT_PROFILES_FILE',
+            EnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
+                                default_value='/etc/fastdds/profile.xml'),
+            condition=remote_on),
+    ]
+
     # Transport per node. udp_env pins a node to UDP; shm_env leaves it on the
     # container default (shared memory + UDP) unless dds_transport:=udp_only.
     # A node on SHM is nearly invisible to `ros2 topic`/`node` run in a shell
     # on the same machine, so the small high-level publishers -- pose, odom,
     # TF, CV target -- stay on UDP and remain greppable from a robot terminal.
-    # Remote machines see every node either way.
-    # See config/fastdds_udp_only.xml.
-    udp_profile = os.path.join(pkg_share, 'config', 'fastdds_udp_only.xml')
-    udp_env = {'FASTRTPS_DEFAULT_PROFILES_FILE': udp_profile}
+    # With remote_dds on, remote machines see every node either way.
+    # See config/fastdds_udp_only.xml (peers) and _local.xml (loopback only).
+    # Pinned nodes also take SYSTEM_DEFAULT: LOCALHOST would add SHM back.
+    udp_profile = PythonExpression([
+        "'", os.path.join(pkg_share, 'config', 'fastdds_udp_only'),
+        "' + ('' if ", *remote, " else '_local') + '.xml'"])
+    udp_env = {'FASTRTPS_DEFAULT_PROFILES_FILE': udp_profile,
+               'ROS_AUTOMATIC_DISCOVERY_RANGE': 'SYSTEM_DEFAULT'}
+    # Keys are substitutions: unpinned nodes get two unused variables instead, so
+    # they inherit the environment block above unchanged.
+    pinned = ["'", LaunchConfiguration('dds_transport'), "' == 'udp_only'"]
     shm_env = {
-        'FASTRTPS_DEFAULT_PROFILES_FILE': PythonExpression([
-            "'", udp_profile, "' if '", LaunchConfiguration('dds_transport'),
-            "' == 'udp_only' else '",
-            EnvironmentVariable(
-                'FASTRTPS_DEFAULT_PROFILES_FILE',
-                default_value='/etc/fastdds/profile.xml',
-            ),
-            "'",
-        ])
+        PythonExpression(["'FASTRTPS_DEFAULT_PROFILES_FILE' if ", *pinned,
+                          " else 'THORNBOTS_DDS_UNPINNED_PROFILE'"]): udp_profile,
+        PythonExpression(["'ROS_AUTOMATIC_DISCOVERY_RANGE' if ", *pinned,
+                          " else 'THORNBOTS_DDS_UNPINNED_RANGE'"]): 'SYSTEM_DEFAULT',
     }
 
     # device/baudrate for dji_serial_bridge_node are left at its own defaults
@@ -278,17 +345,57 @@ def generate_launch_description():
     # directly; see thornbots_pkg/src/mcb_relay.cpp's header comment. Only meaningful
     # alongside dji_serial_bridge_node itself, hence the same real_hardware
     # gate.
+    # Blank mapping has a local-zero map, so retain team-start navigation there.
+    absolute_navigation = ["'", LaunchConfiguration('localization_mode'),
+                           "' == 'amcl' or ('", LaunchConfiguration('localization_mode'),
+                           "' == 'slam' and '", LaunchConfiguration('load_map'), "' == 'true')"]
+    navigation_frame = PythonExpression([
+        "'map' if (", *absolute_navigation, ") else '", LaunchConfiguration('odom_frame'), "'"])
+    relay_input = PythonExpression([
+        "'/localization/map_odom' if (", *absolute_navigation, ") else '/localization/odom'"])
     mcb_relay_node = Node(
         package='thornbots_pkg',
         executable='mcb_relay',
         name='mcb_relay',
+        parameters=[{'use_sim_time': use_sim_time,
+                     'red_start_x': ParameterValue(
+                         LaunchConfiguration('red_start_x'), value_type=float),
+                     'red_start_y': ParameterValue(
+                         LaunchConfiguration('red_start_y'), value_type=float),
+                     'blue_start_x': ParameterValue(
+                         LaunchConfiguration('blue_start_x'), value_type=float),
+                     'blue_start_y': ParameterValue(
+                         LaunchConfiguration('blue_start_y'), value_type=float),
+                     'absolute_pose': ParameterValue(
+                         PythonExpression(absolute_navigation), value_type=bool),
+                     'localization_odom_topic': relay_input,
+                     'navigation_frame': navigation_frame}],
         output='screen',
         condition=IfCondition(real_hardware),
         additional_env=shm_env,
     )
 
-    # Turns target_tracker's /cv/target_state into the odom-frame CVTarget
-    # published on /cv/target -- consumed by mcb_relay (real_hardware:=true)
+    # Arrival follows the nominal held firmware position from the relay.
+    waypoint_nav_node = Node(
+        package='thornbots_nav',
+        executable='waypoint_nav',
+        name='waypoint_nav',
+        output='screen',
+        condition=IfCondition(PythonExpression([
+            "'", real_hardware, "'.lower() == 'true' and '",
+            LaunchConfiguration('enable_waypoint_nav'), "'.lower() == 'true'"])),
+        parameters=[
+            os.path.join(get_package_share_directory('thornbots_nav'), 'config', 'route.yaml'),
+            {'use_sim_time': use_sim_time,
+             'goal_frame': navigation_frame,
+             'odom_topic': '/mcb/navigation_odom',
+             'route': LaunchConfiguration('nav_route')}],
+        additional_env=shm_env,
+    )
+
+    # Publishes odom-frame idle-look CVTargets on /cv/target while no target
+    # state is fresh (the MCB plans aim and fire from /cv/target_state,
+    # relayed by mcb_relay) -- consumed by mcb_relay (real_hardware:=true)
     # and/or sim's cv_head_aim node (real_hardware:=false), so this runs in
     # both modes; enable_cv_target_bridge lets you disable it if you intend
     # to publish /cv/target yourself.
@@ -300,25 +407,31 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_cv_target_bridge')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'deterministic_epoch_zero': ParameterValue(
+                LaunchConfiguration('deterministic_epoch_zero'), value_type=bool),
             'target_state_topic': LaunchConfiguration('target_state_topic'),
             'output_topic': '/cv/target',
-            'odom_frame': LaunchConfiguration('odom_frame'),
-            'lead_enabled': ParameterValue(
-                LaunchConfiguration('lead_enabled'), value_type=bool
-            ),
-            'firmware_latency_s': ParameterValue(
-                LaunchConfiguration('firmware_latency_s'), value_type=float
-            ),
-            'v_muzzle': ParameterValue(
-                LaunchConfiguration('v_muzzle'), value_type=float
-            ),
+            'odom_frame': LaunchConfiguration('aim_frame'),
+            'navigation_frame': LaunchConfiguration('odom_frame'),
             'cv_target_publish_rate_hz': ParameterValue(
                 LaunchConfiguration('cv_target_publish_rate_hz'), value_type=float
             ),
-            'patrol_enabled': ParameterValue(
-                LaunchConfiguration('patrol_enabled'), value_type=bool
-            ),
+            'idle_direction': LaunchConfiguration('idle_direction'),
+            'red_start_x': ParameterValue(
+                LaunchConfiguration('red_start_x'), value_type=float),
+            'red_start_y': ParameterValue(
+                LaunchConfiguration('red_start_y'), value_type=float),
+            'blue_start_x': ParameterValue(
+                LaunchConfiguration('blue_start_x'), value_type=float),
+            'blue_start_y': ParameterValue(
+                LaunchConfiguration('blue_start_y'), value_type=float),
             'ref_sys_topic': LaunchConfiguration('ref_sys_topic'),
+            'allow_latest_tf': ParameterValue(
+                LaunchConfiguration('allow_latest_tf'), value_type=bool),
+            'tf_lookup_lag_s': ParameterValue(
+                LaunchConfiguration('tf_lookup_lag_s'), value_type=float),
+            'nav_tf_lookup_lag_s': ParameterValue(
+                LaunchConfiguration('nav_tf_lookup_lag_s'), value_type=float),
         }],
         additional_env=udp_env,
     )
@@ -362,9 +475,11 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_target_tracker')),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'pose_latency_s': ParameterValue(
+                LaunchConfiguration('pose_latency_s'), value_type=float),
             'robot_panels_topic': '/cv/robot_panels',
             'output_topic': LaunchConfiguration('target_state_topic'),
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
             'tf_max_wait_s': ParameterValue(
                 LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
@@ -389,6 +504,8 @@ def generate_launch_description():
                 LaunchConfiguration('lidar_baudrate'), value_type=int
             ),
             'frame_id': 'lidar',
+            'inverted': ParameterValue(LaunchConfiguration('lidar_inverted'), value_type=bool),
+            'angle_compensate': True,
             'use_sim_time': use_sim_time,
         }],
         additional_env=shm_env,
@@ -399,7 +516,13 @@ def generate_launch_description():
         executable='lidar_self_filter',
         name='lidar_self_filter',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'blind_angle_start': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_start'), value_type=float),
+            'blind_angle_end': ParameterValue(
+                LaunchConfiguration('lidar_blind_angle_end'), value_type=float),
+        }],
         additional_env=shm_env,
     )
 
@@ -410,7 +533,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
@@ -423,12 +546,19 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
+            'aim_frame': LaunchConfiguration('aim_frame'),
         }],
         additional_env=udp_env,
     )
 
     robot_description = ParameterValue(
-        Command(['xacro ', sentry_xacro]), value_type=str
+        Command([
+            'xacro ', sentry_xacro,
+            ' lidar_x:=', LaunchConfiguration('lidar_x'),
+            ' lidar_y:=', LaunchConfiguration('lidar_y'),
+            ' lidar_z:=', LaunchConfiguration('lidar_z'),
+            ' lidar_yaw:=', LaunchConfiguration('lidar_yaw'),
+        ]), value_type=str
     )
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
@@ -438,46 +568,160 @@ def generate_launch_description():
         parameters=[{
             'robot_description': robot_description,
             'use_sim_time': use_sim_time,
+            # Publish every 90 Hz POSE joint state. The 20 Hz default left the
+            # head-mounted lidar's TF up to 50 ms behind each scan; see README.
+            'publish_frequency': 1000.0,
         }],
         additional_env=udp_env,
+    )
+
+    match_wifi_guard_node = Node(
+        package='thornbots_pkg', executable='match_wifi_guard', output='screen',
+        condition=IfCondition(LaunchConfiguration('match_wifi_off')),
+        parameters=[{'request_file': LaunchConfiguration('match_wifi_request_file')}],
+        additional_env=udp_env,
+    )
+
+    mmm_node = Node(
+        package='thornbots_pkg', executable='mmm', output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_mmm')),
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'localization_mode': LaunchConfiguration('localization_mode'),
+            'map_save_dir': LaunchConfiguration('map_save_dir'),
+            'room': ParameterValue(LaunchConfiguration('mmm_room'), value_type=bool),
+            'explicit_team': ParameterValue(
+                LaunchConfiguration('seed_explicit_team'), value_type=str),
+            'shutdown_after_save': ParameterValue(
+                LaunchConfiguration('mmm_shutdown_after_save'), value_type=bool),
+            'shutdown_request_file': LaunchConfiguration('mmm_shutdown_request_file'),
+            'timeout_s': ParameterValue(LaunchConfiguration('mmm_timeout_s'), value_type=float),
+        }], additional_env=udp_env,
     )
 
     localization_launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(localization_launch),
         launch_arguments={
+            'red_start_x': LaunchConfiguration('red_start_x'),
+            'red_start_y': LaunchConfiguration('red_start_y'),
+            'blue_start_x': LaunchConfiguration('blue_start_x'),
+            'blue_start_y': LaunchConfiguration('blue_start_y'),
             'use_sim_time': use_sim_time,
             'odom_frame': LaunchConfiguration('odom_frame'),
             'load_map': LaunchConfiguration('load_map'),
             'map_file': LaunchConfiguration('map_file'),
             'localization_mode': LaunchConfiguration('localization_mode'),
             'use_rf2o': LaunchConfiguration('use_rf2o'),
+            'seed_from_raw_odom': LaunchConfiguration('seed_from_raw_odom'),
+            'seed_require_team': LaunchConfiguration('seed_require_team'),
+            'seed_explicit_team': LaunchConfiguration('seed_explicit_team'),
+            'seed_known_team': LaunchConfiguration('seed_known_team'),
+            'ekf_frequency_hz': LaunchConfiguration('ekf_frequency_hz'),
+            'map_save_dir': LaunchConfiguration('map_save_dir'),
             'initial_x': LaunchConfiguration('initial_x'),
             'initial_y': LaunchConfiguration('initial_y'),
+            'amcl_initial_x': LaunchConfiguration('amcl_initial_x'),
+            'amcl_initial_y': LaunchConfiguration('amcl_initial_y'),
+            'amcl_initial_yaw': LaunchConfiguration('amcl_initial_yaw'),
             'autosave_map': LaunchConfiguration('autosave_map'),
         }.items(),
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'initial_x', default_value='0.0', description='Known initial field X, meters'),
-        DeclareLaunchArgument(
-            'initial_y', default_value='0.0', description='Known initial field Y, meters'),
+        # First: later defaults (mmm_room, autosave_map) read real_hardware.
         real_hardware_arg,
-        lidar_serial_port_arg, lidar_baudrate_arg,
-        odom_frame_arg, dds_transport_arg,
-        localization_mode_arg, load_map_arg, autosave_map_arg, map_file_arg,
+        DeclareLaunchArgument('deterministic_epoch_zero', default_value='false',
+                              description='Initialize the aim timers at simulated clock zero.'),
+        DeclareLaunchArgument('match_wifi_off', default_value='false', choices=['true', 'false'],
+                              description='Request host Wi-Fi disconnect at confirmed battle.'),
+        DeclareLaunchArgument('match_wifi_request_file',
+                              default_value='/run/thornbots-net/wifi-off.request',
+                              description='Request file exposed by the host Wi-Fi service.'),
+        DeclareLaunchArgument('enable_mmm', default_value='true', choices=['true', 'false'],
+                              description='Start the in-stack MCB Mapping Machine coordinator.'),
+        DeclareLaunchArgument('mmm_room', default_value=use_sim_time, choices=['true', 'false'],
+                              description='Room capture without referee/start checks.'),
+        DeclareLaunchArgument('mmm_timeout_s', default_value='60.0',
+                              description='Wall-clock setup/save timeout in seconds.'),
+        DeclareLaunchArgument('mmm_shutdown_after_save', default_value='false',
+                              choices=['true', 'false'],
+                              description='Request host poweroff after validated Ready save.'),
+        DeclareLaunchArgument('mmm_shutdown_request_file',
+                              default_value='/run/thornbots-mmm/poweroff.request',
+                              description='Request file exposed by the host shutdown service.'),
+        DeclareLaunchArgument('operator_inputs_only', default_value='false',
+                              choices=['true', 'false'],
+                              description='Only UART input and raw pose translation; '
+                              'no command producers or relay.'),
+        DeclareLaunchArgument('seed_explicit_team', default_value='', choices=['', 'red', 'blue'],
+                              description='Practice navigation team without referee; '
+                              'never bypasses the AMCL referee gate.'),
+        DeclareLaunchArgument(
+            'allow_latest_tf', default_value='true', choices=['true', 'false'],
+            description='point_to_cv_target takes the newest TF when true (the robot). '
+            'Simulation lockstep sets false: lookups are stamped tf_lookup_lag_s before '
+            'now and each miss is counted on ~/latest_tf_fallbacks.'),
+        DeclareLaunchArgument('tf_lookup_lag_s', default_value='0.0',
+                              description='Age of the odom<-muzzle TF point_to_cv_target reads '
+                              'when allow_latest_tf is false: UART delivery of the pose plus '
+                              'one pose period.'),
+        DeclareLaunchArgument('nav_tf_lookup_lag_s', default_value='0.0',
+                              description='Age of the nav_odom->odom TF read when '
+                              'allow_latest_tf is false: more than the EKF period (33 ms).'),
+        DeclareLaunchArgument(
+            'ekf_frequency_hz', default_value='',
+            description='Simulation only; forwarded to sentry_localization (empty keeps '
+            'config/ekf.yaml).'),
+        DeclareLaunchArgument(
+            'seed_known_team', default_value='none', choices=['none', 'red', 'blue'],
+            description='Simulation only; forwarded to sentry_localization to start the EKF '
+            "at once from this team's start."),
+        DeclareLaunchArgument(
+            'seed_from_raw_odom', default_value='true', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: seed EKF x/y from fresh '
+            'raw /odom plus team start before starting it; ignores initial_x/y for EKF.'),
+        DeclareLaunchArgument(
+            'seed_require_team', default_value='true', choices=['true', 'false'],
+            description='Forwarded to sentry_localization: require referee team and '
+            'subsequent raw /odom near zero before seeding EKF.'),
+        DeclareLaunchArgument(
+            'initial_x', default_value='0.0',
+            description='Deprecated; navigation uses raw odometry plus team start'),
+        DeclareLaunchArgument(
+            'initial_y', default_value='0.0',
+            description='Deprecated; navigation uses raw odometry plus team start'),
+        DeclareLaunchArgument(
+            'amcl_initial_x', default_value=LaunchConfiguration('initial_x'),
+            description='Deprecated; AMCL uses the actual referee team start'),
+        DeclareLaunchArgument(
+            'amcl_initial_y', default_value=LaunchConfiguration('initial_y'),
+            description='Deprecated; AMCL uses the actual referee team start'),
+        DeclareLaunchArgument(
+            'amcl_initial_yaw', default_value='0.0',
+            description='Deprecated; AMCL root starts heading-fixed at yaw zero'),
+        lidar_serial_port_arg, lidar_baudrate_arg, lidar_inverted_arg,
+        lidar_x_arg, lidar_y_arg, lidar_z_arg, lidar_yaw_arg,
+        lidar_blind_angle_start_arg, lidar_blind_angle_end_arg,
+        odom_frame_arg, aim_frame_arg, dds_transport_arg,
+        remote_dds_arg, *dds_environment,
+        localization_mode_arg, load_map_arg, autosave_map_arg, map_save_dir_arg, map_file_arg,
         use_rf2o_arg,
         enable_cv_target_bridge_arg, panel_topic_arg,
-        lead_enabled_arg, firmware_latency_s_arg, v_muzzle_arg,
-        cv_target_publish_rate_hz_arg, patrol_enabled_arg,
+        cv_target_publish_rate_hz_arg, idle_direction_arg,
+        red_start_x_arg, red_start_y_arg, blue_start_x_arg, blue_start_y_arg,
         enable_target_selector_arg, panel_array_topic_arg, ref_sys_topic_arg,
+        enable_waypoint_nav_arg, nav_route_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
-        tf_max_wait_s_arg,
-        dji_serial_bridge_node, mcb_relay_node,
-        target_selector_node, target_tracker_node, point_to_cv_target_node,
-        lidar_node, lidar_self_filter_node,
-        pose_translator_node, odom_tf_broadcaster_node,
-        robot_state_publisher_node,
-        localization_launch_include,
+        tf_max_wait_s_arg, pose_latency_s_arg,
+        dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
+        GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
+                    actions=[
+            mcb_relay_node, waypoint_nav_node, mmm_node,
+            target_selector_node, target_tracker_node, point_to_cv_target_node,
+            lidar_node, lidar_self_filter_node,
+            odom_tf_broadcaster_node,
+            robot_state_publisher_node,
+            localization_launch_include,
+        ]),
     ])

@@ -287,3 +287,16 @@ TEST(Hysteresis, EmptyClustersReturnsNone)
   RobotHysteresis h(0.3, 3);
   EXPECT_FALSE(h.update({}).has_value());
 }
+
+TEST(Hysteresis, FiveMissedFramesPreserveRobotIdentityWithinGate)
+{
+  RobotHysteresis h(0.3, 3, 1.0);
+  h.update({{A, {2.0, 0.0, 0.0}, 0.8}});
+  const auto id = h.track_id();
+  for (int frame = 0; frame < 5; ++frame) {
+    EXPECT_FALSE(h.update({}).has_value());
+    EXPECT_EQ(h.track_id(), id);
+  }
+  EXPECT_EQ(h.update({{B, {2.2, 0.0, 0.0}, 0.8}}), std::optional<int>(B));
+  EXPECT_EQ(h.track_id(), id);
+}
