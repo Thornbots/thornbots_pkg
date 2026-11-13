@@ -119,11 +119,13 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
     emit(TargetEvent::Clear, at);
   }
   emit(event, at);
+  const bool skipped = event == TargetEvent::None && static_cast<bool>(none_);
+  if (!ack_ && !skipped) {return;}
   auto h = msg->header;
   // Fixture acknowledgments identify the driving input, including empty frames.
   h.stamp = (msg->input_stamp.sec != 0 || msg->input_stamp.nanosec != 0) ?
     msg->input_stamp : msg->detection_stamp;
-  if (event == TargetEvent::None && none_) {none_(h);}
+  if (skipped) {none_(h);}
   if (ack_) {
     if (consumer_ack_sub_) {
       pending_acks_.emplace_back(emitted_, h);

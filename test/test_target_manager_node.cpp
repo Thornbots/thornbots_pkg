@@ -32,12 +32,15 @@ public:
   std::vector<Message> sent;
   std::vector<Header> acks, suppressed;
   int64_t time_ns = 1100000000;
-  explicit Probe(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+  explicit Probe(const rclcpp::NodeOptions & options = rclcpp::NodeOptions(),
+    bool intercept_acks = true)
   : TargetManagerNode(options)
   {
     send_ = [this](const Message & m) {sent.push_back(m);};
-    ack_ = [this](const Header & h) {acks.push_back(h);};
-    none_ = [this](const Header & h) {suppressed.push_back(h);};
+    if (intercept_acks) {
+      ack_ = [this](const Header & h) {acks.push_back(h);};
+      none_ = [this](const Header & h) {suppressed.push_back(h);};
+    }
   }
   rclcpp::Time decision_time() const override {return rclcpp::Time(time_ns, RCL_ROS_TIME);}
 };
@@ -87,6 +90,54 @@ TEST_F(ManagerNodeTest, EverySuppressedEstimateIsAcknowledgedWithoutRestamping)
   ASSERT_EQ(node.suppressed.size(), 5u);
   EXPECT_EQ(node.suppressed.back().stamp, m->input_stamp);
   EXPECT_EQ(node.acks.back().stamp, m->input_stamp);
+}
+
+TEST_F(ManagerNodeTest, SkipPublisherIsDisabledByDefault)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  Probe node(options, false);
+  EXPECT_EQ(node.get_parameter("target_state_none_topic").as_string(), "");
+  EXPECT_EQ(node.count_publishers("/target_manager/skip_ack"), 0u);
+  node.consume(model()); node.consume(model()); node.tick();
+  EXPECT_EQ(node.sent.size(), 1u);
+}
+
+TEST_F(ManagerNodeTest, SkipTopicAcknowledgesEachSuppressedInputAtItsCaptureStamp)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("target_state_none_topic", "/target_manager/skip_ack");
+  auto manager = std::make_shared<Probe>(options, false);
+  auto peer = std::make_shared<rclcpp::Node>("manager_skip_test_peer");
+  std::vector<Header> skipped;
+  auto sub = peer->create_subscription<Header>("/target_manager/skip_ack", 100,
+    [&](Header::ConstSharedPtr h) {skipped.push_back(*h);});
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(manager); executor.add_node(peer);
+  auto spin_until = [&](const auto & ready) {
+      const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!ready() && std::chrono::steady_clock::now() < end) {executor.spin_some();}
+      return ready();
+    };
+  ASSERT_TRUE(spin_until([&]() {return sub->get_publisher_count() == 1;}));
+  auto m = model(); manager->consume(m);
+  std::vector<Header> expected;
+  for (int i = 0; i < 3; ++i) {
+    m->input_stamp.nanosec += 10000000;
+    manager->consume(m);
+    auto h = m->header; h.stamp = m->input_stamp; expected.push_back(h);
+  }
+  m->selected_track = false; manager->consume(m);
+  ASSERT_EQ(manager->sent.size(), 2u); EXPECT_TRUE(manager->sent.back().clear);
+  manager->tick();
+  // A retired input and a fixture without provenance still each get one skip.
+  manager->consume(m);
+  auto h = m->header; h.stamp = m->input_stamp; expected.push_back(h);
+  m->input_stamp = builtin_interfaces::msg::Time{};
+  manager->consume(m); h.stamp = m->detection_stamp; expected.push_back(h);
+  ASSERT_TRUE(spin_until([&]() {return skipped.size() >= expected.size();}));
+  EXPECT_EQ(skipped, expected);
 }
 
 TEST_F(ManagerNodeTest, RefreshForwardsNewEvidenceAtItsCarriedTrueTime)

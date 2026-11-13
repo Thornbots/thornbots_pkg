@@ -650,8 +650,14 @@ rather than a detection-age hold. Idle points never fire. The manager runs in
 normal and sim launch paths with the same DDS profile as the other CV nodes. Lockstep
 benches acknowledge every consumed estimate with `state_ack_topic`, using
 `input_stamp` (or `detection_stamp` for fixtures without input provenance),
-retaining the input model's frame. `target_state_none_topic` marks suppressed inputs using that same driving frame stamp,
-so suppression does not deadlock the graph or count as a missing detection.
+retaining the input model's frame. Setting
+`target_state_none_topic:=/target_manager/skip_ack` enables a `std_msgs/msg/Header`
+for every input frame that sends nothing, using that same driving capture stamp.
+Assignments, updates, refreshes and clears do not emit a skip; timer evaluations
+do not acknowledge input frames. The parameter defaults to empty: no skip publisher
+exists, and no acknowledgment header is constructed when fixture acknowledgments
+are unused on the robot. Suppression therefore does not deadlock the graph or
+count as a missing detection when a fixture enables the topic.
 When a fixture sets `consumer_ack_topic`, input acknowledgments wait until the
 consumer has acknowledged all states emitted before that input was processed.
 This requires one ordered consumer, connected before inputs start; it is off on
@@ -675,6 +681,11 @@ with that robot and accepted into its tracker update, bounded to `[0, 1]`. Use
 the maximum once per capture; do not sum correlated panels or compound evidence
 over repeated frames. Replace the previous anchor with `(q, capture_time)` even
 when the new score is lower. Rejected/outlier detections do not refresh it.
+
+The tracker reads `PanelDetectionArray.detections[].confidence` from
+`/cv/robot_panels` (forwarded by the selector from the detector's
+`/cv/panel_detections` array). The manager reads `TargetState.confidence` from
+`/cv/tracker/target_state`; this already carries capture-to-state-time decay.
 
 At state time `t`, publish `TargetState.confidence = q * exp(-dt / tau)`, where
 `dt = max(0, t - capture_time)` and the initial decay time constant `tau` is
