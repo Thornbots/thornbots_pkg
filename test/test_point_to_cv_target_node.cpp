@@ -92,7 +92,7 @@ public:
   }
   tp::Vector3d idle_point() {return idle_point_now(clock_now());}
   tp::IdleLook::Source idle_source() const
-  {return idle_.source(clock_now().seconds(), target_timeout_s_, false);}
+  {return idle_.source(clock_now().seconds(), 0.0, false);}
   tp::Vector3d last_enemy() const {return idle_.last_enemy();}
   bool active() const {return target_active_;}
   void time_ns(int64_t value) {now_ns_ = value;}
@@ -171,7 +171,7 @@ TEST_F(NodeTest, ActiveTargetTickSendsNoPointButStillTicks)
   EXPECT_EQ(rclcpp::Time(ticks[2].stamp).nanoseconds(), 173000000);
 }
 
-TEST_F(NodeTest, IdleResumesAfterTheTargetTimeoutFromTheDetectionStamp)
+TEST_F(NodeTest, IdleResumesAtReceiptBasedLinkExpiry)
 {
   auto node = make();
   auto model = state(300000000);
@@ -183,23 +183,23 @@ TEST_F(NodeTest, IdleResumesAfterTheTargetTimeoutFromTheDetectionStamp)
   node->capture(&points, &ticks);
   node->on_publish_tick();
   EXPECT_TRUE(points.empty());
-  // Publication time cannot refresh an old detection: 0.5 s from 0.1 s.
-  node->time_ns(600000000);
+  // Link expiry is exactly 0.6 s from receipt, independent of both carried ages.
+  node->time_ns(924999999);
   node->on_publish_tick();
   EXPECT_TRUE(points.empty());
-  node->time_ns(600000001);
+  node->time_ns(925000000);
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 1u);
   EXPECT_TRUE(points.back().turn_to_hit);
   EXPECT_FALSE(node->active());
   // A new state ends idling at once.
-  node->time_ns(650000000);
-  node->on_target_state(state(650000000));
+  node->time_ns(950000000);
+  node->on_target_state(state(950000000));
   node->on_publish_tick();
   EXPECT_EQ(points.size(), 1u);
 }
 
-TEST_F(NodeTest, UnconvergedStatesStillHoldOffIdleLooks)
+TEST_F(NodeTest, NonassignedFramesDoNotHoldOffIdleLooks)
 {
   auto node = make();
   node->on_target_state(state(100000000, false));
@@ -207,10 +207,10 @@ TEST_F(NodeTest, UnconvergedStatesStillHoldOffIdleLooks)
   std::vector<Header> ticks;
   node->capture(&points, &ticks);
   node->on_publish_tick();
-  EXPECT_TRUE(points.empty());
+  EXPECT_EQ(points.size(), 1u);
 }
 
-TEST_F(NodeTest, LastEnemyIsTheTrackedCenterOrPanelWhenUnconverged)
+TEST_F(NodeTest, LastEnemyIsTheAssignedCenterAndIgnoresNonassignedFrames)
 {
   auto node = make();
   auto model = state(100000000);
@@ -231,8 +231,8 @@ TEST_F(NodeTest, LastEnemyIsTheTrackedCenterOrPanelWhenUnconverged)
   model->panel.y = -1.5;
   node->on_target_state(model);
   node->on_publish_tick();
-  EXPECT_EQ(node->last_enemy().x(), 3.5);
-  EXPECT_EQ(node->last_enemy().y(), -1.5);
+  EXPECT_EQ(node->last_enemy().x(), 3.0);
+  EXPECT_EQ(node->last_enemy().y(), -2.0);
 }
 
 TEST_F(NodeTest, IdleLooksFollowTheEnemyJustLostThenReturnToTheZone)
@@ -256,6 +256,7 @@ TEST_F(NodeTest, ModelAckIsSentAfterConsumptionWithTheInputStamp)
   model->header.stamp = rclcpp::Time(int64_t{100000000}, RCL_ROS_TIME);
   model->detection_stamp = model->header.stamp;
   model->header.frame_id = "odom";
+  model->valid = true;
   std::vector<Header> acknowledged;
   node->on_target_state_hook(
     [&](const Header & header) {
@@ -295,10 +296,24 @@ TEST_F(NodeTest, RemovedPlannerParametersAreNotDeclared)
       "gimbal_lag_s", "v_muzzle", "tof_iterations", "spin_enter_rad_s", "spin_exit_rad_s",
       "chase_settle_s", "chase_margin_s", "panel_switch_margin_rad", "fire_lock_s",
       "fire_lock_grace_s", "fire_stationary_speed_mps", "fire_max_state_age_s",
-      "fire_confidence_threshold", "type_c_based_patrol", "robot_pose_topic", "root_frame"})
+      "fire_confidence_threshold", "type_c_based_patrol", "robot_pose_topic", "root_frame",
+      "target_timeout_s"})
   {
     EXPECT_FALSE(node->has_parameter(name)) << name;
   }
+}
+
+TEST_F(NodeTest, ClearImmediatelyReleasesAndKeepsLastAssignedEnemy)
+{
+  auto node = make(); auto model = state(100000000); model->center.x = 4.0;
+  node->on_target_state(model);
+  auto clear = state(120000000, false); clear->clear = true;
+  node->on_target_state(clear);
+  EXPECT_FALSE(node->active());
+  EXPECT_EQ(node->last_enemy().x(), 4.0);
+  std::vector<CVTarget> points; std::vector<Header> ticks;
+  node->capture(&points, &ticks); node->on_publish_tick();
+  ASSERT_EQ(points.size(), 1u); EXPECT_TRUE(points[0].turn_to_hit);
 }
 
 TEST_F(NodeTest, IdleZoneUsesFieldNavigationToRawTransformForBothTeams)
@@ -364,7 +379,7 @@ TEST_F(NodeTest, HitTurnPermissionFollowsIdleVersusTargetFrames)
   node->on_target_state(state(100000000));
   node->on_publish_tick();
   EXPECT_EQ(points.size(), 1u);  // target state carries the aim; no hit turn frame
-  node->time_ns(700000000);
+  node->time_ns(800000000);
   node->on_publish_tick();
   ASSERT_EQ(points.size(), 2u);
   EXPECT_TRUE(points.back().turn_to_hit);
