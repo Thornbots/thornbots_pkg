@@ -60,6 +60,13 @@ protected:
     m->radius = {0.2F, 0.3F}; m->update_count = 1;
     return m;
   }
+  template<typename Predicate>
+  bool spin_until(rclcpp::executors::SingleThreadedExecutor & executor, Predicate ready)
+  {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ready() && std::chrono::steady_clock::now() < end) {executor.spin_some();}
+    return ready();
+  }
 };
 }  // namespace
 
@@ -98,7 +105,9 @@ TEST_F(ManagerNodeTest, SkipPublisherIsDisabledByDefault)
   options.append_parameter_override("use_sim_time", true);
   Probe node(options, false);
   EXPECT_EQ(node.get_parameter("target_state_none_topic").as_string(), "");
+  EXPECT_EQ(node.get_parameter("state_ack_topic").as_string(), "");
   EXPECT_EQ(node.count_publishers("/target_manager/skip_ack"), 0u);
+  EXPECT_EQ(node.count_publishers("/target_manager/frame_ack"), 0u);
   node.consume(model()); node.consume(model()); node.tick();
   EXPECT_EQ(node.sent.size(), 1u);
 }
@@ -138,6 +147,79 @@ TEST_F(ManagerNodeTest, SkipTopicAcknowledgesEachSuppressedInputAtItsCaptureStam
   manager->consume(m); h.stamp = m->detection_stamp; expected.push_back(h);
   ASSERT_TRUE(spin_until([&]() {return skipped.size() >= expected.size();}));
   EXPECT_EQ(skipped, expected);
+}
+
+TEST_F(ManagerNodeTest, FrameAckCoversEveryInputIncludingEmptyFrameHeldModelRefresh)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("state_ack_topic", "/target_manager/frame_ack");
+  auto manager = std::make_shared<Probe>(options, false);
+  auto peer = std::make_shared<rclcpp::Node>("manager_frame_test_peer");
+  std::vector<Header> frames, expected;
+  auto sub = peer->create_subscription<Header>("/target_manager/frame_ack", 100,
+    [&](Header::ConstSharedPtr h) {frames.push_back(*h);});
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(manager); executor.add_node(peer);
+  ASSERT_TRUE(spin_until(executor, [&]() {return sub->get_publisher_count() == 1;}));
+  auto consume = [&](const std::shared_ptr<Message> & m) {
+      manager->consume(m);
+      auto h = m->header; h.stamp = m->input_stamp; expected.push_back(h);
+    };
+  consume(model());
+  manager->time_ns = 1150000000;
+  auto measured = model(); measured->header.stamp.nanosec = 150000000;
+  measured->detection_stamp.nanosec = 140000000; measured->input_stamp = measured->detection_stamp;
+  measured->confidence = 0.95F; measured->variance[0] = 12.0F;
+  consume(measured); ASSERT_EQ(manager->sent.size(), 1u);
+  // Empty input carries the last model unchanged, with only its driving frame advanced.
+  manager->time_ns = 1305000000;
+  auto empty = std::make_shared<Message>(*measured); empty->input_stamp.nanosec = 300000000;
+  consume(empty); ASSERT_EQ(manager->sent.size(), 2u);
+  EXPECT_EQ(manager->sent.back().header, measured->header);
+  EXPECT_EQ(manager->sent.back().detection_stamp, measured->detection_stamp);
+  EXPECT_EQ(manager->sent.back().variance, measured->variance);
+  manager->time_ns = 1310000000;
+  auto update = model(); update->header.stamp.nanosec = 310000000;
+  update->detection_stamp.nanosec = 305000000; update->input_stamp = update->detection_stamp;
+  update->center.x += 0.2; consume(update); ASSERT_EQ(manager->sent.size(), 3u);
+  manager->time_ns = 1320000000;
+  auto clear = model(); clear->selected_track = false; clear->input_stamp.nanosec = 320000000;
+  consume(clear); ASSERT_EQ(manager->sent.size(), 4u); EXPECT_TRUE(manager->sent.back().clear);
+  manager->tick();
+  clear->input_stamp.nanosec = 330000000; consume(clear);
+  ASSERT_TRUE(spin_until(executor, [&]() {return frames.size() >= expected.size();}));
+  EXPECT_EQ(frames, expected);
+}
+
+TEST_F(ManagerNodeTest, HeldRefreshFrameAckWaitsForConsumerDespiteOldModelStamp)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("consumer_ack_topic", "/test/held_refresh_consumer_ack");
+  auto manager = std::make_shared<Probe>(options);
+  auto peer = std::make_shared<rclcpp::Node>("held_refresh_consumer_test_peer");
+  auto consumed = peer->create_publisher<Header>("/test/held_refresh_consumer_ack", 100);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(manager); executor.add_node(peer);
+  ASSERT_TRUE(spin_until(executor, [&]() {return consumed->get_subscription_count() == 1;}));
+  auto initial = model(); manager->consume(initial); EXPECT_TRUE(manager->acks.empty());
+  consumed->publish(initial->header);
+  ASSERT_TRUE(spin_until(executor, [&]() {return manager->acks.size() == 1;}));
+  manager->time_ns = 1150000000;
+  auto measured = model(); measured->header.stamp.nanosec = 150000000;
+  measured->detection_stamp.nanosec = 140000000; measured->input_stamp = measured->detection_stamp;
+  measured->confidence = 0.95F; manager->consume(measured);
+  ASSERT_EQ(manager->acks.size(), 2u);
+  manager->time_ns = 1305000000;
+  auto empty = std::make_shared<Message>(*measured); empty->input_stamp.nanosec = 300000000;
+  manager->consume(empty); ASSERT_EQ(manager->sent.size(), 2u);
+  EXPECT_EQ(manager->acks.size(), 2u);
+  EXPECT_EQ(manager->sent.back().header, measured->header);
+  consumed->publish(manager->sent.back().header);
+  ASSERT_TRUE(spin_until(executor, [&]() {return manager->acks.size() == 3;}));
+  EXPECT_EQ(manager->acks.back().stamp, empty->input_stamp);
+  EXPECT_NE(manager->acks.back().stamp, manager->sent.back().header.stamp);
 }
 
 TEST_F(ManagerNodeTest, RefreshForwardsNewEvidenceAtItsCarriedTrueTime)

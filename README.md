@@ -647,21 +647,35 @@ does not contain any assignment policy.
 last assigned enemy, and resumes idle selection immediately on clear. It uses
 the protocol's receipt-based 0.6 s assignment link deadline for a missing manager,
 rather than a detection-age hold. Idle points never fire. The manager runs in
-normal and sim launch paths with the same DDS profile as the other CV nodes. Lockstep
-benches acknowledge every consumed estimate with `state_ack_topic`, using
-`input_stamp` (or `detection_stamp` for fixtures without input provenance),
-retaining the input model's frame. Setting
+normal and sim launch paths with the same DDS profile as the other CV nodes.
+For a per-input lockstep gate, set
+`state_ack_topic:=/target_manager/frame_ack` (`std_msgs/msg/Header`). Every processed
+input gets exactly one ack, whether it sends nothing, assigns, updates, refreshes
+a held model or clears. The ack uses `input_stamp` (or `detection_stamp` for fixtures
+without input provenance), retaining the input model's frame. In particular, an
+empty frame that triggers a refresh gets its current input capture stamp in the
+ack while the outgoing TARGET_STATE retains the held model's true state stamp.
+Timer evaluations do not create input acks.
+
+The frame ack follows the manager's publish calls. With `consumer_ack_topic` set,
+it waits for one ordered consumer to acknowledge every state emitted through that
+input, including both sends on same-ID reassignment. Connect the consumer before
+inputs start. For coordinated UART, use
+`consumer_ack_topic:=/dji_serial_bridge/tx_ack/target_state`: the barrier counts
+decisions rather than comparing their model stamps. This establishes bridge queue
+handoff with `sim_tx_queue`; the coordinator then flushes and waits on
+[`sim_tx_flushed`](../ros2_dji_serial_bridge/README.md#simulation-capture-metadata).
+Waiting for that flush inside the input gate would be circular. A frame ack alone
+does not establish UART delivery.
+
+Setting
 `target_state_none_topic:=/target_manager/skip_ack` enables a `std_msgs/msg/Header`
 for every input frame that sends nothing, using that same driving capture stamp.
-Assignments, updates, refreshes and clears do not emit a skip; timer evaluations
-do not acknowledge input frames. The parameter defaults to empty: no skip publisher
-exists, and no acknowledgment header is constructed when fixture acknowledgments
-are unused on the robot. Suppression therefore does not deadlock the graph or
-count as a missing detection when a fixture enables the topic.
-When a fixture sets `consumer_ack_topic`, input acknowledgments wait until the
-consumer has acknowledged all states emitted before that input was processed.
-This requires one ordered consumer, connected before inputs start; it is off on
-the robot and does not establish UART delivery.
+Assignments, updates, refreshes and clears do not emit a skip. Use the all-input
+frame ack for detector pacing; a skip alone cannot acknowledge a held-model send.
+All acknowledgment parameters default to empty. With them disabled, there are no
+fixture publishers/subscribers, acknowledgment headers or consumer counters to
+maintain on the robot.
 
 Core/unit coverage exercises YOLO score propagation, decay and hysteresis
 boundaries, nonfinite data, confidence loss/clear, reassignment, track switches,

@@ -127,6 +127,7 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
     msg->input_stamp : msg->detection_stamp;
   if (skipped) {none_(h);}
   if (ack_) {
+    // One ack per input, after its sends; an ordered consumer may defer release.
     if (consumer_ack_sub_) {
       pending_acks_.emplace_back(emitted_, h);
       flush_acks();
@@ -166,7 +167,7 @@ void TargetManagerNode::emit(TargetEvent event, const rclcpp::Time & at)
     out.reset = false;
   }
   send_(out);
-  ++emitted_;
+  if (consumer_ack_sub_) {++emitted_;}
   if (observe_) {observe_(event, out);}
 }
 }  // namespace thornbots_pkg
