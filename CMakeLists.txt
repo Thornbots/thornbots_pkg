@@ -40,19 +40,27 @@ target_include_directories(armor_tracker PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(armor_tracker PUBLIC Eigen3::Eigen)
 
-add_executable(target_tracker src/target_tracker.cpp)
-target_link_libraries(target_tracker armor_tracker)
-ament_target_dependencies(target_tracker
+add_library(target_tracker_node STATIC src/target_tracker.cpp)
+target_link_libraries(target_tracker_node PUBLIC armor_tracker)
+ament_target_dependencies(target_tracker_node PUBLIC
   rclcpp dji_serial_bridge geometry_msgs std_msgs tf2 tf2_ros)
+add_executable(target_tracker src/target_tracker_main.cpp)
+target_link_libraries(target_tracker target_tracker_node)
 
 # Pure logic (no rclcpp), one small library per node, unit-tested standalone.
-foreach(core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames mmm_core match_wifi_guard_core)
+foreach(core target_manager_core target_selector_core mcb_relay_core point_to_cv_target_core aim_frames mmm_core match_wifi_guard_core)
   add_library(${core} STATIC src/${core}.cpp)
   target_compile_features(${core} PUBLIC cxx_std_17)
   target_include_directories(${core} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
   target_link_libraries(${core} PUBLIC Eigen3::Eigen)
 endforeach()
+
+add_library(target_manager_node STATIC src/target_manager.cpp)
+target_link_libraries(target_manager_node PUBLIC target_manager_core)
+ament_target_dependencies(target_manager_node PUBLIC rclcpp rosgraph_msgs dji_serial_bridge std_msgs)
+add_executable(target_manager src/target_manager_main.cpp)
+target_link_libraries(target_manager target_manager_node)
 
 add_library(point_to_cv_target_node STATIC src/point_to_cv_target_node.cpp)
 target_link_libraries(point_to_cv_target_node PUBLIC point_to_cv_target_core)
@@ -96,7 +104,7 @@ add_executable(odom_tf_broadcaster src/odom_tf_broadcaster.cpp)
 target_link_libraries(odom_tf_broadcaster aim_frames)
 ament_target_dependencies(odom_tf_broadcaster rclcpp geometry_msgs nav_msgs tf2_ros)
 
-install(TARGETS match_wifi_guard mmm target_tracker target_selector mcb_relay point_to_cv_target pose_translator
+install(TARGETS target_manager match_wifi_guard mmm target_tracker target_selector mcb_relay point_to_cv_target pose_translator
   lidar_self_filter odom_tf_broadcaster DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
@@ -108,6 +116,13 @@ install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME}
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_target_manager_core test/test_target_manager_core.cpp)
+  target_link_libraries(test_target_manager_core target_manager_core)
+  ament_add_gtest(test_target_manager_node test/test_target_manager_node.cpp)
+  target_link_libraries(test_target_manager_node target_manager_node)
+  ament_add_gtest(test_target_tracker_node test/test_target_tracker_node.cpp)
+  target_link_libraries(test_target_tracker_node target_tracker_node target_manager_node)
+  ament_target_dependencies(test_target_tracker_node rosgraph_msgs)
   ament_add_gtest(test_room_check_core test/test_room_check_core.cpp)
   target_compile_features(test_room_check_core PUBLIC cxx_std_17)
   target_include_directories(test_room_check_core PRIVATE include)

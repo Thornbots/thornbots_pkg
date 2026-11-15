@@ -50,7 +50,6 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
 {
   target_state_topic_ = declare_parameter("target_state_topic", std::string("/cv/target_state"));
   const auto output_topic = declare_parameter("output_topic", std::string("/cv/target"));
-  target_timeout_s_ = declare_parameter("target_timeout_s", 0.5);
   odom_frame_ = declare_parameter("odom_frame", std::string("odom"));
   const double publish_rate_hz = declare_parameter("cv_target_publish_rate_hz", 40.0);
   idle_direction_ = declare_parameter("idle_direction", std::string("zone"));
@@ -159,8 +158,8 @@ PointToCvTarget::PointToCvTarget(const rclcpp::NodeOptions & options)
   } else {
     start_timers(publish_rate_hz);
   }
-  RCLCPP_INFO(get_logger(), "point_to_cv_target ready: idle=%s, target timeout %.3fs",
-    idle_direction_.c_str(), target_timeout_s_);
+  RCLCPP_INFO(get_logger(), "point_to_cv_target ready: idle=%s, assignment link timeout %.3fs",
+    idle_direction_.c_str(), 0.6);
 }
 
 void PointToCvTarget::start_timers(double publish_rate_hz)
@@ -180,8 +179,21 @@ void PointToCvTarget::on_target_state(TargetState::ConstSharedPtr msg)
   if (!latest_state_ || msg->robot_track_id != latest_state_->robot_track_id) {
     RCLCPP_INFO(get_logger(), "target_state: tracking robot %u", msg->robot_track_id);
   }
-  latest_state_ = msg;
-  target_active_ = true;
+  if (msg->clear) {
+    latest_state_ = msg;
+    target_active_ = false;
+    last_assignment_receipt_.reset();
+    idle_.target_seen(seconds(now), idle_.last_enemy());
+  } else if (msg->valid) {
+    latest_state_ = msg;
+    target_active_ = true;
+    last_assignment_receipt_ = now;
+    idle_.target_seen(seconds(now), Vector3d(msg->center.x, msg->center.y, msg->center.z));
+  } else {
+    // Neither assigned nor clear: cannot replace the remembered assignment.
+    if (send_ack_) {send_ack_(msg->header);}
+    return;
+  }
   const double latency_s = seconds(now - rclcpp::Time(msg->header.stamp, now.get_clock_type()));
   if (latency_s >= 0.0) {
     latency_stat_.add(latency_s);
@@ -284,7 +296,7 @@ Vector3d PointToCvTarget::idle_point_now(const rclcpp::Time & now)
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
       "Idle zone waits for nav_odom->odom: %s", ex.what());
   }
-  const auto source = idle_.source(seconds(now), target_timeout_s_, idle_direction_ == "hold");
+  const auto source = idle_.source(seconds(now), 0.0, idle_direction_ == "hold");
   if (source == IdleLook::Source::Hit || source == IdleLook::Source::Hold) {
     idle_.reset();
     return {gun->first.x() + 3.0 * std::cos(gun->second),
@@ -302,13 +314,14 @@ void PointToCvTarget::check_timeout()
     return;
   }
   const rclcpp::Time now = clock_now();
-  const double age_s = seconds(
-    now - rclcpp::Time(latest_state_->detection_stamp, now.get_clock_type()));
-  if (age_s <= target_timeout_s_) {
+  const double age_s = seconds(now - *last_assignment_receipt_);
+  if (age_s >= 0.0 && age_s < 0.6) {
     return;
   }
 
   target_active_ = false;
+  last_assignment_receipt_.reset();
+  idle_.target_seen(seconds(now), idle_.last_enemy());
   RCLCPP_INFO(
     get_logger(), "Newest '%s' is %.2f s old - no target until the next one arrives.",
     target_state_topic_.c_str(), age_s);
@@ -322,9 +335,9 @@ void PointToCvTarget::on_publish_tick()
   if (target_active_) {
     // The MCB aims from the relayed state; remember where the enemy was.
     const auto & s = *latest_state_;
-    const auto & p = s.valid ? s.center : s.panel;
+    const auto & p = s.center;
     idle_.target_seen(
-      seconds(rclcpp::Time(s.detection_stamp, now.get_clock_type())), Vector3d(p.x, p.y, p.z));
+      seconds(now), Vector3d(p.x, p.y, p.z));
   } else {
     const Vector3d point = idle_point_now(now);
     CVTarget out;

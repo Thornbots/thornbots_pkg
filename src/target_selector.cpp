@@ -31,7 +31,6 @@
 #include "dji_serial_bridge/msg/ref_sys_status.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/header.hpp"
 #include "thornbots_pkg/target_selector_core.hpp"
 
 namespace thornbots_pkg
@@ -71,11 +70,6 @@ public:
     const int switch_hold_frames = static_cast<int>(declare_parameter("switch_hold_frames", 5));
     hysteresis_ = RobotHysteresis(switch_margin, switch_hold_frames);
 
-    // Lockstep: a Header with the frame's stamp when a frame yields no robot_panels.
-    const auto none_topic = declare_parameter("target_state_none_topic", std::string(""));
-    if (!none_topic.empty()) {
-      none_pub_ = create_publisher<std_msgs::msg::Header>(none_topic, 100);
-    }
     pub_ = create_publisher<PanelDetection>(panel_topic, 10);
     robot_panels_pub_ = create_publisher<PanelDetectionArray>(robot_panels_topic, 10);
     polygon_pub_ = create_publisher<PolygonStamped>(polygon_topic, 10);
@@ -121,8 +115,10 @@ private:
 
   void on_array(const PanelDetectionArray & msg)
   {
-    if (!select(msg) && none_pub_) {
-      none_pub_->publish(msg.header);
+    if (!select(msg)) {
+      PanelDetectionArray empty;
+      empty.header = msg.header;
+      robot_panels_pub_->publish(empty);
     }
   }
 
@@ -216,7 +212,6 @@ private:
   RobotHysteresis hysteresis_;
   std::optional<bool> is_blue_team_;  // nullopt until a RefSysStatus carries a robot ID
   rclcpp::Publisher<PanelDetection>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_;
   rclcpp::Publisher<PanelDetectionArray>::SharedPtr robot_panels_pub_;
   rclcpp::Publisher<PolygonStamped>::SharedPtr polygon_pub_;
   rclcpp::Subscription<PanelDetectionArray>::SharedPtr array_sub_;

@@ -478,13 +478,30 @@ def generate_launch_description():
             'pose_latency_s': ParameterValue(
                 LaunchConfiguration('pose_latency_s'), value_type=float),
             'robot_panels_topic': '/cv/robot_panels',
-            'output_topic': LaunchConfiguration('target_state_topic'),
+            'output_topic': '/cv/tracker/target_state',
+            'confidence_decay_tau_s': ParameterValue(
+                LaunchConfiguration('confidence_decay_tau_s'), value_type=float),
             'odom_frame': LaunchConfiguration('aim_frame'),
             'tf_max_wait_s': ParameterValue(
                 LaunchConfiguration('tf_max_wait_s'), value_type=float
             ),
         }],
         additional_env=udp_env,
+    )
+
+    target_manager_node = Node(
+        package='thornbots_pkg', executable='target_manager', name='target_manager',
+        output='screen', additional_env=udp_env,
+        condition=IfCondition(LaunchConfiguration('enable_target_manager')),
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'input_topic': '/cv/tracker/target_state',
+            'deterministic_epoch_zero': ParameterValue(
+                LaunchConfiguration('deterministic_epoch_zero'), value_type=bool),
+            'output_topic': LaunchConfiguration('target_state_topic'),
+            'confidence_decay_tau_s': ParameterValue(
+                LaunchConfiguration('confidence_decay_tau_s'), value_type=float),
+        }],
     )
 
     # Published as scan_raw, not scan -- lidar_self_filter_node below is the
@@ -713,12 +730,16 @@ def generate_launch_description():
         enable_waypoint_nav_arg, nav_route_arg,
         center_weight_arg, priority_class_bonus_arg, priority_class_ids_arg,
         enable_target_tracker_arg, target_state_topic_arg,
+        DeclareLaunchArgument('enable_target_manager', default_value='true'),
+        DeclareLaunchArgument('confidence_decay_tau_s', default_value='0.30',
+                              description='Shared tracker/manager capture-confidence decay.'),
         tf_max_wait_s_arg, pose_latency_s_arg,
         dji_serial_bridge_node, pose_translator_node, match_wifi_guard_node,
         GroupAction(condition=UnlessCondition(LaunchConfiguration('operator_inputs_only')),
                     actions=[
             mcb_relay_node, waypoint_nav_node, mmm_node,
-            target_selector_node, target_tracker_node, point_to_cv_target_node,
+            target_selector_node, target_tracker_node, target_manager_node,
+            point_to_cv_target_node,
             lidar_node, lidar_self_filter_node,
             odom_tf_broadcaster_node,
             robot_state_publisher_node,
