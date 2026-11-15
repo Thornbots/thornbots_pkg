@@ -259,6 +259,25 @@ TEST(AbsoluteRelocalizer, StartupNeedsStableFreshSamplesAndRetriesAtZeroOffset)
   EXPECT_TRUE(rel.decide(1.5, 0, 0, .04, 1.5));
 }
 
+TEST(AbsoluteRelocalizer, AckStopsRetriesButNotRefresh)
+{
+  Relocalizer rel(absolute_params());
+  rel.set_start(0, 0);
+  rel.acknowledge(1.0);
+  rel.add_odom(1, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1, 0, 0, .04, 1));
+  rel.add_odom(1.11, 0, 0, 0, 0);
+  ASSERT_TRUE(rel.decide(1.11, 0, 0, .04, 1.11));
+  rel.acknowledge(1.0);
+  rel.add_odom(1.5, 0, 0, 0, 0);
+  ASSERT_TRUE(rel.decide(1.5, 0, 0, .04, 1.5));
+  rel.acknowledge(1.6);
+  rel.add_odom(1.9, 0, 0, 0, 0);
+  EXPECT_FALSE(rel.decide(1.9, 0, 0, .04, 1.9));
+  rel.add_odom(2.51, 0, 0, 0, 0);
+  EXPECT_TRUE(rel.decide(2.51, 0, 0, .04, 2.51));
+}
+
 TEST(AbsoluteRelocalizer, RotationAppliesToPredictionAndFirmwareHoldsOnlyTranslation)
 {
   auto p = absolute_params(); p.startup_span_s = 0;

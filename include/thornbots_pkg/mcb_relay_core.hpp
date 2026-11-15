@@ -83,6 +83,9 @@ public:
     double loc_t, double loc_x, double loc_y, double loc_var_xy, double now,
     double map_yaw = 0.0, double yaw_var = 0.0);
 
+  // Ignore acknowledgements that predate the latest send.
+  void acknowledge(double t) {if (last_sent_t_ && t > *last_sent_t_) {resends_left_ = 0;}}
+
   // Nominal held firmware position after estimated application; absent before startup.
   std::optional<std::pair<double, double>> navigation_at(double t) const;
 
