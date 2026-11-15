@@ -122,6 +122,12 @@ before publishing `snapshot/` or requesting shutdown. Incomplete saves
 are recovery material; registration and deployment remain manual steps. A failed
 Ready save sends 4 and waits for its exchange before announcing 2 again at start.
 
+A controller-started MMM outside `localization_mode:=mapping` (a normal amcl boot) is refused: the
+Jetson sends 6 and the MCB goes Setup→Done. On sentry, Done disables drive and stops the indexer
+(`MappingMachine::canDrive`, `SingleIndexerSubsystem::finishRefresh`). Nothing returns it to Main, and the
+Jetson will not send 4, so only an MCB power-cycle recovers. This is intended; use `operator_workflow`
+for mapping sessions.
+
 Host shutdown is disabled by default. `mmm_shutdown_after_save:=true` writes
 `MMM_READY_SAVE_COMPLETE` followed by a newline to
 `mmm_shutdown_request_file` only after a successful guarded Ready save.
