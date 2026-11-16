@@ -778,8 +778,8 @@ odometry time, labelled in the selected navigation frame, and has child
 `waypoint_nav` uses it so arrival follows correction gating and step limits.
 PING 7 confirms an applied fix, but has no sequence field: a late acknowledgement
 can stop retries for a newer fix. A dropped fix can temporarily separate this
-estimate from firmware; fresh retries and periodic refreshes restore agreement. Sim scores firmware's
-actual held position through its private hosted readout, including dropped frames.
+estimate from firmware; fresh retries and periodic refreshes restore agreement.
+Sim scores firmware's actual held position through its private hosted readout, including dropped frames.
 See the workspace's [dated measurements](../docs/investigations/absolute-relocalize-2026-11-11.md)
 for before/after truth errors and the proposed thresholds' limits.
 
