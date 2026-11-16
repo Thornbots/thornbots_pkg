@@ -24,6 +24,7 @@
 
 #include "dji_serial_bridge/msg/cv_target.hpp"
 #include "dji_serial_bridge/msg/ref_sys_status.hpp"
+#include "dji_serial_bridge/msg/ping.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -99,6 +100,11 @@ public:
             msg->is_on_blue_team ? blue_y : red_y);
           start_selected_ = true;
         }
+      });
+    ping_sub_ = create_subscription<dji_serial_bridge::msg::Ping>(
+      "/dji_serial_bridge/ping_from_mcb", 10,
+      [this](dji_serial_bridge::msg::Ping::ConstSharedPtr msg) {
+        if (msg->number == 7) {relocalizer_.acknowledge(stamp_s(msg->header.stamp));}
       });
     navigation_pub_ = create_publisher<Odometry>("/mcb/navigation_odom", 10);
     // Lockstep simulation only: decide on the localization sample's own stamp, not this
@@ -217,6 +223,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr none_pub_, odom_ack_pub_;
   bool message_clock_ = false, start_selected_ = false;
   rclcpp::Subscription<dji_serial_bridge::msg::RefSysStatus>::SharedPtr referee_sub_;
+  rclcpp::Subscription<dji_serial_bridge::msg::Ping>::SharedPtr ping_sub_;
   rclcpp::Subscription<Odometry>::SharedPtr raw_odom_sub_, localization_odom_sub_;
   rclcpp::Publisher<CVTarget>::SharedPtr cv_target_pub_;
   rclcpp::Subscription<CVTarget>::SharedPtr cv_target_sub_;

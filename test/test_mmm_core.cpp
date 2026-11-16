@@ -48,6 +48,15 @@ protected:
   }
 };
 
+TEST_F(ProtocolTest, IgnoresRelocalizeAcknowledgement)
+{
+  ASSERT_TRUE(protocol.request(2, 1.0));
+  const auto before = events.size();
+  protocol.receive(7, 1.1);
+  EXPECT_EQ(events.size(), before);
+  EXPECT_EQ(protocol.pending(), 2);
+}
+
 TEST_F(ProtocolTest, MatchingEvenEchoCompletesOnlyPendingTransaction)
 {
   for (int number : {2, 4, 6}) {
