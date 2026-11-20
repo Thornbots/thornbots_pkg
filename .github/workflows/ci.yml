@@ -23,4 +23,4 @@ jobs:
     uses: Thornbots/thornbots_workspace/.github/workflows/ros.yml@83a0e84847a50bcfac59d95719df9aa0037be8cd
     with:
       package-repo: thornbots_pkg
-      workspace-ref: 83a0e84847a50bcfac59d95719df9aa0037be8cd
+      workspace-ref: 43993ac7fbc9bd4b035c9a39861bcd81922a67f1
