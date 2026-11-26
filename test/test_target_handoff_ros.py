@@ -49,8 +49,8 @@ def test_manager_relay_bridge_clear():
             processes.append(subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                                               start_new_session=True))
 
-        def wait(predicate):
-            deadline = time.monotonic() + 8.0
+        def poll(predicate, seconds):
+            deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
                 rclpy.spin_once(node, timeout_sec=0.005)
                 try:
@@ -58,9 +58,14 @@ def test_manager_relay_bridge_clear():
                 except BlockingIOError:
                     pass
                 if predicate():
-                    return
+                    return True
                 if any(p.poll() is not None for p in processes):
                     break
+            return False
+
+        def wait(predicate):
+            if poll(predicate, 8.0):
+                return
             log.seek(0)
             raise AssertionError(log.read() + f'\nPTY bytes={data.hex()}')
 
@@ -84,28 +89,53 @@ def test_manager_relay_bridge_clear():
             start('thornbots_pkg', 'target_manager')
             wait(lambda: source.get_subscription_count() == 1 and
                  node.count_publishers('/cv/target_state') == 1 and
+                 node.count_subscribers('/cv/target_state') == 2 and
                  node.count_publishers('/dji_serial_bridge/target_state') == 1 and
                  node.count_subscribers('/dji_serial_bridge/target_state') == 2)
-            ready = time.monotonic() + 0.2
-            wait(lambda: time.monotonic() >= ready)
-            model = TargetState()
-            model.header.stamp = node.get_clock().now().to_msg()
-            model.detection_stamp = model.header.stamp
-            model.header.frame_id = 'odom'
-            model.confidence = 0.9
-            model.radius = [0.2, 0.3]
-            model.valid = True
-            model.robot_track_id = 76
+
+            def model_state():
+                model = TargetState()
+                model.header.stamp = node.get_clock().now().to_msg()
+                model.detection_stamp = model.header.stamp
+                model.header.frame_id = 'odom'
+                model.confidence = 0.9
+                model.radius = [0.2, 0.3]
+                model.valid = True
+                model.robot_track_id = 76
+                return model
+
+            def retire():
+                status = TargetState()
+                status.header.stamp = node.get_clock().now().to_msg()
+                status.header.frame_id = 'odom'
+                status.selected_track = False
+                return status
+
+            # Graph counts do not prove each hop's reader matched its writer, and the
+            # manager's reliable send is not replayed. Cycle a throwaway model through
+            # manager, relay and bridge until it lands, then retire and discard it; the
+            # checked cycle then cannot lose its model to discovery lag.
+            def delivered():
+                return (any(m.valid for m in relayed) and
+                        any(f[79] == 0x03 for f in state_frames()))
+
+            for _ in range(30):
+                source.publish(model_state())
+                if poll(delivered, 0.3):
+                    break
+            wait(delivered)
+            source.publish(retire())  # a no-op if decay already released the model
+            wait(lambda: relayed[-1].clear and state_frames()[-1][79] == 0x06)
+            managed.clear()
+            relayed.clear()
+            data.clear()
+            model = model_state()
             source.publish(model)
             wait(lambda: bool(managed) and bool(relayed) and bool(state_frames()))
             assert relayed[0].header == model.header
             assert relayed[0].detection_stamp == model.detection_stamp
             assert state_frames()[0][79] == 0x03
-            status = TargetState()
-            status.header.stamp = node.get_clock().now().to_msg()
-            status.header.frame_id = 'odom'
-            status.selected_track = False
-            source.publish(status)
+            source.publish(retire())
             wait(lambda: any(m.clear for m in relayed) and len(state_frames()) >= 2)
             clear = next(m for m in relayed if m.clear)
             assert clear.header == next(m for m in managed if m.clear).header
