@@ -65,7 +65,7 @@ struct EkfParams
 {
   double radius = 0.27;
   double q_accel = 2.0;
-  double q_yaw_accel = 5.0;
+  double q_yaw_accel = 10.0;  // follows a 20 rad/s^2 spin-up; see README.md
   double q_radius = 0.02;
   double radius_prior_std = 0.05;
   double r_min = 0.18;

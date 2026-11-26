@@ -87,7 +87,8 @@ public:
     params_.ekf.accel_tau_s = declare_parameter("accel_time_constant_s", 1.0);
     // A panel seen alone faces the camera within about this (rad).
     single_panel_yaw_std_ = declare_parameter("single_panel_yaw_std", 0.3);
-    params_.ekf.q_yaw_accel = declare_parameter("process_noise_yaw_accel", 5.0);  // rad/s^2
+    params_.ekf.q_yaw_accel = declare_parameter(
+      "process_noise_yaw_accel", params_.ekf.q_yaw_accel);  // rad/s^2
     params_.ekf.q_radius = declare_parameter("process_noise_radius", 0.02);  // m/sqrt(s)
     params_.ekf.radius_prior_std = declare_parameter("radius_prior_std", 0.05);  // m
     log_innovations_ = declare_parameter("log_innovations", false);

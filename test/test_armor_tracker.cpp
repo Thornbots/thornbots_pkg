@@ -606,3 +606,40 @@ TEST(ArmorTracker, FacingUpdateConstrainsBothCorrelatedRadii)
   EXPECT_GE(ekf.other_r(), ekf.p.r_min);
   EXPECT_LE(ekf.other_r(), ekf.p.r_max);
 }
+
+TEST(ArmorTracker, BankFollowsAMatchSpinUp)
+{
+  // The sim match ghosts: still, then 20 rad/s^2 up to 3*pi rad/s. Half a
+  // second after the ramp ends the default spin noise has halved the 5 rad/s^2
+  // filter's lag.
+  const double omega = 3.0 * M_PI, accel = 20.0, start = 1.0, ramp = omega / accel;
+  auto lag = [&](double q_yaw_accel) {
+      double error = 0.0;
+      for (unsigned seed = 0; seed < 8; ++seed) {
+        tp::TrackerParams p{ekf_params()};
+        p.ekf.q_yaw_accel = q_yaw_accel;
+        std::mt19937 rng(seed);
+        std::optional<tp::ArmorTracker> tracker;
+        const Vector3d centre(3.0, 0.0, 0.3);
+        for (int i = 0; i < static_cast<int>((start + ramp + 0.5) / DT); ++i) {
+          const double t = i * DT, ts = std::max(0.0, t - start);
+          const double yaw = 0.3 + seed * 0.37 +
+            (ts < ramp ? accel * ts * ts / 2.0 : omega * (ts - ramp / 2.0));
+          const auto seen = seen_panel(centre, yaw);
+          if (!seen) {
+            continue;
+          }
+          const Vector3d meas = *seen + noise(rng, NOISE_M);
+          if (!tracker) {
+            tracker.emplace(meas, CAMERA, t, iso(0.05 * 0.05), p);
+          } else {
+            tracker->step(meas, CAMERA, t, iso(0.05 * 0.05));
+          }
+        }
+        error += std::abs(tracker->state()[W] - omega) / 8.0;
+      }
+      return error;
+    };
+  const double before = lag(5.0), now = lag(tp::EkfParams{}.q_yaw_accel);
+  EXPECT_LT(now, 0.6 * before) << before << " -> " << now;
+}

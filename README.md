@@ -512,10 +512,14 @@ spin for seconds. `PanelDetection.corners` stay unused:
 Noise: `R`'s stddev along the camera ray is
 `meas_noise_base_m + meas_noise_range_coeff * range_m^2` (depth error grows
 with z^2); across it, `meas_noise_lateral_m` (0.04). `process_noise_accel` (2.0 m/s^2) drives the
-centre, `process_noise_yaw_accel` (5.0 rad/s^2) the spin rate,
+centre, `process_noise_yaw_accel` (10.0 rad/s^2) the spin rate,
 `process_noise_radius` (0.02) the radius, which clamps to 0.18-0.45m. These
-came from a sweep against an emulator-shaped target; the higher yaw
-noise let a jinking target's translation leak into `w`.
+came from a sweep against an emulator-shaped target; higher yaw noise lets a
+jinking target's translation leak into `w`. The yaw noise was 5.0 until the
+`mcb_match` ghosts' 20 rad/s^2 spin-up: half a second after the ramp, 5.0 was
+still about 9 rad/s short, so the sentry shot during drive at a target it
+believed still. 10.0 halves that lag and keeps every estimation limit that 5.0
+meets; 15.0 broke the steady-state `yaw_rate_rad_s` limits.
 
 `radius_prior_std` controls the initial radius uncertainty around
 `panel_radius_m`, including bank reseeds. Position reacquisition that keeps
