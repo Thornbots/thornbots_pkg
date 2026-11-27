@@ -239,13 +239,19 @@ std::pair<int, double> ArmorEKF::associate(
 
 StepResult ArmorEKF::step(
   const Vector3d & panel_pos, const Vector3d & camera_pos, double t, const Matrix3d & pos_var,
-  double gate_nis, int max_outliers, double facing_std)
+  double gate_nis, int max_outliers, double facing_std,
+  const std::optional<YawMeasurement> & normal)
 {
+  last_normal = NormalResult::None;
+  last_yaw_nis = last_yaw_logvar = 0.0;
   predict(t);
   last_association = associate(panel_pos, camera_pos).first;
   last_residual = panel_pos - panel_positions(state, other_r())[0].pos;
   std::tie(last_nis, last_logdet) = innovation(panel_pos, pos_var);
   if (last_nis > gate_nis) {
+    if (normal) {
+      yaw_innovation(*normal);  // scored, not applied, so every filter's score has the term
+    }
     if (++n_outliers < max_outliers) {
       return StepResult::Outlier;
     }
@@ -254,10 +260,44 @@ StepResult ArmorEKF::step(
   }
   n_outliers = 0;
   update(panel_pos, pos_var);
+  if (normal) {
+    const bool ok = update_yaw(*normal);
+    last_normal = ok ? NormalResult::Accepted : NormalResult::Rejected;
+    n_normal_rejected += !ok;
+    if (ok) {
+      return StepResult::Update;
+    }
+  }
   if (facing_std > 0.0) {
     update_facing(camera_pos, facing_std);
   }
   return StepResult::Update;
+}
+
+double ArmorEKF::yaw_innovation(const YawMeasurement & m)
+{
+  const double y = std::atan2(std::sin(m.yaw - state[YAW]), std::cos(m.yaw - state[YAW]));
+  const double S = P(YAW, YAW) + m.std * m.std;
+  last_yaw_nis = y * y / S;
+  last_yaw_logvar = std::log(S);
+  return y;
+}
+
+bool ArmorEKF::update_yaw(const YawMeasurement & m)
+{
+  const double y = yaw_innovation(m);
+  const double S = P(YAW, YAW) + m.std * m.std;
+  if (last_yaw_nis > m.gate_nis) {
+    return false;  // e.g. IPPE's mirrored solution: twice the view angle off
+  }
+  const State K = P.col(YAW) / S;
+  state += K * y;
+  P -= K * P.row(YAW);
+  P = (0.5 * (P + P.transpose())).eval();
+  state[R] = std::clamp(state[R], p.r_min, p.r_max);
+  state[OTHER_R] = std::clamp(state[OTHER_R], p.r_min, p.r_max);
+  state[DZ] = std::clamp(state[DZ], -DZ_MAX, DZ_MAX);
+  return true;
 }
 
 void ArmorEKF::update_facing(const Vector3d & camera_pos, double std)
@@ -349,7 +389,8 @@ ArmorTracker::ArmorTracker(
 
 StepResult ArmorTracker::step(
   const Vector3d & panel_pos, const Vector3d & camera_pos, double t_sec,
-  const Matrix3d & pos_var, double gate_nis, int max_outliers, double facing_std)
+  const Matrix3d & pos_var, double gate_nis, int max_outliers, double facing_std,
+  const std::optional<YawMeasurement> & normal)
 {
   const size_t n = filters.size();
   std::vector<StepResult> statuses(n);
@@ -361,8 +402,12 @@ StepResult ArmorTracker::step(
   for (size_t i = 0; i < n; ++i) {
     auto & f = filters[i];
     statuses[i] = f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers,
-        facing_std);
+        facing_std, normal);
     nlls[i] = std::min(f.last_nis, gate_nis) + f.last_logdet;  // clamped: one wild sample
+    if (normal) {
+      // Joint likelihood: the normal's yaw term, clamped at its gate likewise.
+      nlls[i] += std::min(f.last_yaw_nis, normal->gate_nis) + f.last_yaw_logvar;
+    }
     scores[i] = first ? nlls[i] : scores[i] + p.alpha * (nlls[i] - scores[i]);
   }
   std::vector<size_t> moving, all;
