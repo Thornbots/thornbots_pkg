@@ -54,11 +54,13 @@ protected:
   virtual void configure_tracker(rclcpp::NodeOptions &) {}
   void SetUp() override
   {
-    peer = std::make_shared<rclcpp::Node>("tracker_test_peer");
     rclcpp::NodeOptions options;
     options.append_parameter_override("use_sim_time", true);
     options.append_parameter_override("pose_latency_s", 0.0);
     configure_tracker(options);
+    rclcpp::NodeOptions peer_options;
+    peer_options.use_intra_process_comms(options.use_intra_process_comms());
+    peer = std::make_shared<rclcpp::Node>("tracker_test_peer", peer_options);
     tracker = thornbots_pkg::make_target_tracker(options);
     rclcpp::NodeOptions manager_options;
     manager_options.append_parameter_override("use_sim_time", true);
@@ -117,6 +119,37 @@ class ReacquireTrackerRosTest : public TrackerRosTest
     options.append_parameter_override("max_outliers", 1);
   }
 };
+class MissingTransformTrackerRosTest : public TrackerRosTest
+{
+protected:
+  void configure_tracker(rclcpp::NodeOptions & options) override
+  {
+    options.use_intra_process_comms(true);
+    options.append_parameter_override("target_state_none_topic", "/tracker_test/no_state");
+    options.append_parameter_override("tf_max_wait_s", 0.25);
+  }
+
+  void SetUp() override
+  {
+    TrackerRosTest::SetUp();
+    no_state_sub = peer->create_subscription<std_msgs::msg::Header>(
+      "/tracker_test/no_state", 100,
+      [this](std_msgs::msg::Header::ConstSharedPtr header) {no_state.push_back(*header);});
+  }
+
+  void send_without_transform(int64_t capture_ns)
+  {
+    set_time(capture_ns);
+    auto p = capture(capture_ns, 1.0F);
+    p.header.frame_id = "missing_camera";
+    panels->publish(p);
+    executor.spin_some();
+    set_time(capture_ns + 260000000LL);
+  }
+
+  rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr no_state_sub;
+  std::vector<std_msgs::msg::Header> no_state;
+};
 }  // namespace
 
 TEST_F(TrackerRosTest, FirstCaptureAssignsWithoutConvergenceAndKeepsTrueStamps)
@@ -146,17 +179,76 @@ TEST_F(TrackerRosTest, AcceptedPanelMaximumDecaysFromCaptureAndOutlierCannotRefr
 
 TEST_F(TrackerRosTest, EmptyInputPreservesEvidenceThenRetiresWithExplicitStatus)
 {
-  auto p = capture(); send(p);
-  ASSERT_TRUE(spin_until([this]() {return !managed.empty();}));
+  auto empty = capture();
+  empty.detections.clear();
+  send(empty);
+  EXPECT_FALSE(raw.back().selected_track);
+  EXPECT_FALSE(raw.back().valid);
+  EXPECT_EQ(raw.back().update_count, 0u);
+
+  send(capture());
+  ASSERT_TRUE(raw.back().valid);
   const auto original = raw.back();
-  set_time(10050000000LL); p.header.stamp = rclcpp::Time(10050000000LL, RCL_ROS_TIME);
-  p.detections.clear(); send(p);
-  EXPECT_TRUE(raw.back().selected_track); EXPECT_FALSE(raw.back().reset);
+
+  set_time(10050000000LL);
+  empty.header.stamp = tracker->now();
+  send(empty);
+  EXPECT_TRUE(raw.back().selected_track);
+  EXPECT_FALSE(raw.back().reset);
   EXPECT_EQ(raw.back().header, original.header);
   EXPECT_EQ(raw.back().detection_stamp, original.detection_stamp);
-  EXPECT_EQ(raw.back().input_stamp, p.header.stamp);
-  set_time(10600000000LL); send(p);
-  EXPECT_FALSE(raw.back().selected_track); EXPECT_TRUE(raw.back().reset);
+  EXPECT_EQ(raw.back().update_count, original.update_count);
+  EXPECT_EQ(raw.back().input_stamp, empty.header.stamp);
+
+  set_time(10525000000LL);
+  empty.header.stamp = tracker->now();
+  send(empty);
+  EXPECT_FALSE(raw.back().selected_track);
+  EXPECT_FALSE(raw.back().valid);
+  EXPECT_TRUE(raw.back().reset);
+}
+
+TEST_F(MissingTransformTrackerRosTest, MissingTransformCannotSeedOrRefreshEvidence)
+{
+  send_without_transform(10000000000LL);
+  ASSERT_TRUE(spin_until([this]() {return raw.size() == 1;}));
+  EXPECT_FALSE(raw.back().valid);
+  EXPECT_EQ(raw.back().update_count, 0u);
+
+  constexpr int64_t valid_capture = 10300000000LL;
+  set_time(valid_capture);
+  send(capture(valid_capture));
+  ASSERT_TRUE(raw.back().valid);
+  const auto original = raw.back();
+  const auto model_count = raw.size();
+
+  constexpr int64_t dropped_capture = 10350000000LL;
+  send_without_transform(dropped_capture);
+  ASSERT_TRUE(spin_until([this]() {return !no_state.empty();}));
+  EXPECT_EQ(rclcpp::Time(no_state.back().stamp).nanoseconds(), dropped_capture);
+  EXPECT_EQ(raw.size(), model_count);
+
+  auto empty = capture(tracker->now().nanoseconds());
+  empty.detections.clear();
+  send(empty);
+  EXPECT_TRUE(raw.back().selected_track);
+  EXPECT_EQ(raw.back().header, original.header);
+  EXPECT_EQ(raw.back().detection_stamp, original.detection_stamp);
+  EXPECT_EQ(raw.back().update_count, original.update_count);
+
+  // This capture is past the original timeout, but within it of the dropped capture.
+  constexpr int64_t expired_capture = 10825000000LL;
+  const auto held_count = raw.size();
+  send_without_transform(expired_capture);
+  ASSERT_TRUE(spin_until([this, held_count]() {return raw.size() > held_count;}));
+  EXPECT_FALSE(raw.back().valid);
+  EXPECT_TRUE(raw.back().reset);
+  EXPECT_EQ(raw.back().update_count, 0u);
+
+  empty.header.stamp = tracker->now();
+  send(empty);
+  EXPECT_FALSE(raw.back().selected_track);
+  EXPECT_FALSE(raw.back().valid);
 }
 
 TEST_F(TrackerRosTest, IdentityAndBackwardCaptureResetTheConfidenceAnchor)
