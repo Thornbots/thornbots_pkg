@@ -555,9 +555,8 @@ the line of sight, landing twice the view angle off, so a flipped plate seen
 obliquely is skipped (and the facing update used if the panel was alone);
 near head-on the two solutions agree anyway. The node logs accepted and
 rejected counts every 5 s. Without `has_normal` behaviour is unchanged.
-The yaw term (NIS clamped at its gate, plus log S) is added to every bank
-filter's per-sample score, gated filters included, so the bank ranks spin
-hypotheses on the joint likelihood. The first detection of a track seeds
+The bank still ranks spin hypotheses on position alone; a normal only
+updates the filters that accept it. The first detection of a track seeds
 from the facing assumption; its normal is not used.
 
 Innovation gating: a normalised innovation over `gate_nis` (16.3, 99.9% for 3

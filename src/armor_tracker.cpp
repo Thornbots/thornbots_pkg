@@ -249,9 +249,6 @@ StepResult ArmorEKF::step(
   last_residual = panel_pos - panel_positions(state, other_r())[0].pos;
   std::tie(last_nis, last_logdet) = innovation(panel_pos, pos_var);
   if (last_nis > gate_nis) {
-    if (normal) {
-      yaw_innovation(*normal);  // scored, not applied, so every filter's score has the term
-    }
     if (++n_outliers < max_outliers) {
       return StepResult::Outlier;
     }
@@ -404,10 +401,6 @@ StepResult ArmorTracker::step(
     statuses[i] = f.step(panel_pos, camera_pos, t_sec, pos_var, gate_nis, max_outliers,
         facing_std, normal);
     nlls[i] = std::min(f.last_nis, gate_nis) + f.last_logdet;  // clamped: one wild sample
-    if (normal) {
-      // Joint likelihood: the normal's yaw term, clamped at its gate likewise.
-      nlls[i] += std::min(f.last_yaw_nis, normal->gate_nis) + f.last_yaw_logvar;
-    }
     scores[i] = first ? nlls[i] : scores[i] + p.alpha * (nlls[i] - scores[i]);
   }
   std::vector<size_t> moving, all;
