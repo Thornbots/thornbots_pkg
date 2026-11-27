@@ -16,8 +16,8 @@
 // w, r, dz, other_r]: chassis centre, velocity and acceleration in odom, the tracked
 // panel's outward-normal yaw, spin rate, that panel's radius and its pair's
 // height above the centre (the other pair at -dz). Measurement is one panel:
-// h = pos + r (cos yaw, sin yaw, 0) + (0, 0, dz). See README.md's
-// ### target_tracker.
+// h = pos + r (cos yaw, sin yaw, 0) + (0, 0, dz), optionally with that
+// panel's measured normal yaw. See README.md's ### target_tracker.
 
 #ifndef THORNBOTS_PKG__ARMOR_TRACKER_HPP_
 #define THORNBOTS_PKG__ARMOR_TRACKER_HPP_
@@ -84,6 +84,16 @@ struct EkfParams
 
 enum class StepResult { Update, Outlier, Reacquire };
 
+// A panel's measured outward-normal yaw in odom (rad), its std and chi-square(1) gate.
+struct YawMeasurement
+{
+  double yaw;
+  double std;
+  double gate_nis = 10.83;
+};
+
+enum class NormalResult { None, Accepted, Rejected };
+
 class ArmorEKF
 {
 public:
@@ -101,12 +111,18 @@ public:
   void predict(double t_sec);
   // Re-label onto the nearest front-facing panel; returns (k, distance), k -1 if none.
   std::pair<int, double> associate(const Vector3d & panel_pos, const Vector3d & camera_pos);
-  // facing_std > 0: the panel was seen alone (update_facing).
+  // facing_std > 0: the panel was seen alone (update_facing). A normal, once
+  // the position update is accepted, replaces the facing update; a gated-out
+  // normal falls back to it.
   StepResult step(
     const Vector3d & panel_pos, const Vector3d & camera_pos, double t_sec,
     const Matrix3d & pos_var, double gate_nis = 16.3, int max_outliers = 3,
-    double facing_std = 0.0);
+    double facing_std = 0.0, const std::optional<YawMeasurement> & normal = std::nullopt);
   void update_facing(const Vector3d & camera_pos, double std);
+  // Measured yaw of the associated panel; false (state untouched) past the gate.
+  bool update_yaw(const YawMeasurement & m);
+  // Sets last_yaw_nis/last_yaw_logvar against the current state; returns the wrapped residual.
+  double yaw_innovation(const YawMeasurement & m);
   void update(const Vector3d & panel_pos, const Matrix3d & pos_var);
   double nis(const Vector3d & panel_pos, const Matrix3d & pos_var) const;
 
@@ -120,6 +136,9 @@ public:
   double last_logdet = 0.0;  // log det of the last innovation covariance
   Vector3d last_residual = Vector3d::Zero();  // before measurement/facing updates
   int last_association = -1;
+  NormalResult last_normal = NormalResult::None;
+  double last_yaw_nis = 0.0, last_yaw_logvar = 0.0;  // last step's normal, 0 if none
+  int n_normal_rejected = 0;
 
 private:
   std::pair<Cov, Cov> transition(double dt) const;
@@ -154,7 +173,7 @@ public:
   StepResult step(
     const Vector3d & panel_pos, const Vector3d & camera_pos, double t_sec,
     const Matrix3d & pos_var, double gate_nis = 16.3, int max_outliers = 3,
-    double facing_std = 0.0);
+    double facing_std = 0.0, const std::optional<YawMeasurement> & normal = std::nullopt);
 
   const ArmorEKF & best() const {return filters[lead];}
   const State & state() const {return best().state;}

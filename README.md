@@ -507,7 +507,8 @@ A cut at exactly 90 degrees
 mis-assigned edge-on panels whenever the camera moved 10cm and held a wrong
 spin for seconds. `PanelDetection.corners` stay unused:
 `roi_depth_node.cpp`'s `deprojectDetection()` puts all four at one
-`mean_depth_m`, so real corners carry no panel tilt.
+`mean_depth_m`, so real corners carry no panel tilt. Plate orientation
+arrives instead as `normal`/`has_normal` (below).
 
 Noise: `R`'s stddev along the camera ray is
 `meas_noise_base_m + meas_noise_range_coeff * range_m^2` (depth error grows
@@ -540,6 +541,23 @@ one panel also measures the tracked panel's yaw as the bearing to the camera,
 unobservable and random-walked a quarter turn in 30 s, and since
 the MCB rebuilds the facing panel from centre, yaw and radius, it
 aimed up to 0.4 m off a target that never moved.
+
+A detection with `has_normal` (`use_measured_normal`, on by default) also
+measures its associated panel's yaw directly: the camera-frame normal is
+rotated by the same TF as the position and its horizontal part's `atan2`
+updates `yaw` (residual wrapped to +-pi) with std
+`max(normal_yaw_std, normal_yaw_std_floor)` (floor 0.05 rad). Normals within
+~17 degrees of vertical are skipped. It replaces the facing update for that
+panel, and runs on multi-panel frames too, so spin comes from each panel's
+own yaw rate as well as its sweep. The yaw NIS is gated at `normal_gate_nis`
+(10.83, chi-square(1) 99.9%): IPPE's mirrored pose reflects the normal about
+the line of sight, landing twice the view angle off, so a flipped plate seen
+obliquely is skipped (and the facing update used if the panel was alone);
+near head-on the two solutions agree anyway. The node logs accepted and
+rejected counts every 5 s. Without `has_normal` behaviour is unchanged.
+The bank still ranks spin hypotheses on position alone; a normal only
+updates the filters that accept it. The first detection of a track seeds
+from the facing assumption; its normal is not used.
 
 Innovation gating: a normalised innovation over `gate_nis` (16.3, 99.9% for 3
 dof) is skipped, and `max_outliers` (3) in a row re-seed centre, velocity and

@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <memory>
 #include <numeric>
@@ -31,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "dji_serial_bridge/msg/panel_detection.hpp"
 #include "dji_serial_bridge/msg/panel_detection_array.hpp"
 #include "dji_serial_bridge/msg/target_state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -87,6 +89,11 @@ public:
     params_.ekf.accel_tau_s = declare_parameter("accel_time_constant_s", 1.0);
     // A panel seen alone faces the camera within about this (rad).
     single_panel_yaw_std_ = declare_parameter("single_panel_yaw_std", 0.3);
+    // Fold in PanelDetection.normal's yaw when has_normal (else the facing update);
+    // std = max(normal_yaw_std, floor), chi-square(1) gate against a flipped pose.
+    use_measured_normal_ = declare_parameter("use_measured_normal", true);
+    normal_yaw_std_floor_ = declare_parameter("normal_yaw_std_floor", 0.05);  // rad
+    normal_gate_nis_ = declare_parameter("normal_gate_nis", 10.83);  // 99.9%
     params_.ekf.q_yaw_accel = declare_parameter("process_noise_yaw_accel", 5.0);  // rad/s^2
     params_.ekf.q_radius = declare_parameter("process_noise_radius", 0.02);  // m/sqrt(s)
     params_.ekf.radius_prior_std = declare_parameter("radius_prior_std", 0.05);  // m
@@ -295,6 +302,12 @@ private:
 
   void log_tf_waits()
   {
+    if (normals_accepted_ + normals_rejected_ > 0) {
+      RCLCPP_INFO(
+        get_logger(), "measured normals: %d accepted, %d rejected by normal_gate_nis",
+        normals_accepted_, normals_rejected_);
+      normals_accepted_ = normals_rejected_ = 0;
+    }
     if (tf_waits_.empty() && tf_drops_ == 0) {
       return;
     }
@@ -311,6 +324,21 @@ private:
     tf_waits_.clear();
     lags_.clear();
     tf_drops_ = 0;
+  }
+
+  // The panel normal's yaw in odom; none when unusable or near vertical.
+  std::optional<YawMeasurement> measured_normal(
+    const dji_serial_bridge::msg::PanelDetection & det, const Eigen::Matrix3d & rot) const
+  {
+    if (!use_measured_normal_ || !det.has_normal || !std::isfinite(det.normal_yaw_std)) {
+      return std::nullopt;
+    }
+    const Vector3d n = rot * Vector3d(det.normal.x, det.normal.y, det.normal.z);
+    if (!n.allFinite() || n.head<2>().norm() < 0.3 * n.norm()) {
+      return std::nullopt;
+    }
+    return YawMeasurement{std::atan2(n.y(), n.x()),
+      std::max<double>(det.normal_yaw_std, normal_yaw_std_floor_), normal_gate_nis_};
   }
 
   void update(
@@ -355,8 +383,14 @@ private:
         accepted_capture = true;
         continue;
       }
+      const auto normal = measured_normal(det, rot);
       const auto result =
-        tracker_->step(panel, T, t_sec, R_meas, gate_nis_, max_outliers_, facing_std);
+        tracker_->step(panel, T, t_sec, R_meas, gate_nis_, max_outliers_, facing_std, normal);
+      if (normal) {
+        const auto seen = tracker_->best().last_normal;
+        normals_accepted_ += seen == NormalResult::Accepted;
+        normals_rejected_ += seen == NormalResult::Rejected;
+      }
       if (result == StepResult::Reacquire) {
         reset = true;
         n_updates_ = 0;
@@ -458,6 +492,9 @@ private:
   std::optional<rclcpp::Time> detection_stamp_;
   double meas_noise_base_m_, meas_noise_range_coeff_, meas_noise_lateral_m_;
   double single_panel_yaw_std_, gate_nis_;
+  bool use_measured_normal_;
+  double normal_yaw_std_floor_, normal_gate_nis_;
+  int normals_accepted_ = 0, normals_rejected_ = 0;  // since the last log line (lead filter)
   int max_outliers_;
   bool log_innovations_;
   TrackerParams params_;

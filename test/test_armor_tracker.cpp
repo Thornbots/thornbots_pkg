@@ -606,3 +606,132 @@ TEST(ArmorTracker, FacingUpdateConstrainsBothCorrelatedRadii)
   EXPECT_GE(ekf.other_r(), ekf.p.r_min);
   EXPECT_LE(ekf.other_r(), ekf.p.r_max);
 }
+
+namespace
+{
+
+struct NormalRun
+{
+  double lock_s;  // first time w stays within 10% of the truth to the end
+  double yaw_err;  // mean |yaw error| mod a quarter turn over the last second
+  int rejected;  // by the lead's normal gate
+};
+
+// A target spinning in place at w, every panel within 75 degrees in view.
+// yaw_noise < 0: no normals; flip_p: IPPE's mirror (reflected about the ray).
+NormalRun normal_run(unsigned seed, double w, double yaw_noise, double flip_p = 0.0)
+{
+  std::mt19937 rng(seed);
+  std::normal_distribution<double> yaw_n(0.0, std::max(yaw_noise, 0.0));
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  const Vector3d centre(3.0, 0.0, 0.3);
+  const double seconds = 4.0;
+  std::optional<tp::ArmorTracker> tracker;
+  std::optional<double> lock_s;
+  double yaw_err = 0.0;
+  int n_err = 0;
+  for (int i = 0; i < static_cast<int>(seconds / DT); ++i) {
+    const double t = i * DT, yaw = seed * 0.7 + w * t;
+    std::vector<std::pair<Vector3d, double>> seen;
+    for (const auto & [pos, yk] : true_panels(centre, yaw)) {
+      const Vector3d to_cam = CAMERA - pos;
+      if ((std::cos(yk) * to_cam.x() + std::sin(yk) * to_cam.y()) / to_cam.head<2>().norm() >
+        std::cos(75.0 * M_PI / 180.0)) {seen.emplace_back(pos, yk);}
+    }
+    for (const auto & [pos, yk] : seen) {
+      const Vector3d meas = pos + noise(rng, NOISE_M);
+      std::optional<tp::YawMeasurement> normal;
+      if (yaw_noise >= 0.0) {
+        const double bearing = std::atan2(CAMERA.y() - pos.y(), CAMERA.x() - pos.x());
+        const double measured = u(rng) < flip_p ? 2.0 * bearing - yk : yk;
+        normal = tp::YawMeasurement{measured + yaw_n(rng), std::max(yaw_noise, 0.05)};
+      }
+      if (!tracker) {
+        tracker.emplace(meas, CAMERA, t, iso(0.05 * 0.05), tracker_params());
+        continue;
+      }
+      tracker->step(meas, CAMERA, t, iso(0.05 * 0.05), 16.3, 3,
+        seen.size() == 1 ? 0.3 : 0.0, normal);
+    }
+    if (!tracker) {continue;}
+    const bool locked = std::abs(tracker->state()[W] - w) < 0.1 * std::abs(w);
+    lock_s = locked ? lock_s.value_or(t) : std::optional<double>();
+    if (t >= seconds - 1.0) {
+      const double e = std::fmod(tracker->state()[YAW] - yaw, M_PI / 2.0);
+      yaw_err += std::abs(std::remainder(e, M_PI / 2.0));
+      ++n_err;
+    }
+  }
+  return {lock_s.value_or(seconds), yaw_err / n_err, tracker->best().n_normal_rejected};
+}
+
+}  // namespace
+
+TEST(ArmorTracker, MeasuredNormalsLockSpinAndYawFaster)
+{
+  // 10 rad/s sits between the bank's 7 and 13 rad/s seeds; normals at 0.1 rad.
+  double lock_without = 0.0, lock_with = 0.0, yaw_without = 0.0, yaw_with = 0.0;
+  for (unsigned seed = 0; seed < 8; ++seed) {
+    const auto a = normal_run(seed, 10.0, -1.0), b = normal_run(seed, 10.0, 0.1);
+    lock_without += a.lock_s / 8.0;
+    lock_with += b.lock_s / 8.0;
+    yaw_without += a.yaw_err / 8.0;
+    yaw_with += b.yaw_err / 8.0;
+    EXPECT_LT(b.lock_s, 2.0) << "seed " << seed;
+  }
+  EXPECT_LT(lock_with, 0.75 * lock_without);
+  EXPECT_LT(yaw_with, 0.75 * yaw_without);
+  EXPECT_LT(yaw_with, 0.06);
+}
+
+TEST(ArmorTracker, FlippedNormalIsGatedOut)
+{
+  tp::ArmorEKF ekf(Vector3d(2.7, 0.0, 0.3), CAMERA, 0.0, iso(1e-4), ekf_params(0.30));
+  ekf.P(YAW, YAW) = 0.05 * 0.05;
+  const tp::State before = ekf.state;
+  // Seen 40 degrees off: the mirrored solution is 80 degrees out.
+  EXPECT_FALSE(ekf.update_yaw({before[YAW] + 80.0 * M_PI / 180.0, 0.1}));
+  EXPECT_EQ(ekf.state, before);
+  EXPECT_GT(ekf.last_yaw_nis, 10.83);
+  EXPECT_TRUE(ekf.update_yaw({before[YAW] + 0.1, 0.1}));
+  EXPECT_GT(ekf.state[YAW], before[YAW]);
+}
+
+TEST(ArmorTracker, FlippedNormalsAreRejectedAndDoNotDragTheSpin)
+{
+  int rejected = 0;
+  for (unsigned seed = 0; seed < 4; ++seed) {
+    const auto r = normal_run(seed, 10.0, 0.1, 0.2);
+    rejected += r.rejected;
+    EXPECT_LT(r.lock_s, 2.5) << "seed " << seed;
+    EXPECT_LT(r.yaw_err, 0.08) << "seed " << seed;
+  }
+  EXPECT_GT(rejected, 20);
+}
+
+TEST(ArmorTracker, NoNormalIsTodaysBehaviour)
+{
+  // has_normal false reaches step() as nullopt: identical to the old call.
+  auto run_bank = [](bool explicit_none) {
+      std::mt19937 rng(3);
+      std::optional<tp::ArmorTracker> tracker;
+      for (int i = 0; i < static_cast<int>(2.0 / DT); ++i) {
+        const auto seen = seen_panel(Vector3d(3.0, 0.0, 0.3), 9.0 * i * DT);
+        if (!seen) {continue;}
+        const Vector3d meas = *seen + noise(rng, NOISE_M);
+        if (!tracker) {
+          tracker.emplace(meas, CAMERA, i * DT, iso(0.05 * 0.05), tracker_params());
+        } else if (explicit_none) {
+          tracker->step(meas, CAMERA, i * DT, iso(0.05 * 0.05), 16.3, 3, 0.3, std::nullopt);
+        } else {
+          tracker->step(meas, CAMERA, i * DT, iso(0.05 * 0.05), 16.3, 3, 0.3);
+        }
+      }
+      return *tracker;
+    };
+  const auto a = run_bank(false), b = run_bank(true);
+  EXPECT_EQ(a.state(), b.state());
+  EXPECT_EQ(a.scores, b.scores);
+  EXPECT_EQ(a.best().last_normal, tp::NormalResult::None);
+  EXPECT_EQ(a.best().n_normal_rejected, 0);
+}
