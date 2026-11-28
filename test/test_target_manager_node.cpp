@@ -224,8 +224,9 @@ TEST_F(ManagerNodeTest, HeldRefreshFrameAckWaitsForConsumerDespiteOldModelStamp)
 
 TEST_F(ManagerNodeTest, RefreshForwardsNewEvidenceAtItsCarriedTrueTime)
 {
+  // Before the 1.310 s tick that clears the first model (see the timer-clear test).
   Probe node; node.consume(model()); auto next = model();
-  node.time_ns = 1310000000;
+  node.time_ns = 1308000000;
   next->header.stamp.nanosec = 300000000;
   next->detection_stamp.nanosec = 290000000;
   next->variance[2] = 45.0F;
@@ -249,6 +250,27 @@ TEST_F(ManagerNodeTest, TimerClearIsFreshZeroModelWithReleasedIdentity)
   EXPECT_EQ(clear.robot_track_id, 7u);
   EXPECT_EQ(clear.center.x, 0); EXPECT_EQ(clear.confidence, 0);
   node.tick(); EXPECT_EQ(node.sent.size(), 2u);
+}
+
+TEST_F(ManagerNodeTest, DecisionsFollowTheTickGridNotCallbackTiming)
+{
+  // A: the timer keeps up. B: its callback runs late, after a later input arrived.
+  Probe a, b; a.consume(model()); b.consume(model());
+  for (int64_t t = 1105000000; t <= 1400000000; t += 5000000) {a.time_ns = t; a.tick();}
+  auto next = model();
+  next->header.stamp.nanosec = 400000000; next->detection_stamp.nanosec = 390000000;
+  a.time_ns = 1400000000; a.consume(next);
+  b.time_ns = 1400000000; b.consume(next); b.tick();
+  ASSERT_GE(a.sent.size(), 2u);
+  ASSERT_EQ(b.sent.size(), a.sent.size());
+  for (size_t i = 0; i < a.sent.size(); ++i) {
+    EXPECT_EQ(b.sent[i].clear, a.sent[i].clear);
+    EXPECT_EQ(b.sent[i].header.stamp, a.sent[i].header.stamp);
+  }
+  // The clear is decided at the first 5 ms tick past the threshold, not at the late callback.
+  EXPECT_TRUE(a.sent[1].clear);
+  EXPECT_EQ(a.sent[1].header.stamp.nanosec % 5000000u, 0u);
+  EXPECT_LT(a.sent[1].header.stamp.nanosec, 400000000u);
 }
 
 TEST_F(ManagerNodeTest, FloatMessageConfidenceHonorsBothEqualityBoundaries)

@@ -38,6 +38,9 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
   const auto ack = declare_parameter("state_ack_topic", std::string(""));
   const auto consumer_ack = declare_parameter("consumer_ack_topic", std::string(""));
   const auto none = declare_parameter("target_state_none_topic", std::string(""));
+  // Lockstep simulation only: one Header per decision tick, stamped with its grid time,
+  // after that tick's sends are consumed.
+  const auto tick_ack = declare_parameter("tick_ack_topic", std::string(""));
   pub_ = create_publisher<Message>(output, 10);
   send_ = [this](const Message & m) {pub_->publish(m);};
   if (!ack.empty()) {
@@ -50,6 +53,9 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
         if (consumed_ < emitted_) {++consumed_;}
         flush_acks();
       });
+  }
+  if (!tick_ack.empty()) {
+    tick_ack_pub_ = create_publisher<std_msgs::msg::Header>(tick_ack, 100);
   }
   if (!none.empty()) {
     none_pub_ = create_publisher<std_msgs::msg::Header>(none, 100);
@@ -113,7 +119,13 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
   m.usable = msg->valid && !msg->clear && msg->header.frame_id == "odom" &&
     msg->header.stamp.sec >= 0 && msg->header.stamp.nanosec < 1000000000U &&
     msg->detection_stamp.sec >= 0 && msg->detection_stamp.nanosec < 1000000000U;
-  const auto at = decision_time();
+  // Not before the input's own time: this node's clock can trail the publisher's.
+  auto at = decision_time();
+  if (msg->header.stamp.sec >= 0 && msg->header.stamp.nanosec < 1000000000U) {
+    at = std::max(at, rclcpp::Time(msg->header.stamp, at.get_clock_type()));
+  }
+  // Ticks due by this input's time decide first, whichever callback runs first.
+  run_ticks(at);
   const auto event = manager_->consume(m, at.seconds());
   if (event == TargetEvent::Assign && manager_->clear_before_assign()) {
     emit(TargetEvent::Clear, at);
@@ -129,7 +141,7 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
   if (ack_) {
     // One ack per input, after its sends; an ordered consumer may defer release.
     if (consumer_ack_sub_) {
-      pending_acks_.emplace_back(emitted_, h);
+      pending_acks_.push_back({emitted_, h, false});
       flush_acks();
     } else {ack_(h);}
   }
@@ -137,16 +149,49 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
 
 void TargetManagerNode::flush_acks()
 {
-  while (!pending_acks_.empty() && pending_acks_.front().first <= consumed_) {
-    ack_(pending_acks_.front().second);
+  while (!pending_acks_.empty() && pending_acks_.front().after_emitted <= consumed_) {
+    const auto & a = pending_acks_.front();
+    if (a.tick) {
+      tick_ack_pub_->publish(a.header);
+    } else {
+      ack_(a.header);
+    }
     pending_acks_.pop_front();
   }
 }
 
 void TargetManagerNode::tick()
 {
-  const auto at = decision_time();
-  emit(manager_->tick(at.seconds()), at);
+  run_ticks(decision_time());
+}
+
+void TargetManagerNode::run_ticks(const rclcpp::Time & until)
+{
+  const int64_t t = until.nanoseconds();
+  const int64_t floor = t / tick_period_ns_ * tick_period_ns_;
+  // Start on the grid; after the clock goes back, or a stall or jump of over a second,
+  // resume at its end.
+  if (!next_tick_ns_ || t < *next_tick_ns_ - 2 * tick_period_ns_ ||
+    t - *next_tick_ns_ > 1000000000)
+  {
+    next_tick_ns_ = floor;
+  }
+  while (*next_tick_ns_ <= t) {
+    const rclcpp::Time at(*next_tick_ns_, until.get_clock_type());
+    emit(manager_->tick(at.seconds()), at);
+    finish_tick(at);
+  }
+}
+
+void TargetManagerNode::finish_tick(const rclcpp::Time & at)
+{
+  *next_tick_ns_ = at.nanoseconds() + tick_period_ns_;
+  if (tick_ack_pub_) {
+    std_msgs::msg::Header h;
+    h.stamp = at;
+    pending_acks_.push_back({emitted_, h, true});
+    flush_acks();
+  }
 }
 
 void TargetManagerNode::emit(TargetEvent event, const rclcpp::Time & at)

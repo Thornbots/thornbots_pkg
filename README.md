@@ -635,8 +635,11 @@ Panel handoffs preserve robot identity.
 The manager owns the last emitted model and its true state time, the current
 candidate, and whether an assignment exists. On each estimate it
 evaluates confidence first, then the protocol's drift/identity send rules. Its
-refresh/decision timer evaluates decaying confidence every 5 ms (also on each
-estimate). A stale input is never made confident by publishing it again.
+refresh/decision ticks evaluate decaying confidence on a 5 ms grid of clock time,
+each at its grid time: a late timer callback catches up, and an estimate first runs
+the ticks due by its own time, so decisions do not depend on callback order. An
+estimate is decided no earlier than its stamp, since this node's clock can trail the
+tracker's. `tick_ack_topic` (lockstep simulation only) acknowledges each tick. A stale input is never made confident by publishing it again.
 A refresh requires new contributing measurement evidence since the previous emitted
 model; if input stops, send no repeated model to keep a dead tracker alive.
 Confidence crossing the clear threshold or an explicit loss event clears the
