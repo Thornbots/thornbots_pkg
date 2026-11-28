@@ -838,6 +838,9 @@ upright; confirm the mount, nose-up/down sectors and floor-to-scan height on the
 robot. The [Oct 26 evidence](../docs/investigations/lidar-mount-2026-10-26.md)
 records the original fit.
 
+`latched` (default false, lockstep simulation only) publishes `/scan` reliable and
+transient-local, so a lockstep reader that matched after a scan still receives it.
+
 The filter compares scan-frame angles without TF. Negative bounds and sectors
 crossing scan zero are supported. Keep the simulated sensor mount and robot
 TF consistent when overriding the mount; sim uses this same filter.
