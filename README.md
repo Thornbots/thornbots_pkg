@@ -637,7 +637,9 @@ candidate, and whether an assignment exists. On each estimate it
 evaluates confidence first, then the protocol's drift/identity send rules. Its
 refresh/decision ticks evaluate decaying confidence on a 5 ms grid of clock time,
 each at its grid time: a late timer callback catches up, and an estimate first runs
-the ticks due by its own time, so decisions do not depend on callback order. An
+the ticks due by its own time, against the previous estimate, so decisions do not
+depend on callback order. A refresh due at an estimate's own stamp therefore forwards
+the previous model, as it would had the timer run first. An
 estimate is decided no earlier than its stamp, since this node's clock can trail the
 tracker's. `tick_ack_topic` (lockstep simulation only) acknowledges each tick. A stale input is never made confident by publishing it again.
 A refresh requires new contributing measurement evidence since the previous emitted
