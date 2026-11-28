@@ -29,7 +29,7 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
     // Threshold equality uses the carried confidence's float32 precision.
     static_cast<double>(static_cast<float>(declare_parameter("assign_confidence", 0.60))),
     static_cast<double>(static_cast<float>(declare_parameter("clear_confidence", 0.40))),
-    declare_parameter("drift_tolerance_m", 0.100),
+    declare_parameter("drift_tolerance_m", 0.020),
     declare_parameter("drift_horizon_s", 0.200),
     declare_parameter("refresh_period_s", 0.200)};
   manager_ = std::make_unique<TargetManager>(params);
