@@ -41,7 +41,9 @@ public:
     declare_parameter("blind_angle_end", 1.0123);
     sub_ = create_subscription<LaserScan>(
       "scan_raw", 10, [this](LaserScan::ConstSharedPtr m) {scan_callback(*m);});
-    pub_ = create_publisher<LaserScan>("scan", 10);
+    // Simulation only: keep history for lockstep readers whose discovery matched late.
+    pub_ = create_publisher<LaserScan>("scan", declare_parameter("latched", false) ?
+      rclcpp::QoS(10).reliable().transient_local() : rclcpp::QoS(10));
   }
 
 private:

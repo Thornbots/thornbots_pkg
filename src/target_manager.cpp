@@ -29,7 +29,7 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
     // Threshold equality uses the carried confidence's float32 precision.
     static_cast<double>(static_cast<float>(declare_parameter("assign_confidence", 0.60))),
     static_cast<double>(static_cast<float>(declare_parameter("clear_confidence", 0.40))),
-    declare_parameter("drift_tolerance_m", 0.100),
+    declare_parameter("drift_tolerance_m", 0.020),
     declare_parameter("drift_horizon_s", 0.200),
     declare_parameter("refresh_period_s", 0.200)};
   manager_ = std::make_unique<TargetManager>(params);
@@ -94,7 +94,6 @@ TargetManagerNode::TargetManagerNode(const rclcpp::NodeOptions & options)
 
 void TargetManagerNode::consume(Message::ConstSharedPtr msg)
 {
-  candidate_ = msg;
   ManagedModel m;
   auto seconds = [](const builtin_interfaces::msg::Time & t) {
       return static_cast<double>(t.sec) + static_cast<double>(t.nanosec) * 1e-9;
@@ -124,8 +123,10 @@ void TargetManagerNode::consume(Message::ConstSharedPtr msg)
   if (msg->header.stamp.sec >= 0 && msg->header.stamp.nanosec < 1000000000U) {
     at = std::max(at, rclcpp::Time(msg->header.stamp, at.get_clock_type()));
   }
-  // Ticks due by this input's time decide first, whichever callback runs first.
+  // Ticks due by this input's time decide first, on the model they would have seen had
+  // the timer run first: a refresh there forwards the previous input, not this one.
   run_ticks(at);
+  candidate_ = msg;
   const auto event = manager_->consume(m, at.seconds());
   if (event == TargetEvent::Assign && manager_->clear_before_assign()) {
     emit(TargetEvent::Clear, at);

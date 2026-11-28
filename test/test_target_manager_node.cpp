@@ -273,6 +273,32 @@ TEST_F(ManagerNodeTest, DecisionsFollowTheTickGridNotCallbackTiming)
   EXPECT_LT(a.sent[1].header.stamp.nanosec, 400000000u);
 }
 
+TEST_F(ManagerNodeTest, RefreshDueAtAnInputForwardsThePreviousModelWhicheverRunsFirst)
+{
+  // The 1.305 s refresh tick and the input stamped 1.305 s are both ready. A's timer runs
+  // first; B's input arrives while its clock still reads 1.300 s.
+  auto at = [this](uint32_t state_ns, uint32_t detection_ns) {
+      auto m = model(); m->header.stamp.nanosec = state_ns;
+      m->detection_stamp.nanosec = detection_ns; m->input_stamp = m->detection_stamp;
+      return m;
+    };
+  const auto first = at(100000000, 50000000), second = at(200000000, 190000000),
+    third = at(305000000, 295000000);
+  Probe a, b; a.consume(first); b.consume(first);
+  for (int64_t t = 1105000000; t <= 1305000000; t += 5000000) {
+    a.time_ns = t; a.tick();
+    if (t == 1200000000) {a.consume(second);}
+  }
+  a.consume(third);
+  b.time_ns = 1200000000; b.consume(second);
+  b.time_ns = 1300000000; b.consume(third);
+  ASSERT_EQ(a.sent.size(), 2u);
+  ASSERT_EQ(b.sent.size(), a.sent.size());
+  EXPECT_EQ(a.sent[1].header, second->header);
+  EXPECT_EQ(b.sent[1].header, a.sent[1].header);
+  EXPECT_EQ(b.sent[1].detection_stamp, a.sent[1].detection_stamp);
+}
+
 TEST_F(ManagerNodeTest, FloatMessageConfidenceHonorsBothEqualityBoundaries)
 {
   Probe node; auto m = model(); m->confidence = 0.60F;
