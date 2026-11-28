@@ -19,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "dji_serial_bridge/msg/target_state.hpp"
@@ -45,15 +46,26 @@ protected:
 
 private:
   void emit(TargetEvent event, const rclcpp::Time & at);
+  // Evaluates every decision tick on the period grid up to `until`, at its grid time.
+  void run_ticks(const rclcpp::Time & until);
+  void finish_tick(const rclcpp::Time & at);  // advance the grid; ack it in lockstep
   void flush_acks();
   std::unique_ptr<TargetManager> manager_;
   Message::ConstSharedPtr candidate_;
   rclcpp::Publisher<Message>::SharedPtr pub_;
-  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr ack_pub_, none_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr ack_pub_, none_pub_, tick_ack_pub_;
   rclcpp::Subscription<Message>::SharedPtr sub_;
   rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr consumer_ack_sub_;
-  std::deque<std::pair<uint64_t, std_msgs::msg::Header>> pending_acks_;
+  struct PendingAck
+  {
+    uint64_t after_emitted;
+    std_msgs::msg::Header header;
+    bool tick;  // tick_ack_topic, else the input's state ack
+  };
+  std::deque<PendingAck> pending_acks_;
   uint64_t emitted_ = 0, consumed_ = 0;
+  int64_t tick_period_ns_ = 5000000;
+  std::optional<int64_t> next_tick_ns_;  // next grid time not yet evaluated
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr epoch_clock_sub_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr epoch_ready_pub_;
